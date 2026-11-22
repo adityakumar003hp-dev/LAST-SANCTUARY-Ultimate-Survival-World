@@ -1,11 +1,54 @@
-<div align="center">
+# LAST SANCTUARY — Complete Survival Expansion
 
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
+This is the updated Google AI Studio project ZIP, based on the original `deadzone-craft (1).zip` repository.
 
-  <h1>Built with AI Studio</h2>
+## Current campaign — LAST SANCTUARY: REBIRTH (November 2026)
 
-  <p>The fastest path from prompt to production with Gemini.</p>
+The active campaign catalogue and in-game Chronicle have been upgraded to **10 days / 70 missions (7 per day)**, followed by permanent Free Exploration. This supersedes the older six-day and eight-day campaign notes further down this historical README. See `TEN_DAY_CAMPAIGN_IMPLEMENTATION.md` for changed files and validation. The research POI is upgraded into the Apex Biomedical Research Complex containment campus.
 
-  <a href="https://aistudio.google.com/apps">Start building</a>
+## Quick start
+1. Open/import the complete project in Google AI Studio.
+2. Install dependencies with `npm install`.
+3. Start the development server with `npm run dev`.
+4. Run `npm run build` before publishing.
 
-</div>
+## New integrated systems
+- Expanded biome generation and chunk streaming through the existing chunk manager.
+- Wildlife species manager for mammals, birds, dinosaurs, aquatic species and rare creatures.
+- Survivor rescue manager with dialogue and persistent rescued state.
+- Conversation modal and E-key survivor interaction.
+
+Read `IMPLEMENTATION_UPDATE.md` for the exact implementation scope and known limitations. Read `public/assets/aistudio/LAST_SANCTUARY_REALISM_AND_WORLD_EXPANSION_MASTER_PROMPT.md` for the next-stage Google AI Studio instructions to upgrade procedural placeholders into high-realism assets and deeper simulation.
+
+**Honest status:** this package contains integrated gameplay foundations and procedural placeholder models. It is not a photorealistic finished release. A complete build and mobile play-test should be run in Google AI Studio after import.
+
+
+## Six-Day Campaign Update
+The authoritative opening campaign is six days / 36 missions. See `SIX_DAY_CAMPAIGN_AND_STARTER_BASE_SPEC.md` and `src/data/sixDayCampaign.ts`. The apartment and military Starter Base use protected procedural no-spawn footprints. See `src/engine/world/ProtectedSpawnZones.ts`.
+
+
+## Updated source delivery
+
+For the updated project, use the root `package.json` and root `src/` directory as the active application. See `IMPLEMENTATION_DELIVERY_REPORT.md` for implemented code changes and exact validation limitations, and `IMPLEMENTATION_TRACEABILITY.md` for the subsystem-to-source map. The nested `latest_working_source/` and `ls_dev/` folders are retained as historical source snapshots.
+
+## Railway basement dispatch control centre (November 2026)
+The apartment now contains a dedicated underground railway dispatch room. The former upper-floor command desk has been removed and the new room is accessed by walking down to basement level and pressing **E** at the dispatch console. It includes one wide operations board, four auxiliary monitors, a keyboard desk, six-line railway map, six-service arrival/departure board, condition, speed, distance and next-stop details. Keyboard controls are listed in `RAILWAY_BASEMENT_CONTROL_CENTER_UPDATE.md`.
+
+**Railway AI and station architecture update (November 2026):** the root source now builds one shared eight-platform, three-floor terminal for the six AI train lines, with separate arrival/departure gates, platform canopies, service rooms, waiting areas, four animated lift cabins with E-key floor selection, an overhead footbridge, parking and station amenities. The railway population contains 72 persistent identities spanning passengers, children, teenagers, senior citizens, wheelchair users, tourists, family/couple travellers, railway operations, security, vendors and emergency staff. The walkable floor and stair elevations are handled directly in `src/engine/PlayerController.ts`; station geometry, lift/gate automation and collision bounds are implemented in `src/engine/world/AITrainManager.ts`; passenger identities, character variants and platform seat placement are implemented in `src/engine/world/RailwayNPCManager.ts`; lift interaction is wired into `src/engine/GameEngine.ts`. The basement dispatch room continues to read live six-train telemetry and station-AI operations.
+
+
+## Five-floor apartment correction (November 2026)
+The root `src/` application now contains the active five-level apartment implementation: Floor 1 living suite, Floor 2 medical centre, Floor 3 armory, Floor 4 survival farm/utilities, and Floor 5 open rooftop swimming-pool terrace, plus the retained basement operations room. The exterior shell is four enclosed storeys with the fifth level exposed as the rooftop deck so the pool terrace is visible from outside. Four ascending staircase flights connect Floors 1–5, with a separate basement access flight. The rooftop pool rim colliders and player floor-height handling are aligned to the fifth-floor elevation.
+
+**Import note:** import this archive from its root. The active application is the root `package.json` and root `src/` directory.
+
+
+## Large solid farm infrastructure and prop collision update (November 2026)
+The active root `src/engine/prologue/ApartmentBuilding.ts` now builds a large industrial water-treatment plant with multiple filter vessels, membrane housings, pumps, control cabinet and pipe manifolds; two large steel water-storage tanks with access ladders, inspection gauges and valves; and a full-size emergency generator with radiator, exhaust, service panel and adjacent fuel reservoir. These are actual Three.js meshes in the playable Floor 4 survival-farm room, not overlay art or a separate demo.
+
+The active apartment physics registration now includes blocking colliders for the large utility equipment, both water tanks, crop planters, farm crates, medical beds/equipment/cabinets, armory lockers/crates/vault/terminal, and basement server racks/command desk/crates. The IV bags are opaque solid props. Intentional transparency is limited to actual glass and water surfaces; the equipment and structural props use opaque materials and cast/receive shadows.
+
+## Outpost 7 Military Research & Science Complex (November 2026)
+The military compound now includes an authored 3D research campus inside the protected Outpost 7 footprint. Its ten facilities are Biology Laboratory, Medical Research Center, Meteor Research Lab, Infection Testing Chambers, Genetics Laboratory, Underground Sample Storage, Research Command Center, Scientist Quarters, Quarantine Ward and a Secret Underground Laboratory. The campus includes perimeter walls, a controlled access gate, signage, floodlights and a visible underground access hatch. Day 8 missions 50–56 now display their linked facility, classification and classified discovery in the in-game campaign journal. See `MILITARY_RESEARCH_COMPLEX_IMPLEMENTATION.md`.
+
+**Scope note:** this update adds the physical facility layout and Day 8 journal/story-intel linkage. It does not claim bespoke interactive lab experiments, vaccine crafting, or fully simulated containment systems unless separately implemented in the gameplay systems.

@@ -1,0 +1,354 @@
+/**
+ * @license
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+import * as THREE from 'three';
+import { ChunkCoord, ChunkData, HarvestableResource, POIStructure, GraphicsQuality } from '../../types/game';
+import { CHUNK_SIZE, WorldCoordinates } from './WorldCoordinates';
+import { BiomeGenerator, BIOMES } from './BiomeGenerator';
+import { TerrainGenerator } from './TerrainGenerator';
+import { RoadGenerator } from './RoadGenerator';
+import { POIGenerator } from './POIGenerator';
+import { RailwayNetworkGenerator } from './RailwayNetworkGenerator';
+import { VegetationGenerator } from './VegetationGenerator';
+import { isProtectedSpawnZone } from './ProtectedSpawnZones';
+import { LODManager } from './LODManager';
+import {
+  getGrassPBR,
+  getGrassTuftAlphaTexture,
+  getWaterRippleNormalMap,
+} from '../rendering/ProceduralTextures';
+
+let sharedCrossGrassGeo: THREE.BufferGeometry | null = null;
+function getCrossGrassGeometry(): THREE.BufferGeometry {
+  if (sharedCrossGrassGeo) return sharedCrossGrassGeo;
+  const w = 0.44;
+  const h = 0.68;
+  // Two intersecting vertical quads (X-pattern) with upright normals & UVs
+  const pos = new Float32Array([
+    // Plane 1 (along X)
+    -w, 0, 0,   w, 0, 0,   w, h, 0,
+    -w, 0, 0,   w, h, 0,  -w, h, 0,
+    // Plane 2 (along Z)
+    0, 0, -w,   0, 0, w,   0, h, w,
+    0, 0, -w,   0, h, w,   0, h, -w,
+  ]);
+  const uv = new Float32Array([
+    0, 0, 1, 0, 1, 1,   0, 0, 1, 1, 0, 1,
+    0, 0, 1, 0, 1, 1,   0, 0, 1, 1, 0, 1,
+  ]);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.computeVertexNormals();
+  geo.userData.__sharedResource = true;
+  sharedCrossGrassGeo = geo;
+  return geo;
+}
+
+export interface GeneratedChunk {
+  data: ChunkData;
+  group: THREE.Group;
+  terrainMesh: THREE.Mesh;
+  waterMesh: THREE.Mesh | null;
+  roadMesh: THREE.Mesh | null;
+  resourceMeshes: Map<string, THREE.Group>;
+  poiMeshes: Map<string, THREE.Group>;
+  dispose: () => void;
+}
+
+export class ChunkGenerator {
+  /**
+   * Builds an entire 256x256 chunk with terrain, water, roads, harvestables, and POIs
+   */
+  public static createChunk(
+    coord: ChunkCoord,
+    worldSeed: number,
+    lodLevel: number,
+    quality: GraphicsQuality = 'medium',
+    destroyedResourceIds: Set<string> = new Set(),
+    lootedPoiIds: Set<string> = new Set()
+  ): GeneratedChunk {
+    const key = WorldCoordinates.chunkKey(coord.cx, coord.cz);
+    const [minX, minZ] = WorldCoordinates.chunkToWorldOrigin(coord.cx, coord.cz);
+    const [centerX, centerZ] = WorldCoordinates.chunkToWorldCenter(coord.cx, coord.cz);
+
+    const biomeDef = BiomeGenerator.getBiomeAt(centerX, centerZ, worldSeed);
+    const group = new THREE.Group();
+    group.name = `chunk_${key}`;
+
+    // 1. Terrain Mesh
+    const segments = LODManager.getSegmentsForLOD(lodLevel, quality);
+    const geometry = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, segments, segments);
+    geometry.rotateX(-Math.PI / 2);
+
+    let minElevation = 9999;
+    let maxElevation = -9999;
+
+    const pos = geometry.attributes.position;
+    const colors = new Float32Array(pos.count * 3);
+    const baseColor = new THREE.Color(biomeDef.groundColor);
+    const cliffColor = new THREE.Color(0x60656a); // Granite cliff rock
+    const sandColor = new THREE.Color(0x7a6b4a);  // Lowland alluvial silt
+
+    for (let i = 0; i < pos.count; i++) {
+      // Local plane geometry is centered at 0, offset by world origin + half size
+      const lx = pos.getX(i);
+      const lz = pos.getZ(i);
+      const wx = minX + CHUNK_SIZE * 0.5 + lx;
+      const wz = minZ + CHUNK_SIZE * 0.5 + lz;
+
+      const y = TerrainGenerator.getHeight(wx, wz, worldSeed);
+      pos.setY(i, y);
+
+      if (y < minElevation) minElevation = y;
+      if (y > maxElevation) maxElevation = y;
+    }
+
+    // Recompute normals for accurate slope angle detection
+    geometry.computeVertexNormals();
+    const normals = geometry.attributes.normal;
+
+    for (let i = 0; i < pos.count; i++) {
+      const lx = pos.getX(i);
+      const lz = pos.getZ(i);
+      const wx = minX + CHUNK_SIZE * 0.5 + lx;
+      const wz = minZ + CHUNK_SIZE * 0.5 + lz;
+      const y = pos.getY(i);
+      const ny = normals.getY(i); // Upward vertical component of surface normal
+
+      // Natural vertex color variation based on biome and micro-noise
+      const tintFactor = 0.88 + (Math.sin(wx * 0.08) * Math.cos(wz * 0.08) + 1.0) * 0.12;
+      let finalColor = baseColor.clone().multiplyScalar(tintFactor);
+
+      // Natural slope exposure: If slope > 28 degrees (ny < 0.85), blend toward exposed rock cliff!
+      if (ny < 0.85) {
+        const cliffBlend = Math.min(1.0, (0.85 - ny) / 0.35);
+        finalColor.lerp(cliffColor, cliffBlend * 0.85);
+      }
+
+      // Shoreline / riverbed moist silt (y < 0.4)
+      if (y < 0.4) {
+        const siltBlend = Math.min(1.0, (0.4 - y) / 1.2);
+        finalColor.lerp(sandColor, siltBlend * 0.7);
+      }
+
+      colors[i * 3 + 0] = finalColor.r;
+      colors[i * 3 + 1] = finalColor.g;
+      colors[i * 3 + 2] = finalColor.b;
+    }
+
+    geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+
+    // Realistic PBR Grass & Soil
+    const grassPBR = getGrassPBR(biomeDef.groundColor);
+    grassPBR.albedo.repeat.set(12, 12);
+    grassPBR.normal.repeat.set(12, 12);
+    grassPBR.roughness.repeat.set(12, 12);
+
+    const terrainMat = new THREE.MeshStandardMaterial({
+      map: grassPBR.albedo,
+      normalMap: grassPBR.normal,
+      roughnessMap: grassPBR.roughness,
+      normalScale: new THREE.Vector2(1.4, 1.4),
+      vertexColors: true,
+      roughness: biomeDef.roughness,
+      metalness: 0.05,
+      flatShading: lodLevel === 2,
+    });
+
+    const terrainMesh = new THREE.Mesh(geometry, terrainMat);
+    terrainMesh.position.set(minX + CHUNK_SIZE * 0.5, 0, minZ + CHUNK_SIZE * 0.5);
+    terrainMesh.receiveShadow = quality !== 'low';
+    group.add(terrainMesh);
+
+    // 1b. Volumetric Alpha-Tested 3D Grass Blade Clumps for Near LOD (LOD 0)
+    if (lodLevel === 0 && quality !== 'low') {
+      const tuftCount = 280;
+      const bladeGeo = getCrossGrassGeometry();
+      const grassAlphaTex = getGrassTuftAlphaTexture();
+
+      const bladeMat = new THREE.MeshStandardMaterial({
+        map: grassAlphaTex,
+        color: new THREE.Color(biomeDef.groundColor).lerp(new THREE.Color(0xffffff), 0.35),
+        alphaTest: 0.42,
+        roughness: 0.84,
+        metalness: 0.02,
+        side: THREE.DoubleSide,
+      });
+
+      const instancedTufts = new THREE.InstancedMesh(bladeGeo, bladeMat, tuftCount);
+      const dummy = new THREE.Object3D();
+
+      let placed = 0;
+      let s = (coord.cx * 82739) ^ (coord.cz * 48271) ^ worldSeed;
+      const prng = () => {
+        s = (s * 1664525 + 1013904223) % 4294967296;
+        return Math.abs(s / 4294967296);
+      };
+
+      for (let t = 0; t < tuftCount; t++) {
+        const rx = minX + 8 + prng() * 240;
+        const rz = minZ + 8 + prng() * 240;
+        if (RailwayNetworkGenerator.isProtectedRailwayZone(rx, rz) || isProtectedSpawnZone(rx, rz)) continue;
+        if (RoadGenerator.isRoad(rx, rz).isRoad) continue;
+
+        const ry = TerrainGenerator.getHeight(rx, rz, worldSeed);
+        if (ry < -0.2) continue;
+
+        dummy.position.set(rx, ry - 0.03, rz);
+        dummy.rotation.y = prng() * Math.PI * 2;
+        const sc = 0.8 + prng() * 0.55;
+        dummy.scale.set(sc, sc * (0.85 + prng() * 0.4), sc);
+        dummy.updateMatrix();
+
+        instancedTufts.setMatrixAt(placed++, dummy.matrix);
+      }
+      instancedTufts.count = placed;
+      instancedTufts.instanceMatrix.needsUpdate = true;
+      instancedTufts.receiveShadow = true;
+      group.add(instancedTufts);
+    }
+
+    // 2. Realistic Dynamic Clearcoat Water Plane
+    let waterMesh: THREE.Mesh | null = null;
+    const riverWave = Math.sin(centerZ * 0.004) * 45;
+    const riverDist = Math.abs(centerX - 50 - riverWave);
+
+    if (riverDist < 120 || biomeDef.waterColor) {
+      const waterColor = biomeDef.waterColor || 0x165270;
+      const waterGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, 16, 16);
+      waterGeo.rotateX(-Math.PI / 2);
+
+      const waterNormal = getWaterRippleNormalMap(0);
+      waterNormal.repeat.set(16, 16);
+
+      const waterMat = new THREE.MeshStandardMaterial({
+        color: waterColor,
+        roughness: 0.08,
+        metalness: 0.18,
+        envMapIntensity: 1.5,
+        transparent: true,
+        opacity: 0.86,
+        normalMap: waterNormal,
+        normalScale: new THREE.Vector2(0.95, 0.95),
+      });
+
+      waterMesh = new THREE.Mesh(waterGeo, waterMat);
+      waterMesh.position.set(minX + CHUNK_SIZE * 0.5, -0.55, minZ + CHUNK_SIZE * 0.5);
+      group.add(waterMesh);
+    }
+
+    // 3. Roads & Pathways
+    const roadMesh = RoadGenerator.generateChunkRoadMesh(minX, minZ, CHUNK_SIZE, worldSeed);
+    if (roadMesh) {
+      group.add(roadMesh);
+    }
+
+    // 3b. Infinite six-track railway corridor and deterministic station branches
+    const railwayMesh = RailwayNetworkGenerator.createChunk(
+      coord.cx,
+      coord.cz,
+      worldSeed,
+      POIGenerator.getPOIsForChunk(coord.cx, coord.cz, worldSeed)
+    );
+    group.add(railwayMesh);
+
+    // 4. Harvestable Resources (avoid destroyed)
+    const rawResources = VegetationGenerator.generateResourcesForChunk(coord.cx, coord.cz, biomeDef.id, worldSeed);
+    const resources: HarvestableResource[] = [];
+    const resourceMeshes: Map<string, THREE.Group> = new Map();
+
+    for (let i = 0; i < rawResources.length; i++) {
+      const r = rawResources[i];
+      if (destroyedResourceIds.has(r.id) || isProtectedSpawnZone(r.position[0], r.position[2]) || RailwayNetworkGenerator.isProtectedRailwayZone(r.position[0], r.position[2])) continue;
+
+      resources.push(r);
+      // Only instantiate 3D resource models if LOD <= 1 to conserve GPU memory
+      if (lodLevel <= 1) {
+        const rMesh = VegetationGenerator.createResourceMesh(r, biomeDef.id);
+        resourceMeshes.set(r.id, rMesh);
+        group.add(rMesh);
+      }
+    }
+
+    // 5. Procedural POIs
+    const rawPOIs = POIGenerator.getPOIsForChunk(coord.cx, coord.cz, worldSeed);
+    const pois: POIStructure[] = [];
+    const poiMeshes: Map<string, THREE.Group> = new Map();
+
+    for (let i = 0; i < rawPOIs.length; i++) {
+      const p = rawPOIs[i];
+      if (isProtectedSpawnZone(p.position[0], p.position[2]) || RailwayNetworkGenerator.isProtectedRailwayZone(p.position[0], p.position[2])) continue;
+      if (lootedPoiIds.has(p.id)) {
+        p.isLooted = true;
+      }
+      pois.push(p);
+
+      const pMesh = POIGenerator.createPOIMesh(p);
+      poiMeshes.set(p.id, pMesh);
+      group.add(pMesh);
+    }
+
+    const chunkData: ChunkData = {
+      coord,
+      key,
+      seed: worldSeed,
+      biome: biomeDef.id,
+      resources,
+      pois,
+      isLoaded: true,
+      lodLevel,
+      minElevation,
+      maxElevation,
+    };
+
+    // Comprehensive cleanup disposal callback to prevent mobile memory leaks
+    const dispose = () => {
+      geometry.dispose();
+      terrainMat.dispose();
+      if (waterMesh) {
+        waterMesh.geometry.dispose();
+        if (Array.isArray(waterMesh.material)) {
+          waterMesh.material.forEach((m) => m.dispose());
+        } else {
+          waterMesh.material.dispose();
+        }
+      }
+      if (roadMesh) {
+        roadMesh.geometry.dispose();
+        if (Array.isArray(roadMesh.material)) {
+          roadMesh.material.forEach((m: THREE.Material) => m.dispose());
+        } else {
+          roadMesh.material.dispose();
+        }
+      }
+      group.traverse((child) => {
+        if (child instanceof THREE.Mesh || child instanceof THREE.InstancedMesh) {
+          if (child.geometry && !child.geometry.userData?.__sharedResource) {
+            child.geometry.dispose();
+          }
+          if (Array.isArray(child.material)) {
+            child.material.forEach((m) => { if (!m.userData?.__sharedResource) m.dispose(); });
+          } else if (child.material && !child.material.userData?.__sharedResource) {
+            child.material.dispose();
+          }
+        }
+      });
+      resourceMeshes.clear();
+      poiMeshes.clear();
+    };
+
+    return {
+      data: chunkData,
+      group,
+      terrainMesh,
+      waterMesh,
+      roadMesh,
+      resourceMeshes,
+      poiMeshes,
+      dispose,
+    };
+  }
+}

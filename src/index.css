@@ -1,0 +1,116 @@
+@import "tailwindcss";
+
+/* 
+ * ===================================================================
+ * LAST SANCTUARY — DESIGN CONSTITUTION & STANDARDIZED LAYOUT LAYERS
+ * ===================================================================
+ */
+
+:root {
+  /* Standardized Z-Index Scale */
+  --z-canvas: 0;
+  --z-hud-bottom: 20;
+  --z-hud-side: 25;
+  --z-hud-top: 30;
+  --z-mobile-controls: 35;
+  --z-mission: 40;
+  --z-toast: 45;
+  --z-dialogue: 50;
+  --z-cinematic: 55;
+  --z-modal: 60;
+  --z-debug: 70;
+
+  /* Safe Area Insets (iOS notch, Android navigation bar) */
+  --sat: env(safe-area-inset-top, 0px);
+  --sar: env(safe-area-inset-right, 0px);
+  --sab: env(safe-area-inset-bottom, 0px);
+  --sal: env(safe-area-inset-left, 0px);
+}
+
+/* Global Box Sizing & Viewport Integrity */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body, #root {
+  width: 100%;
+  width: 100dvw;
+  height: 100%;
+  height: 100dvh;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  background-color: #000;
+  touch-action: manipulation;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Prevent accidental iOS rubber-banding and pull-to-refresh */
+body {
+  overscroll-behavior: none;
+  position: fixed;
+  inset: 0;
+}
+
+/* Compact landscape mobile viewport optimizations (height <= 500px) */
+@media (max-height: 500px) and (orientation: landscape) {
+  .landscape-compact-hide {
+    display: none !important;
+  }
+  .landscape-compact-scale {
+    transform: scale(0.86);
+  }
+}
+
+/* Layer utility classes */
+.layer-canvas {
+  z-index: var(--z-canvas);
+}
+.layer-hud-bottom {
+  z-index: var(--z-hud-bottom);
+}
+.layer-hud-side {
+  z-index: var(--z-hud-side);
+}
+.layer-hud-top {
+  z-index: var(--z-hud-top);
+}
+.layer-mobile-controls {
+  z-index: var(--z-mobile-controls);
+}
+.layer-mission {
+  z-index: var(--z-mission);
+}
+.layer-toast {
+  z-index: var(--z-toast);
+}
+.layer-dialogue {
+  z-index: var(--z-dialogue);
+}
+.layer-cinematic {
+  z-index: var(--z-cinematic);
+}
+.layer-modal {
+  z-index: var(--z-modal);
+}
+.layer-debug {
+  z-index: var(--z-debug);
+}
+
+/* Custom scrollbars for modals */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: rgba(0, 0, 0, 0.4);
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.4);
+}

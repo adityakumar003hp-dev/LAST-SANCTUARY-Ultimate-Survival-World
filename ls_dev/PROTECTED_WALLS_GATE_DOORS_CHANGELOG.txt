@@ -1,0 +1,14 @@
+LAST SANCTUARY — PROTECTED WALLS / ACCESS UPDATE
+
+Implemented:
+- One central double-leaf compound vehicle gate.
+- Two independent pedestrian doors in the compound front perimeter wall.
+- Solid perimeter wall segments with matching physics colliders and no visual/collider mismatch at the three access openings.
+- Existing mansion/apartment double front door remains a separate two-leaf entrance with a closed-door collider.
+- Companion follow navigation uses open compound access points and the open building entrance; closed routes remain blocked.
+- Zombie chase, idle wandering and knockback use UnifiedPhysicsManager collision resolution.
+- Existing player movement collision remains authoritative.
+
+Verification:
+- ZIP integrity will be checked after packaging.
+- TypeScript syntax is checked independently below; full dependency-based typecheck/build cannot be run in this environment because project dependencies (including vite/client and Three.js type packages) are not installed and no offline npm cache is available.

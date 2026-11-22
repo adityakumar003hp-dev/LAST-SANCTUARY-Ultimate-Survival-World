@@ -1,0 +1,14 @@
+LAST SANCTUARY — UPDATE STATUS
+
+Included in this archive:
+- Existing project source and previous project notes.
+- New src/data/eightDayCampaign.ts catalogue: original 42 mission IDs retained plus 14 mansion/finale missions, for 56 total.
+- FINAL_EIGHT_DAY_MANSION_INTEGRATION_SPEC.md with the agreed mansion layout, exactly four bathrooms, garage vehicle requirements, rooftop pool/glass boundary, train continuity and protected compound requirements.
+
+Not certified as implemented in this archive:
+- Runtime wiring of all 56 missions to gameplay triggers and the quest journal.
+- Construction of the four-floor mansion and rooftop pool in the 3D world.
+- Drivable car/ATV/motorcycle/bicycle implementation and persistence.
+- Full physics/collision integration and Android/desktop runtime QA.
+
+The eight-day campaign file is a data catalogue only. Do not advertise this ZIP as a fully playable final game until the remaining implementation and acceptance tests are complete.

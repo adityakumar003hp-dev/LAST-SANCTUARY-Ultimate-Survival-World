@@ -1,0 +1,6 @@
+{
+  "name": "LAST SANCTUARY — Ultimate Survival World",
+  "description": "Massive open-world survival adventure featuring 30+ dynamic biomes, prehistoric dinosaurs, living wildlife ecosystems, drivable vehicles, swimming & diving, NPC civilizations, rescue missions, and modular base building.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

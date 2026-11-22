@@ -1,0 +1,17 @@
+LAST SANCTUARY — ACTUAL SOURCE UPDATE
+Date: 2026-11-04
+
+This package contains source-code integrations, not just a feature specification:
+- Five-level mansion, four bathrooms, indoor and rooftop pools, medical wing, utility/command interactions, and additional collision registrations.
+- Five unique garage vehicles (ATV, motorcycle, bicycle, car, enforcement SUV) using the drivable vehicle controller and saved fleet state.
+- Friend social actions and vehicle passenger seating.
+- Four AI passenger trains plus two player-drivable trains, with three-carriage train models, doors, station announcements, and driving controls.
+- Persistent 56-mission quest catalogue; Days 7–8 have new mansion/railway triggers and physical mission terminals.
+- Existing mansion/military protected spawn-zone definitions retained.
+
+Validation:
+- 82 TypeScript/TSX files transpiled; 0 syntax errors.
+- 12/12 static acceptance checks passed.
+- Full production build/typecheck and Android/browser runtime tests remain outstanding because dependencies are not installed in this workspace.
+
+This is an implementation update, not a verified final release. See LATEST_FEATURE_IMPLEMENTATION_STATUS.md for limitations and the exact QA items still required.

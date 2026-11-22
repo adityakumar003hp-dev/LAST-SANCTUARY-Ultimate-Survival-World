@@ -1,0 +1,423 @@
+import * as THREE from 'three';
+import { ZombieEntity, ZombieType } from '../types/game';
+import { getTerrainHeight } from './Terrain';
+import { BuildingManager } from './BuildingManager';
+import { soundEngine } from '../utils/audio';
+import { getZombieFleshPBR } from './rendering/ProceduralTextures';
+import { UnifiedPhysicsManager } from './physics/UnifiedPhysicsManager';
+import { PROTECTED_SPAWN_ZONES, isProtectedSpawnZone } from './world/ProtectedSpawnZones';
+import { RailwayNetworkGenerator } from './world/RailwayNetworkGenerator';
+import { buildRealisticZombie } from './rendering/RealisticHumanoidBuilder';
+
+export class ZombieManager {
+  public scene: THREE.Scene;
+  public zombies: ZombieEntity[] = [];
+  public zombieMeshes: Map<string, THREE.Group> = new Map();
+  private nextId: number = 1;
+
+  // Shared procedural materials
+  private skinMat: THREE.MeshStandardMaterial;
+  private clothesMat: THREE.MeshStandardMaterial;
+  private eyeMat: THREE.MeshStandardMaterial;
+  private bruteMat: THREE.MeshStandardMaterial;
+
+  public isOutbreakActive: boolean = false;
+
+  constructor(scene: THREE.Scene) {
+    this.scene = scene;
+
+    const normalSkin = getZombieFleshPBR(false);
+    this.skinMat = new THREE.MeshStandardMaterial({
+      map: normalSkin.albedo,
+      normalMap: normalSkin.normal,
+      roughnessMap: normalSkin.roughness,
+      roughness: 0.82,
+      metalness: 0.05,
+    });
+
+    this.clothesMat = new THREE.MeshStandardMaterial({
+      color: 0x2b2724,
+      roughness: 0.95,
+      metalness: 0.0,
+    });
+
+    const bruteSkin = getZombieFleshPBR(true);
+    this.bruteMat = new THREE.MeshStandardMaterial({
+      map: bruteSkin.albedo,
+      normalMap: bruteSkin.normal,
+      roughnessMap: bruteSkin.roughness,
+      roughness: 0.78,
+      metalness: 0.1,
+    });
+
+    this.eyeMat = new THREE.MeshStandardMaterial({
+      color: 0xff1122,
+      emissive: 0xff1122,
+      emissiveIntensity: 1.4,
+      roughness: 0.2,
+    });
+  }
+
+  public spawnZombie(
+    type: ZombieType,
+    position: [number, number, number]
+  ): ZombieEntity | null {
+    // Strict requirement: No zombies should appear before the meteorite impact.
+    // Zombies begin spawning only after the impact and outbreak storyline.
+    if (!this.isOutbreakActive) {
+      return null;
+    }
+
+    // Authored encounters and random spawns must never instantiate a zombie inside
+    // any protected compound or railway station premises. Move unsafe points outside.
+    if (isProtectedSpawnZone(position[0], position[2]) || RailwayNetworkGenerator.isProtectedRailwayZone(position[0], position[2])) {
+      const origin = { x: position[0], z: position[2] };
+      const candidates: Array<{ x: number; z: number; distance: number }> = [];
+      for (const zone of PROTECTED_SPAWN_ZONES) {
+        if (origin.x < zone.minX || origin.x > zone.maxX || origin.z < zone.minZ || origin.z > zone.maxZ) continue;
+        const margin = 8;
+        candidates.push(
+          { x: zone.minX - margin, z: origin.z, distance: Math.abs(zone.minX - margin - origin.x) },
+          { x: zone.maxX + margin, z: origin.z, distance: Math.abs(zone.maxX + margin - origin.x) },
+          { x: origin.x, z: zone.minZ - margin, distance: Math.abs(zone.minZ - margin - origin.z) },
+          { x: origin.x, z: zone.maxZ + margin, distance: Math.abs(zone.maxZ + margin - origin.z) },
+        );
+      }
+      if (RailwayNetworkGenerator.isProtectedRailwayZone(origin.x, origin.z)) {
+        const nearestStationX = Math.round(origin.x / 1200) * 1200;
+        candidates.push(
+          { x: origin.x, z: 84, distance: Math.abs(84 - origin.z) },
+          { x: origin.x, z: 376, distance: Math.abs(376 - origin.z) },
+          { x: nearestStationX - 156, z: origin.z, distance: Math.abs(nearestStationX - 156 - origin.x) },
+          { x: nearestStationX + 156, z: origin.z, distance: Math.abs(nearestStationX + 156 - origin.x) },
+        );
+      }
+      candidates.sort((a, b) => a.distance - b.distance);
+      const safe = candidates.find(
+        (candidate) =>
+          Number.isFinite(candidate.x) &&
+          Number.isFinite(candidate.z) &&
+          !isProtectedSpawnZone(candidate.x, candidate.z) &&
+          !RailwayNetworkGenerator.isProtectedRailwayZone(candidate.x, candidate.z)
+      );
+      if (!safe) { console.warn('[ZombieSpawn] rejected: no safe exterior point', origin); return null; }
+      position = [safe.x, position[1], safe.z];
+    }
+    const id = `zombie_${this.nextId++}`;
+    let maxHealth = 80;
+    let speed = 2.2;
+    let damage = 14;
+    let detectionRadius = 26;
+
+    if (type === 'runner') {
+      maxHealth = 55;
+      speed = 4.8;
+      damage = 10;
+      detectionRadius = 32;
+    } else if (type === 'brute') {
+      maxHealth = 280;
+      speed = 1.35;
+      damage = 38;
+      detectionRadius = 22;
+    } else if (type === 'screamer') {
+      maxHealth = 65;
+      speed = 2.6;
+      damage = 8;
+      detectionRadius = 36;
+    } else if (type === 'crawler') {
+      maxHealth = 45;
+      speed = 1.5;
+      damage = 12;
+      detectionRadius = 20;
+    }
+
+    const groundY = getTerrainHeight(position[0], position[2]);
+    const entity: ZombieEntity = {
+      id,
+      type,
+      position: [position[0], groundY, position[2]],
+      rotationY: Math.random() * Math.PI * 2,
+      health: maxHealth,
+      maxHealth,
+      speed,
+      damage,
+      state: 'idle',
+      attackCooldown: 0,
+      detectionRadius,
+    };
+
+    this.zombies.push(entity);
+    this.createZombieMesh(entity);
+
+    const physMgr = UnifiedPhysicsManager.getInstance();
+    if (physMgr) {
+      physMgr.registerCylinderCollider(entity.id, 'zombie', entity.position, entity.type === 'brute' ? 0.8 : 0.45, 1.9);
+    }
+
+    return entity;
+  }
+
+  public spawnHordeWave(playerPos: THREE.Vector3, count: number) {
+    if (!this.isOutbreakActive) return;
+
+    for (let i = 0; i < count; i++) {
+      const angle = (i / count) * Math.PI * 2 + (Math.random() - 0.5) * 0.4;
+      const dist = 38 + Math.random() * 22;
+      const x = playerPos.x + Math.cos(angle) * dist;
+      const z = playerPos.z + Math.sin(angle) * dist;
+
+      // Type distribution
+      const roll = Math.random();
+      let type: ZombieType = 'walker';
+      if (roll > 0.85) type = 'brute';
+      else if (roll > 0.55) type = 'runner';
+      else if (roll > 0.45) type = 'screamer';
+
+      const zEntity = this.spawnZombie(type, [x, 0, z]);
+      if (zEntity) {
+        zEntity.state = 'chase'; // Night horde immediately hunts
+      }
+    }
+  }
+
+  public clearAllZombies() {
+    this.zombies.forEach((z) => {
+      const mesh = this.zombieMeshes.get(z.id);
+      if (mesh) this.scene.remove(mesh);
+    });
+    this.zombies = [];
+    this.zombieMeshes.clear();
+  }
+
+  private moveZombieWithCollision(z: ZombieEntity, nextX: number, nextZ: number) {
+    const phys = UnifiedPhysicsManager.getInstance();
+    const radius = z.type === 'brute' ? 0.72 : 0.42;
+    let current = new THREE.Vector3(z.position[0], z.position[1], z.position[2]);
+    const totalDistance = Math.hypot(nextX - current.x, nextZ - current.z);
+    // Subdivide long knockback steps so fast movement cannot tunnel through a wall.
+    const steps = Math.max(1, Math.ceil(totalDistance / 0.2));
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const desired = new THREE.Vector3(
+        THREE.MathUtils.lerp(z.position[0], nextX, t),
+        current.y,
+        THREE.MathUtils.lerp(z.position[2], nextZ, t)
+      );
+      if (phys) {
+        const resolved = phys.resolveMovement(current, desired, radius, 1.9, z.id).resolvedPos;
+        current = resolved;
+      } else {
+        current = desired;
+      }
+    }
+    z.position[0] = current.x;
+    z.position[2] = current.z;
+    z.position[1] = getTerrainHeight(current.x, current.z);
+  }
+
+  public update(
+    delta: number,
+    playerPos: THREE.Vector3,
+    buildingMgr: BuildingManager,
+    onPlayerDamage: (dmg: number) => void
+  ) {
+    const toRemove: string[] = [];
+
+    for (let i = 0; i < this.zombies.length; i++) {
+      const z = this.zombies[i];
+      const mesh = this.zombieMeshes.get(z.id);
+      if (!mesh) continue;
+
+      if (z.state === 'dead') {
+        z.deathTimer = (z.deathTimer || 0) + delta;
+        mesh.position.y -= delta * 0.4;
+        if (z.deathTimer > 3.0) {
+          toRemove.push(z.id);
+        }
+        continue;
+      }
+
+      z.attackCooldown = Math.max(0, z.attackCooldown - delta);
+
+      // Distance to player (squared check first)
+      const dx = playerPos.x - z.position[0];
+      const dz = playerPos.z - z.position[2];
+      const distSqToPlayer = dx * dx + dz * dz;
+
+      // Animation gait (Skip bone animation calculations for distant zombies to conserve CPU)
+      if (distSqToPlayer < 75 * 75) {
+        const walkCycle = Math.sin(Date.now() * 0.008 * (z.speed / 2.0));
+        const leftLeg = mesh.getObjectByName('leftLeg');
+        const rightLeg = mesh.getObjectByName('rightLeg');
+        const leftArm = mesh.getObjectByName('leftArm');
+        const rightArm = mesh.getObjectByName('rightArm');
+        if (leftLeg && rightLeg) {
+          leftLeg.rotation.x = walkCycle * 0.45;
+          rightLeg.rotation.x = -walkCycle * 0.45;
+        }
+        if (leftArm && rightArm) {
+          leftArm.rotation.x = -Math.PI / 2.8 + walkCycle * 0.2;
+          rightArm.rotation.x = -Math.PI / 2.8 - walkCycle * 0.2;
+        }
+      }
+
+      // Check for defensive spikes collision (squared distance check: 1.8^2 = 3.24)
+      for (const struct of buildingMgr.structures) {
+        if (struct.typeId === 'defense_spikes') {
+          const sDistSq = (struct.position[0] - z.position[0]) ** 2 + (struct.position[2] - z.position[2]) ** 2;
+          if (sDistSq < 3.24) {
+            this.damageZombie(z.id, 25 * delta, 0);
+          }
+        }
+      }
+
+      // State handling (using squared threshold)
+      const detectSq = z.detectionRadius * z.detectionRadius;
+      if (distSqToPlayer < detectSq || z.state === 'chase') {
+        z.state = 'chase';
+
+        // Check if an obstacle/structure is directly between zombie and player (squared check: 2.4^2 = 5.76)
+        let nearestStructure: string | null = null;
+        const minStructDistSq = 5.76;
+
+        for (const s of buildingMgr.structures) {
+          if (s.isOpen) continue; // Can walk through open doors and gates
+          if (s.typeId === 'wooden_foundation' || s.typeId === 'perimeter_torch' || s.typeId === 'modern_lamp') continue;
+          const sdx = s.position[0] - z.position[0];
+          const sdz = s.position[2] - z.position[2];
+          const sDistSq = sdx * sdx + sdz * sdz;
+          if (sDistSq < minStructDistSq) {
+            nearestStructure = s.uid;
+            break;
+          }
+        }
+
+        if (nearestStructure) {
+          // Attack structure blocking way
+          z.state = 'attack_structure';
+          z.targetStructureUid = nearestStructure;
+          if (z.attackCooldown <= 0) {
+            z.attackCooldown = 1.3;
+            soundEngine.playZombieGrowl();
+            buildingMgr.damageStructure(nearestStructure, z.damage);
+          }
+        } else if (distSqToPlayer < 2.56) { // 1.6^2 = 2.56
+          // Attack player
+          z.state = 'attack_player';
+          if (z.attackCooldown <= 0) {
+            z.attackCooldown = 1.2;
+            soundEngine.playZombieGrowl();
+            onPlayerDamage(z.damage);
+          }
+        } else {
+          // Move towards player
+          const distToPlayer = Math.sqrt(distSqToPlayer);
+          const dirX = dx / distToPlayer;
+          const dirZ = dz / distToPlayer;
+
+          this.moveZombieWithCollision(z, z.position[0] + dirX * z.speed * delta, z.position[2] + dirZ * z.speed * delta);
+
+          z.rotationY = Math.atan2(dirX, dirZ);
+        }
+      } else {
+        // Idle wander
+        z.state = 'idle';
+        this.moveZombieWithCollision(z, z.position[0] + Math.sin(z.rotationY) * 0.4 * delta, z.position[2] + Math.cos(z.rotationY) * 0.4 * delta);
+        if (Math.random() < 0.01) {
+          z.rotationY += (Math.random() - 0.5) * 1.5;
+        }
+      }
+
+      // Sync mesh & physics collider
+      mesh.position.set(z.position[0], z.position[1], z.position[2]);
+      mesh.rotation.y = z.rotationY;
+
+      const physMgr = UnifiedPhysicsManager.getInstance();
+      if (physMgr) {
+        physMgr.updateColliderPosition(z.id, z.position, z.rotationY);
+      }
+    }
+
+    // Cleanup dead zombies
+    toRemove.forEach((id) => {
+      const mesh = this.zombieMeshes.get(id);
+      if (mesh) this.scene.remove(mesh);
+      this.zombieMeshes.delete(id);
+      this.zombies = this.zombies.filter((z) => z.id !== id);
+      const physMgr = UnifiedPhysicsManager.getInstance();
+      if (physMgr) {
+        physMgr.unregisterCollider(id);
+      }
+    });
+  }
+
+  public damageZombie(
+    zombieId: string,
+    amount: number,
+    knockbackStrength: number = 2.0
+  ): { killed: boolean; xp: number } | null {
+    const z = this.zombies.find((e) => e.id === zombieId);
+    if (!z || z.state === 'dead') return null;
+
+    z.health = Math.max(0, z.health - amount);
+    const mesh = this.zombieMeshes.get(zombieId);
+
+    if (mesh) {
+      // Knockback
+      this.moveZombieWithCollision(z, z.position[0] - Math.sin(z.rotationY) * knockbackStrength, z.position[2] - Math.cos(z.rotationY) * knockbackStrength);
+
+      // Flash red and safely restore per-part PBR materials
+      mesh.traverse((c) => {
+        if (c instanceof THREE.Mesh) {
+          if (!c.userData.origMaterial) {
+            c.userData.origMaterial = c.material;
+          }
+          c.material = this.eyeMat;
+        }
+      });
+      setTimeout(() => {
+        if (mesh && z.state !== 'dead') {
+          mesh.traverse((c) => {
+            if (c instanceof THREE.Mesh && c.userData.origMaterial) {
+              c.material = c.userData.origMaterial;
+            }
+          });
+        }
+      }, 100);
+    }
+
+    if (z.health <= 0) {
+      z.state = 'dead';
+      z.deathTimer = 0;
+      if (mesh) {
+        mesh.rotation.z = Math.PI / 2.2;
+      }
+      const xp = z.type === 'brute' ? 80 : z.type === 'runner' ? 45 : 30;
+      return { killed: true, xp };
+    }
+
+    return { killed: false, xp: 0 };
+  }
+
+  // --- Sculpted Anatomical Zombie Rig ---
+  private createZombieMesh(z: ZombieEntity) {
+    const isBrute = z.type === 'brute';
+    const isCrawler = z.type === 'crawler';
+    const scale = isBrute ? 1.45 : z.type === 'runner' ? 0.95 : isCrawler ? 0.75 : 1.05;
+
+    const group = buildRealisticZombie(z.type, scale);
+    group.position.set(z.position[0], z.position[1], z.position[2]);
+    group.rotation.y = z.rotationY;
+
+    this.scene.add(group);
+    this.zombieMeshes.set(z.id, group);
+  }
+
+  public dispose() {
+    this.clearAllZombies();
+    this.skinMat.dispose();
+    this.clothesMat.dispose();
+    this.eyeMat.dispose();
+    this.bruteMat.dispose();
+  }
+}
