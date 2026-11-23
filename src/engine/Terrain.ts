@@ -4,7 +4,7 @@ import {
   getTerrainPBR,
   getWoodPBR,
   getStonePBR,
-  getWaterRippleNormalMap,
+  getGrassTuftAlphaTexture,
 } from '../utils/proceduralTextures';
 import {
   buildRealisticTree,
@@ -12,6 +12,11 @@ import {
   buildRealisticBerryBush,
   buildRealisticScrapWreck,
 } from './rendering/RealisticFloraBuilder';
+import {
+  enhanceTerrainMaterialWithRealism,
+  createRealisticWaterMaterial,
+  applyFoliageWindShader,
+} from './shaders/RealismShaders';
 
 import { TerrainGenerator } from './world/TerrainGenerator';
 import { isProtectedSpawnZone } from './world/ProtectedSpawnZones';
@@ -25,6 +30,7 @@ export function getTerrainHeight(x: number, z: number, seed: number = 42): numbe
 export class WorldTerrain {
   public mesh: THREE.Mesh;
   public waterMesh: THREE.Mesh;
+  public grassMeadow: THREE.InstancedMesh | null = null;
   public resources: HarvestableResource[] = [];
   public resourceMeshes: Map<string, THREE.Group> = new Map();
   public scene: THREE.Scene;
@@ -74,46 +80,111 @@ export class WorldTerrain {
     terrainPBR.normal.repeat.set(24, 24);
     terrainPBR.roughness.repeat.set(24, 24);
 
-    const material = new THREE.MeshStandardMaterial({
-      map: terrainPBR.albedo,
-      normalMap: terrainPBR.normal,
-      roughnessMap: terrainPBR.roughness,
-      normalScale: new THREE.Vector2(1.25, 1.25),
-      vertexColors: true,
-      roughness: 0.9,
-      metalness: 0.04,
-      flatShading: false,
-    });
+    const material = enhanceTerrainMaterialWithRealism(
+      new THREE.MeshStandardMaterial({
+        map: terrainPBR.albedo,
+        normalMap: terrainPBR.normal,
+        roughnessMap: terrainPBR.roughness,
+        normalScale: new THREE.Vector2(1.35, 1.35),
+        vertexColors: true,
+        roughness: 0.88,
+        metalness: 0.04,
+        flatShading: false,
+      })
+    );
 
     this.mesh = new THREE.Mesh(geometry, material);
     this.mesh.receiveShadow = true;
     this.scene.add(this.mesh);
 
-    // 2. Winding River Water Plane with Clearcoat Optical Sheen & Ripple Normals
-    const waterGeo = new THREE.PlaneGeometry(35, size);
+    // 2. Gerstner Wave + Fresnel Sky Reflection + Sun Specular River Water Plane
+    const waterGeo = new THREE.PlaneGeometry(36, size, 18, 72);
     waterGeo.rotateX(-Math.PI / 2);
-    const waterRipple = getWaterRippleNormalMap();
-    waterRipple.wrapS = THREE.RepeatWrapping;
-    waterRipple.wrapT = THREE.RepeatWrapping;
-    waterRipple.repeat.set(4, 18);
+    const waterMat = createRealisticWaterMaterial(0x164a66, false);
+    if (waterMat.normalMap) {
+      waterMat.normalMap.repeat.set(4, 18);
+    }
 
-    const waterMat = new THREE.MeshStandardMaterial({
-      color: 0x164a66,
-      roughness: 0.08,
-      metalness: 0.18,
-      envMapIntensity: 1.5,
-      normalMap: waterRipple,
-      normalScale: new THREE.Vector2(0.95, 0.95),
-      transparent: true,
-      opacity: 0.86,
-    });
     this.waterMesh = new THREE.Mesh(waterGeo, waterMat);
     this.waterMesh.position.set(50, -0.6, 0);
     this.waterMesh.receiveShadow = true;
     this.scene.add(this.waterMesh);
 
+    // 2b. Living Wind-Animated Instanced 3D Grass Meadow
+    this.buildGrassMeadow();
+
     // 3. Populate Harvestable Resources
     this.generateHarvestables();
+  }
+
+  private buildGrassMeadow() {
+    const w = 0.48;
+    const h = 0.72;
+    const pos = new Float32Array([
+      -w, 0, 0,   w, 0, 0,   w, h, 0,
+      -w, 0, 0,   w, h, 0,  -w, h, 0,
+      0, 0, -w,   0, 0, w,   0, h, w,
+      0, 0, -w,   0, h, w,   0, h, -w,
+    ]);
+    const uv = new Float32Array([
+      0, 0, 1, 0, 1, 1,   0, 0, 1, 1, 0, 1,
+      0, 0, 1, 0, 1, 1,   0, 0, 1, 1, 0, 1,
+    ]);
+    const bladeGeo = new THREE.BufferGeometry();
+    bladeGeo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    bladeGeo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    bladeGeo.computeVertexNormals();
+
+    const bladeMat = applyFoliageWindShader(
+      new THREE.MeshStandardMaterial({
+        map: getGrassTuftAlphaTexture(),
+        color: 0x9ec46e,
+        alphaTest: 0.4,
+        roughness: 0.82,
+        metalness: 0.02,
+        side: THREE.DoubleSide,
+      }),
+      0.24,
+      true
+    );
+
+    const maxTufts = 1400;
+    const instanced = new THREE.InstancedMesh(bladeGeo, bladeMat, maxTufts);
+    const dummy = new THREE.Object3D();
+    const tint = new THREE.Color();
+    let placed = 0;
+
+    let s = this.seed * 73 + 919;
+    const rnd = () => {
+      s = (s * 1664525 + 1013904223) % 4294967296;
+      return Math.abs(s / 4294967296);
+    };
+
+    for (let i = 0; i < maxTufts; i++) {
+      const rx = (rnd() - 0.5) * 235;
+      const rz = (rnd() - 0.5) * 235;
+      if (Math.abs(rx - 50) < 15.5) continue;
+      if (isProtectedSpawnZone(rx, rz) || RailwayNetworkGenerator.isProtectedRailwayZone(rx, rz)) continue;
+      const ry = getTerrainHeight(rx, rz, this.seed);
+      if (ry < 0.05 || ry > 14.0) continue;
+
+      dummy.position.set(rx, ry - 0.03, rz);
+      dummy.rotation.set(0, rnd() * Math.PI * 2, 0);
+      const sc = 0.72 + rnd() * 0.65;
+      dummy.scale.set(sc, sc * (0.85 + rnd() * 0.45), sc);
+      dummy.updateMatrix();
+      instanced.setMatrixAt(placed, dummy.matrix);
+      tint.setHSL(0.24 + (rnd() - 0.5) * 0.05, 0.42 + rnd() * 0.16, 0.48 + rnd() * 0.18);
+      instanced.setColorAt(placed, tint);
+      placed++;
+    }
+    instanced.count = placed;
+    instanced.instanceMatrix.needsUpdate = true;
+    if (instanced.instanceColor) instanced.instanceColor.needsUpdate = true;
+    instanced.computeBoundingSphere();
+    instanced.receiveShadow = true;
+    this.grassMeadow = instanced;
+    this.scene.add(instanced);
   }
 
   private generateHarvestables() {
@@ -359,6 +430,13 @@ export class WorldTerrain {
     this.scene.remove(this.waterMesh);
     this.mesh.geometry.dispose();
     this.waterMesh.geometry.dispose();
+
+    if (this.grassMeadow) {
+      this.scene.remove(this.grassMeadow);
+      this.grassMeadow.geometry.dispose();
+      (this.grassMeadow.material as THREE.Material).dispose();
+      this.grassMeadow = null;
+    }
 
     this.resourceMeshes.forEach((mesh) => {
       this.scene.remove(mesh);

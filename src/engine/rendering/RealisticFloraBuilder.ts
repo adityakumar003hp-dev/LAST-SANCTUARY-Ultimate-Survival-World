@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { getBarkPBR, getRockPBR, getFoliageTexture, getMetalPBR } from '../../utils/proceduralTextures';
+import { applyFoliageWindShader } from '../shaders/RealismShaders';
 
 interface FloraGeoCache {
   trunk: THREE.LatheGeometry;
@@ -141,6 +142,7 @@ function getPooledLeafMat(hex: number): THREE.MeshStandardMaterial {
     roughness: 0.82,
     metalness: 0.03,
   });
+  applyFoliageWindShader(m, 0.13, false);
   m.userData.__sharedResource = true;
   matPool.set(k, m);
   return m;

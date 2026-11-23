@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useEffect, useRef, useState, useCallback } from 'react';
+import React, { useEffect, useRef, useState, useCallback, Suspense, lazy } from 'react';
 import { GameEngine } from './engine/GameEngine';
 import { DialogueModal } from './components/DialogueModal';
 import { FriendInteractionModal } from './components/FriendInteractionModal';
@@ -13,7 +13,6 @@ import { MainMenu } from './components/MainMenu';
 import { BuildMenu } from './components/BuildMenu';
 import { InventoryModal } from './components/InventoryModal';
 import { CraftingModal } from './components/CraftingModal';
-import { MapModal } from './components/MapModal';
 import { QuestJournalModal } from './components/QuestJournalModal';
 import { CharacterModal } from './components/CharacterModal';
 import { PauseMenu } from './components/PauseMenu';
@@ -25,41 +24,92 @@ import { VehicleHUD } from './components/VehicleHUD';
 import { TrainHUD } from './components/TrainHUD';
 import { CinematicOverlay } from './components/prologue/CinematicOverlay';
 import { PerformanceDiagnostic } from './components/PerformanceDiagnostic';
+import { SurvivalRadioPanel } from './components/SurvivalRadioPanel';
+import { FishingModal } from './components/FishingModal';
 import { ProloguePhase, PrologueSubtitle, StoryCompanion } from './types/prologue';
-import { 
-  FullGameSave, 
-  PlayerStats, 
-  InventorySlot, 
-  Quest, 
-  GameSettings, 
+import {
+  FullGameSave,
+  PlayerStats,
+  InventorySlot,
+  Quest,
+  GameSettings,
   GraphicsQualityMode,
-  StructureDefinition, 
-  PlacedStructure, 
-  CraftingRecipe, 
-  Difficulty, 
+  StructureDefinition,
+  PlacedStructure,
+  CraftingRecipe,
+  Difficulty,
   GameMode,
   VehicleState,
   CompanionState,
   EcosystemDossier,
-  EcosystemMetrics
+  EcosystemMetrics,
+  BaseState,
+  BiomeType,
+  NPCRole,
+  WeatherType,
+  SandboxSettings,
+  KeybindConfig,
+  RadiantBounty,
+  FloatingDamageNumber,
+  SupplyDropState,
+  WeaponModId,
 } from './types/game';
+import { ExtractionState } from './engine/world/WorldEventsManager';
 import { ObjectiveNavigationState } from './types/physics';
 import { ITEMS } from './data/items';
 import { INITIAL_QUESTS } from './data/quests';
-import { ArmoryCatalogModal } from './components/ArmoryCatalogModal';
 import { FridgeStorageModal } from './components/FridgeStorageModal';
 import { PhoneModal } from './components/PhoneModal';
 import { RailwayOperationsModal } from './components/RailwayOperationsModal';
-import { RailwayTicketModal } from './components/RailwayTicketModal';
 import { RailwayStationHUD } from './components/RailwayStationHUD';
 import { IndiaRailwayNetworkModal } from './components/IndiaRailwayNetworkModal';
 import { RailwayTicket } from './types/game';
 import { MedicalClinicModal } from './components/MedicalClinicModal';
 import { ApartmentStatusModal } from './components/ApartmentStatusModal';
 import { SecurityCommandCenterModal } from './components/SecurityCommandCenterModal';
+import { CornerMinimap } from './components/CornerMinimap';
 import { ArmoryCatalogItem } from './data/armoryCatalog';
 import { saveGameToSlot, loadGameFromSlot, getAllSaveSlots } from './utils/storage';
 import { soundEngine } from './utils/audio';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { BIOMES } from './engine/world/BiomeGenerator';
+import { useGamepad } from './hooks/useGamepad';
+import { loadCodexState, recordDiscoveredBiome, recordScannedSpecies, CodexState } from './data/codex';
+import {
+  CareerStats,
+  loadCareerStats,
+  incrementCareerStat,
+  recordCareerHighWater,
+} from './data/achievements';
+import { loadKeybinds, saveKeybinds, resetKeybinds } from './utils/keybinds';
+import { generateDailyBounties } from './data/bounties';
+import { recordRunScore } from './utils/blueprintShare';
+import { Camera, X as CloseIcon } from 'lucide-react';
+
+const MapModal = lazy(() => import('./components/MapModal').then((m) => ({ default: m.MapModal })));
+const ArmoryCatalogModal = lazy(() =>
+  import('./components/ArmoryCatalogModal').then((m) => ({ default: m.ArmoryCatalogModal }))
+);
+const RailwayTicketModal = lazy(() =>
+  import('./components/RailwayTicketModal').then((m) => ({ default: m.RailwayTicketModal }))
+);
+const BaseManagementDashboardModal = lazy(() =>
+  import('./components/BaseManagementDashboardModal').then((m) => ({ default: m.BaseManagementDashboardModal }))
+);
+const TrainControlCenter = lazy(() =>
+  import('./components/TrainControlCenter').then((m) => ({ default: m.TrainControlCenter }))
+);
+const FieldCompendiumModal = lazy(() =>
+  import('./components/FieldCompendiumModal').then((m) => ({ default: m.FieldCompendiumModal }))
+);
+const AchievementsModal = lazy(() =>
+  import('./components/AchievementsModal').then((m) => ({ default: m.AchievementsModal }))
+);
+const BlueprintManagerModal = lazy(() =>
+  import('./components/BlueprintManagerModal').then((m) => ({ default: m.BlueprintManagerModal }))
+);
+
+const SETTINGS_STORAGE_KEY = 'last_sanctuary_settings_v1';
 
 export default function App() {
   const [gameState, setGameState] = useState<'menu' | 'playing' | 'gameover'>('menu');
@@ -184,6 +234,54 @@ export default function App() {
   const [isApartmentStatusOpen, setIsApartmentStatusOpen] = useState(false);
   const [isSecurityCommandCenterOpen, setIsSecurityCommandCenterOpen] = useState(false);
   const [isRailwayNetworkMapOpen, setIsRailwayNetworkMapOpen] = useState(false);
+  const [isBaseDashboardOpen, setIsBaseDashboardOpen] = useState(false);
+  const [liveBaseState, setLiveBaseState] = useState<BaseState | null>(null);
+  const [isTrainControlCenterOpen, setIsTrainControlCenterOpen] = useState(false);
+  const [isCompendiumOpen, setIsCompendiumOpen] = useState(false);
+  const [codexState, setCodexState] = useState<CodexState>(() => loadCodexState());
+  const [currentBiome, setCurrentBiome] = useState<{ id: string; name: string; tempC: number }>({
+    id: 'green_plains',
+    name: 'Verdant Meadowlands',
+    tempC: 22,
+  });
+  const [playerCoords, setPlayerCoords] = useState<[number, number, number]>([0, 0, 0]);
+  const [showMinimap, setShowMinimap] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 768 : true
+  );
+  const [isPhotoMode, setIsPhotoMode] = useState(false);
+  const [photoToast, setPhotoToast] = useState<string | null>(null);
+  const [isAchievementsOpen, setIsAchievementsOpen] = useState(false);
+  const [careerStats, setCareerStats] = useState<CareerStats>(() => loadCareerStats());
+
+  // Dynamic Weather, Combat Feedback, Bounties, Sandbox & Keybinds
+  const [weather, setWeather] = useState<WeatherType>('clear');
+  const [damageNumbers, setDamageNumbers] = useState<FloatingDamageNumber[]>([]);
+  const [hitmarkerActive, setHitmarkerActive] = useState(false);
+  const [bossStatus, setBossStatus] = useState<{ name: string; health: number; maxHealth: number } | null>(null);
+  const [worldEvent, setWorldEvent] = useState<{ supplyDrop: SupplyDropState | null; extraction: ExtractionState } | null>(null);
+  const [bounties, setBounties] = useState<RadiantBounty[]>(() => generateDailyBounties(1));
+  const lastBountyDayRef = useRef(1);
+  const [sandboxSettings, setSandboxSettings] = useState<SandboxSettings>({
+    lootMultiplier: 1.0,
+    zombieDensity: 1.0,
+    dayLengthMultiplier: 1.0,
+    weatherIntensity: 1.0,
+    friendlyFire: false,
+    permadeath: false,
+    infinitePower: false,
+  });
+  const [keybinds, setKeybinds] = useState<KeybindConfig>(() => loadKeybinds());
+  const [isRadioOpen, setIsRadioOpen] = useState(false);
+  const [isFishingOpen, setIsFishingOpen] = useState(false);
+  const [isBlueprintModalOpen, setIsBlueprintModalOpen] = useState(false);
+  const [isExtractionVictoryOpen, setIsExtractionVictoryOpen] = useState(false);
+  const [isCrouching, setIsCrouching] = useState(false);
+  const [weaponMods, setWeaponMods] = useState<Record<string, WeaponModId[]>>({});
+  const survivorNameRef = useRef('Survivor');
+  const statsRef = useRef(stats);
+  statsRef.current = stats;
+  const dayCountRef = useRef(dayCount);
+  dayCountRef.current = dayCount;
 
   // Performance Diagnostics Overlay State & Graphics Quality Preset (4 Modes)
   const [isPerfOpen, setIsPerfOpen] = useState(false);
@@ -278,18 +376,50 @@ export default function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, []);
 
-  // Settings
-  const [settings, setSettings] = useState<GameSettings>(() => ({
-    masterVolume: 0.7,
-    sfxVolume: 0.8,
-    musicVolume: 0.4,
-    mouseSensitivity: 1.0,
-    fieldOfView: 70,
-    showCoordinates: true,
-    graphicsQuality: mapQualityModeToSetting(qualityMode),
-    firstPersonCamera: false,
-    viewDistanceChunks: 3,
-  }));
+  // Settings (persisted to localStorage)
+  const [settings, setSettings] = useState<GameSettings>(() => {
+    const defaults: GameSettings = {
+      masterVolume: 0.7,
+      sfxVolume: 0.8,
+      musicVolume: 0.4,
+      mouseSensitivity: 1.0,
+      fieldOfView: 70,
+      showCoordinates: true,
+      graphicsQuality: mapQualityModeToSetting(qualityMode),
+      firstPersonCamera: false,
+      viewDistanceChunks: 3,
+    };
+    try {
+      const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+      if (raw) {
+        const parsed = JSON.parse(raw) as Partial<GameSettings>;
+        return {
+          ...defaults,
+          ...parsed,
+          graphicsQuality: mapQualityModeToSetting(qualityMode),
+        };
+      }
+    } catch {}
+    return defaults;
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
+    } catch {}
+  }, [settings]);
+
+  // High-water career progression tracking
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+    setCareerStats(
+      recordCareerHighWater({
+        highestDay: dayCount,
+        highestLevel: stats.level,
+        missionsCompleted: quests.filter((q) => q.completed).length,
+      })
+    );
+  }, [gameState, dayCount, stats.level, quests]);
 
   // Check for existing save on mount
   useEffect(() => {
@@ -354,13 +484,16 @@ export default function App() {
     return () => clearInterval(interval);
   }, [gameState]);
 
-  // Sync camera FOV (with automatic portrait orientation compensation) and shake settings
+  // Sync camera FOV, shake, view distance, and audio settings
   useEffect(() => {
     if (engineRef.current) {
       engineRef.current.setBaseFov(settings.fieldOfView);
       engineRef.current.player.enableCameraShake = !settings.firstPersonCamera;
+      if (settings.viewDistanceChunks) {
+        engineRef.current.setViewDistanceChunks(settings.viewDistanceChunks);
+      }
     }
-  }, [settings.fieldOfView, settings.firstPersonCamera]);
+  }, [settings.fieldOfView, settings.firstPersonCamera, settings.viewDistanceChunks]);
 
   // Update engine held item whenever hotbar selection changes
   useEffect(() => {
@@ -444,6 +577,10 @@ export default function App() {
       setIsMedicalClinicOpen(false);
       setIsApartmentStatusOpen(false);
       setIsSecurityCommandCenterOpen(false);
+      setIsBaseDashboardOpen(false);
+      setIsTrainControlCenterOpen(false);
+      setIsCompendiumOpen(false);
+      setIsPhotoMode(false);
       setActiveDialogue(null);
       setActiveFriendModal(null);
       setOpenChestStructure(null);
@@ -455,6 +592,10 @@ export default function App() {
           setDayCount(days);
           setIsNight(night);
           setIsDusk(dusk);
+          if (days > lastBountyDayRef.current) {
+            lastBountyDayRef.current = days;
+            setBounties(generateDailyBounties(days));
+          }
         },
         onHordeEvent: (event: 'dusk_warning' | 'night_horde_start' | 'dawn_victory' | null) => {
           setHordeEvent(event);
@@ -469,7 +610,70 @@ export default function App() {
         onResourceHarvested: () => {},
         onItemCollected: (id: string, count: number) => collectItem(id, count),
         onOpenNoticeBoard: () => setIsNoticeBoardOpen(true),
-        onGameOver: () => setGameState('gameover'),
+        onGameOver: () => {
+          const curStats = statsRef.current;
+          recordRunScore({
+            survivorName: survivorNameRef.current,
+            daysSurvived: dayCountRef.current,
+            kills: curStats.killStats?.total ?? 0,
+            bosses: curStats.killStats?.bosses ?? 0,
+            rebirths: curStats.rebirthCount ?? 0,
+            difficulty: engineRef.current?.difficulty || 'standard',
+            extracted: false,
+          });
+          setGameState('gameover');
+        },
+        onWeatherChange: (nextWeather: WeatherType) => setWeather(nextWeather),
+        onHitEvent: (ev: { amount: number; isHeadshot?: boolean; isStealth?: boolean; screenX: number; screenY: number }) => {
+          const id = `dn_${Date.now()}_${Math.random()}`;
+          setDamageNumbers((prev) => [
+            ...prev.filter((d) => Date.now() - d.createdAt < 750),
+            {
+              id,
+              x: ev.screenX,
+              y: ev.screenY,
+              amount: ev.amount,
+              isHeadshot: ev.isHeadshot,
+              isStealth: ev.isStealth,
+              createdAt: Date.now(),
+            },
+          ]);
+          setHitmarkerActive(true);
+          setTimeout(() => setHitmarkerActive(false), 140);
+          setTimeout(() => {
+            setDamageNumbers((prev) => prev.filter((d) => d.id !== id));
+          }, 760);
+        },
+        onBossStatusChange: (boss: { name: string; health: number; maxHealth: number } | null) => {
+          setBossStatus(boss);
+        },
+        onWorldEventUpdate: (ev: { supplyDrop: SupplyDropState | null; extraction: ExtractionState }) => {
+          setWorldEvent(ev);
+        },
+        onBountyProgress: (targetType: RadiantBounty['targetType'], amount: number = 1) => {
+          setBounties((prev) =>
+            prev.map((b) => {
+              if (b.claimed || b.targetType !== targetType) return b;
+              const nextCur = Math.min(b.target, b.current + amount);
+              return { ...b, current: nextCur, completed: nextCur >= b.target };
+            })
+          );
+        },
+        onExtractionVictory: () => {
+          const curStats = statsRef.current;
+          recordRunScore({
+            survivorName: survivorNameRef.current,
+            daysSurvived: dayCountRef.current,
+            kills: curStats.killStats?.total ?? 0,
+            bosses: curStats.killStats?.bosses ?? 0,
+            rebirths: curStats.rebirthCount ?? 0,
+            difficulty: engineRef.current?.difficulty || 'standard',
+            extracted: true,
+          });
+          setIsExtractionVictoryOpen(true);
+        },
+        onOpenBlueprintModal: () => setIsBlueprintModalOpen(true),
+        onOpenFishingModal: () => setIsFishingOpen(true),
         onOpenDialogue: (dialogue: SurvivorDialogue) => setActiveDialogue(dialogue),
         onVehicleChange: (veh: VehicleState | null, speed: number) => {
           setActiveVehicle(veh);
@@ -504,6 +708,43 @@ export default function App() {
         onGetInventory: () => inventoryRef.current,
         onGetHotbar: () => hotbarRef.current,
         onGetSelectedHotbarIndex: () => selectedHotbarIndexRef.current,
+        onBiomeChange: (biomeId: string, biomeName: string) => {
+          const def = BIOMES[biomeId as BiomeType];
+          setCurrentBiome({
+            id: biomeId,
+            name: biomeName,
+            tempC: def?.temperature ?? 22,
+          });
+          const res = recordDiscoveredBiome(biomeId);
+          setCodexState(res.state);
+        },
+        onSpeciesScanned: (speciesId: string) => {
+          const res = recordScannedSpecies(speciesId);
+          setCodexState(res.state);
+        },
+        onCareerEvent: (event: {
+          type:
+            | 'zombie_killed'
+            | 'structure_built'
+            | 'resource_harvested'
+            | 'species_logged'
+            | 'survivor_rescued'
+            | 'horde_defeated'
+            | 'save_created';
+          count?: number;
+        }) => {
+          const delta = event.count ?? 1;
+          const map: Record<typeof event.type, keyof CareerStats> = {
+            zombie_killed: 'zombiesDefeated',
+            structure_built: 'structuresBuilt',
+            resource_harvested: 'resourcesHarvested',
+            species_logged: 'speciesLogged',
+            survivor_rescued: 'survivorsRescued',
+            horde_defeated: 'hordesSurvived',
+            save_created: 'savesCreated',
+          };
+          setCareerStats(incrementCareerStat(map[event.type], delta));
+        },
       };
 
       setLaunchError(null);
@@ -519,12 +760,19 @@ export default function App() {
             const engine = new GameEngine(canvasMountRef.current, initialSave, callbacks, seed);
             engine.gameMode = mode;
             engine.difficulty = diff;
+            engine.setSandboxSettings(sandboxSettings);
             if (!initialSave) {
               engine.quests = [...INITIAL_QUESTS];
+              setBounties(generateDailyBounties(1));
+              lastBountyDayRef.current = 1;
+              setWeaponMods({});
             }
 
             // Restore inventory and hotbar faithfully if loading save
             if (initialSave) {
+              if (initialSave.metadata?.characterName) {
+                survivorNameRef.current = initialSave.metadata.characterName;
+              }
               if (initialSave.inventory && initialSave.inventory.length > 0) {
                 setInventory(initialSave.inventory);
                 inventoryRef.current = initialSave.inventory;
@@ -543,6 +791,19 @@ export default function App() {
               if (initialSave.activeRailwayTicket) {
                 setActiveRailwayTicket(initialSave.activeRailwayTicket);
               }
+              if (initialSave.sandboxSettings) {
+                setSandboxSettings(initialSave.sandboxSettings);
+                engine.setSandboxSettings(initialSave.sandboxSettings);
+              }
+              if (initialSave.weaponMods) {
+                setWeaponMods(initialSave.weaponMods);
+              }
+              if (initialSave.bounties && initialSave.bounties.length > 0) {
+                setBounties(initialSave.bounties);
+              }
+              if (initialSave.weatherType) {
+                setWeather(initialSave.weatherType);
+              }
             }
 
             // If new game started in open-world survival or creative mode without story, complete story campaign directly
@@ -551,6 +812,10 @@ export default function App() {
             }
 
             engine.setBaseFov(settings.fieldOfView);
+            if (settings.viewDistanceChunks) {
+              engine.setViewDistanceChunks(settings.viewDistanceChunks);
+            }
+            soundEngine.setVolumes(settings.masterVolume, settings.sfxVolume, settings.musicVolume);
             engine.setPaused(false);
             engineRef.current = engine;
             setIsPauseOpen(false);
@@ -565,10 +830,18 @@ export default function App() {
         });
       });
     },
-    [collectItem, settings.fieldOfView]
+    [collectItem, sandboxSettings, settings.fieldOfView, settings.masterVolume, settings.musicVolume, settings.sfxVolume, settings.viewDistanceChunks]
   );
 
-  const startNewGame = (config: { characterName: string; difficulty: Difficulty; gameMode: GameMode; seed: number }) => {
+  const startNewGame = (config: {
+    characterName: string;
+    difficulty: Difficulty;
+    gameMode: GameMode;
+    seed: number;
+    sandboxSettings: SandboxSettings;
+  }) => {
+    survivorNameRef.current = config.characterName || 'Survivor';
+    setSandboxSettings(config.sandboxSettings);
     launchEngine(null, config.seed, config.gameMode, config.difficulty);
   };
 
@@ -589,6 +862,251 @@ export default function App() {
     }
   };
 
+  // Sync player coordinates & base dashboard snapshot smoothly while playing
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+    const timer = setInterval(() => {
+      const engine = engineRef.current;
+      if (!engine || !engine.player) return;
+      setPlayerCoords([engine.player.position.x, engine.player.position.y, engine.player.position.z]);
+      if (isBaseDashboardOpen) {
+        setLiveBaseState(engine.getBaseState());
+      }
+    }, 300);
+    return () => clearInterval(timer);
+  }, [gameState, isBaseDashboardOpen]);
+
+  // Quick-Consume (Medkits, Bandages, Food, Clean Water) from Hotbar or Inventory
+  const handleQuickConsume = useCallback(
+    (kind: 'heal' | 'eat' | 'drink') => {
+      const targetIds =
+        kind === 'heal'
+          ? ['medkit', 'bandage']
+          : kind === 'eat'
+          ? ['canned_beans', 'energy_bar', 'wild_berries']
+          : ['clean_water'];
+
+      if (kind === 'heal' && stats.health >= stats.maxHealth) {
+        engineRef.current?.callbacks.onInteractionPrompt('Health is already full.');
+        return;
+      }
+      if (kind === 'eat' && stats.hunger >= 99) {
+        engineRef.current?.callbacks.onInteractionPrompt('Hunger is already satisfied.');
+        return;
+      }
+      if (kind === 'drink' && stats.thirst >= 99) {
+        engineRef.current?.callbacks.onInteractionPrompt('Thirst is already satisfied.');
+        return;
+      }
+
+      let foundItemName = '';
+      let healthDelta = 0;
+      let hungerDelta = 0;
+      let thirstDelta = 0;
+      let staminaDelta = 0;
+      let consumedFrom: 'hotbar' | 'inventory' | null = null;
+      let foundIdx = -1;
+
+      for (const id of targetIds) {
+        const hbIdx = hotbarRef.current.findIndex((s) => s && s.item.id === id && s.count > 0);
+        if (hbIdx !== -1) {
+          consumedFrom = 'hotbar';
+          foundIdx = hbIdx;
+          const item = hotbarRef.current[hbIdx]!.item;
+          foundItemName = item.name;
+          healthDelta = item.healthRestore ?? 0;
+          hungerDelta = item.hungerRestore ?? 0;
+          thirstDelta = item.thirstRestore ?? 0;
+          staminaDelta = item.staminaRestore ?? 0;
+          break;
+        }
+        const invIdx = inventoryRef.current.findIndex((s) => s && s.item.id === id && s.count > 0);
+        if (invIdx !== -1) {
+          consumedFrom = 'inventory';
+          foundIdx = invIdx;
+          const item = inventoryRef.current[invIdx]!.item;
+          foundItemName = item.name;
+          healthDelta = item.healthRestore ?? 0;
+          hungerDelta = item.hungerRestore ?? 0;
+          thirstDelta = item.thirstRestore ?? 0;
+          staminaDelta = item.staminaRestore ?? 0;
+          break;
+        }
+      }
+
+      if (!consumedFrom || foundIdx === -1) {
+        engineRef.current?.callbacks.onInteractionPrompt(
+          kind === 'heal'
+            ? 'No Medkit or Bandage in bag.'
+            : kind === 'eat'
+            ? 'No rations available in bag.'
+            : 'No clean water available in bag.'
+        );
+        return;
+      }
+
+      if (consumedFrom === 'hotbar') {
+        setHotbar((prev) => {
+          const next = [...prev];
+          const cur = next[foundIdx];
+          if (!cur) return prev;
+          next[foundIdx] = cur.count > 1 ? { ...cur, count: cur.count - 1 } : null;
+          return next;
+        });
+      } else {
+        setInventory((prev) => {
+          const next = [...prev];
+          const cur = next[foundIdx];
+          if (!cur) return prev;
+          next[foundIdx] = cur.count > 1 ? { ...cur, count: cur.count - 1 } : null;
+          return next;
+        });
+      }
+
+      setStats((prev) => {
+        const nextHealth = Math.min(prev.maxHealth, prev.health + healthDelta);
+        const nextHunger = Math.min(100, prev.hunger + hungerDelta);
+        const nextThirst = Math.min(100, prev.thirst + thirstDelta);
+        const nextStamina = Math.min(prev.maxStamina, prev.stamina + staminaDelta);
+        if (engineRef.current) {
+          engineRef.current.playerStats.health = nextHealth;
+          engineRef.current.playerStats.hunger = nextHunger;
+          engineRef.current.playerStats.thirst = nextThirst;
+          engineRef.current.playerStats.stamina = nextStamina;
+          engineRef.current.callbacks.onInteractionPrompt(`Used ${foundItemName}`);
+        }
+        return {
+          ...prev,
+          health: nextHealth,
+          hunger: nextHunger,
+          thirst: nextThirst,
+          stamina: nextStamina,
+        };
+      });
+      soundEngine.playBuildSnap();
+    },
+    [stats.health, stats.maxHealth, stats.hunger, stats.thirst]
+  );
+
+  const quickConsumeRef = useRef(handleQuickConsume);
+  quickConsumeRef.current = handleQuickConsume;
+
+  const quickCounts = React.useMemo(() => {
+    let med = 0;
+    let food = 0;
+    let water = 0;
+    for (const s of [...hotbar, ...inventory]) {
+      if (!s) continue;
+      if (s.item.id === 'medkit' || s.item.id === 'bandage') med += s.count;
+      else if (s.item.id === 'canned_beans' || s.item.id === 'energy_bar' || s.item.id === 'wild_berries') food += s.count;
+      else if (s.item.id === 'clean_water') water += s.count;
+    }
+    return { med, food, water };
+  }, [hotbar, inventory]);
+
+  const handleCaptureScreenshot = useCallback(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    const dataUrl = engine.captureScreenshotDataUrl();
+    if (!dataUrl) {
+      setPhotoToast('Could not capture WebGL frame on this device.');
+      setTimeout(() => setPhotoToast(null), 3000);
+      return;
+    }
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = `last-sanctuary-day-${dayCount}-${Date.now()}.png`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    soundEngine.playDawnVictoryChime();
+    setPhotoToast(`Screenshot saved (Day ${dayCount})`);
+    setTimeout(() => setPhotoToast(null), 3000);
+  }, [dayCount]);
+
+  const isAnyModalBlockingInput =
+    isPauseOpen ||
+    isInventoryOpen ||
+    isBuildOpen ||
+    isCraftingOpen ||
+    isMapOpen ||
+    isJournalOpen ||
+    isCharacterOpen ||
+    isNoticeBoardOpen ||
+    isArmoryOpen ||
+    isFridgeOpen ||
+    isPhoneOpen ||
+    isRailwayOperationsOpen ||
+    isRailwayTicketsOpen ||
+    isMedicalClinicOpen ||
+    isApartmentStatusOpen ||
+    isSecurityCommandCenterOpen ||
+    isRailwayNetworkMapOpen ||
+    isBaseDashboardOpen ||
+    isTrainControlCenterOpen ||
+    isCompendiumOpen ||
+    isAchievementsOpen ||
+    isFishingOpen ||
+    isBlueprintModalOpen ||
+    isExtractionVictoryOpen ||
+    !!activeDialogue ||
+    !!activeFriendModal ||
+    !!openChestStructure;
+
+  const { isGamepadConnected } = useGamepad({
+    engineRef,
+    enabled: gameState === 'playing' && !isAnyModalBlockingInput,
+    mouseSensitivity: settings.mouseSensitivity,
+    onPrimaryAction: () => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const hasBolts = inventoryRef.current.some((s) => s && s.item.id === 'crossbow_bolts' && s.count > 0);
+      const consumeBolt = () => {
+        let consumed = false;
+        setInventory((prev) => {
+          const idx = prev.findIndex((s) => s && s.item.id === 'crossbow_bolts' && s.count > 0);
+          if (idx !== -1) {
+            const updated = [...prev];
+            const cur = updated[idx]!;
+            updated[idx] = cur.count <= 1 ? null : { ...cur, count: cur.count - 1 };
+            consumed = true;
+            return updated;
+          }
+          return prev;
+        });
+        return consumed;
+      };
+      engine.handlePrimaryAction({ hasCrossbowBolts: hasBolts, consumeBolt });
+    },
+    onInteract: () => engineRef.current?.handleInteractKey(),
+    onToggleCamera: () => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      engine.player.toggleView();
+      setCameraView(engine.player.cameraView);
+      soundEngine.playUIClick();
+    },
+    onToggleFlashlight: () => {
+      const engine = engineRef.current;
+      if (!engine) return;
+      const active = engine.player.toggleFlashlight();
+      setIsFlashlightOn(active);
+      soundEngine.playUIClick();
+    },
+    onCycleHotbar: (delta) => {
+      setSelectedHotbarIndex((prev) => (prev + delta + 8) % 8);
+      soundEngine.playUIClick();
+    },
+    onTogglePause: () => {
+      const engine = engineRef.current;
+      setIsPauseOpen((prev) => {
+        const next = !prev;
+        if (engine) engine.setPaused(next);
+        return next;
+      });
+    },
+  });
+
   // Keyboard and Mouse Event Listeners
   useEffect(() => {
     if (gameState !== 'playing') return;
@@ -603,13 +1121,17 @@ export default function App() {
 
       const code = e.code;
 
-      // Key mappings
-      if (code === 'KeyW') engine.inputState.forward = true;
-      if (code === 'KeyS') engine.inputState.backward = true;
-      if (code === 'KeyA') engine.inputState.left = true;
-      if (code === 'KeyD') engine.inputState.right = true;
-      if (code === 'Space') engine.inputState.jump = true;
-      if (code === 'ShiftLeft' || code === 'ShiftRight') engine.inputState.sprint = true;
+      // Key mappings (customizable via keybinds)
+      if (code === keybinds.moveForward) engine.inputState.forward = true;
+      if (code === keybinds.moveBackward) engine.inputState.backward = true;
+      if (code === keybinds.moveLeft) engine.inputState.left = true;
+      if (code === keybinds.moveRight) engine.inputState.right = true;
+      if (code === keybinds.jump) engine.inputState.jump = true;
+      if (code === keybinds.sprint || code === 'ShiftRight') engine.inputState.sprint = true;
+      if (code === keybinds.crouch) {
+        engine.inputState.crouch = true;
+        setIsCrouching(true);
+      }
 
       // Number keys 1-8 for hotbar
       if (e.key >= '1' && e.key <= '8') {
@@ -619,29 +1141,94 @@ export default function App() {
       }
 
       // Modals and action keys
-      if (code === 'KeyB') {
+      if (code === keybinds.buildMode) {
         setIsBuildOpen((prev) => !prev);
         soundEngine.playUIClick();
-      } else if (code === 'KeyI') {
+      } else if (code === keybinds.inventory) {
         setIsInventoryOpen((prev) => !prev);
         soundEngine.playUIClick();
-      } else if (code === 'KeyM') {
+      } else if (code === keybinds.map) {
         setIsMapOpen((prev) => !prev);
         soundEngine.playUIClick();
       } else if (code === 'KeyJ') {
         setIsJournalOpen((prev) => !prev);
         soundEngine.playUIClick();
-      } else if (code === 'KeyC') {
+      } else if (code === keybinds.character) {
         setIsCharacterOpen((prev) => !prev);
         soundEngine.playUIClick();
-      } else if (code === 'KeyV') {
-        engine.player.toggleView();
-        setCameraView(engine.player.cameraView);
+      } else if (code === keybinds.cameraToggle) {
+        if (engine.aiTrainManager?.activePassengerTrain) {
+          engine.toggleTrainCamera();
+        } else {
+          engine.player.toggleView();
+          setCameraView(engine.player.cameraView);
+        }
         soundEngine.playUIClick();
+      } else if (code === keybinds.quickSwap) {
+        e.preventDefault();
+        const curSlot = hotbarRef.current[selectedHotbarIndexRef.current];
+        const wantRanged = curSlot?.item.toolType !== 'ranged';
+        const targetIdx = hotbarRef.current.findIndex((s, i) =>
+          i !== selectedHotbarIndexRef.current &&
+          s &&
+          (wantRanged ? s.item.toolType === 'ranged' : s.item.toolType === 'weapon' || s.item.toolType === 'axe')
+        );
+        if (targetIdx !== -1) {
+          setSelectedHotbarIndex(targetIdx);
+        } else {
+          const fallbackIdx = hotbarRef.current.findIndex(
+            (s, i) => i !== selectedHotbarIndexRef.current && s !== null
+          );
+          if (fallbackIdx !== -1) setSelectedHotbarIndex(fallbackIdx);
+        }
+        soundEngine.playUIClick();
+      } else if (code === keybinds.radio) {
+        soundEngine.playRadioBroadcastBeep();
+        setIsRadioOpen((prev) => !prev);
+      } else if (code === keybinds.fish) {
+        const hasRod = [...hotbarRef.current, ...inventoryRef.current].some((s) => s?.item.id === 'fishing_rod');
+        if (hasRod) {
+          engine.attemptFishing();
+        } else {
+          engine.callbacks.onInteractionPrompt('Craft a Carbon Fishing Rod first to fish.');
+        }
+      } else if (code === keybinds.throwable) {
+        if (engine.aiTrainManager?.activePassengerTrain) {
+          engine.toggleTrainDoors();
+        } else {
+          const throwables = ['molotov_cocktail', 'pipe_bomb', 'noise_flare'] as const;
+          let found: (typeof throwables)[number] | null = null;
+          const hbIdx = hotbarRef.current.findIndex((s) => s && throwables.includes(s.item.id as any));
+          if (hbIdx !== -1) {
+            found = hotbarRef.current[hbIdx]!.item.id as (typeof throwables)[number];
+            setHotbar((prev) => {
+              const u = [...prev];
+              const cur = u[hbIdx]!;
+              u[hbIdx] = cur.count <= 1 ? null : { ...cur, count: cur.count - 1 };
+              return u;
+            });
+          } else {
+            const invIdx = inventoryRef.current.findIndex((s) => s && throwables.includes(s.item.id as any));
+            if (invIdx !== -1) {
+              found = inventoryRef.current[invIdx]!.item.id as (typeof throwables)[number];
+              setInventory((prev) => {
+                const u = [...prev];
+                const cur = u[invIdx]!;
+                u[invIdx] = cur.count <= 1 ? null : { ...cur, count: cur.count - 1 };
+                return u;
+              });
+            }
+          }
+          if (found) {
+            engine.throwTacticalItem(found);
+          } else {
+            engine.callbacks.onInteractionPrompt('No Molotov, Pipe Bomb, or Decoy Flare in bag.');
+          }
+        }
       } else if (code === 'KeyZ') {
         setIsBioScannerActive((prev) => !prev);
         soundEngine.playUIClick();
-      } else if (code === 'KeyF') {
+      } else if (code === keybinds.flashlight) {
         if (engine.vehicleManager?.vehicleState.isOccupied) {
           engine.exitVehicle();
         } else {
@@ -650,44 +1237,62 @@ export default function App() {
           soundEngine.playUIClick();
         }
       } else if (code === 'KeyH') {
-        if (engine.aiTrainManager?.activePassengerTrain) engine.honkTrainHorn();
+        if (engine.aiTrainManager?.activePassengerTrain) {
+          engine.honkTrainHorn();
+        } else {
+          engine.honkActiveVehicleHorn();
+        }
       } else if (code === 'KeyL') {
         if (engine.aiTrainManager?.activePassengerTrain) {
           engine.toggleTrainHeadlights();
         } else if (engine.vehicleManager?.vehicleState.isOccupied) {
           engine.toggleVehicleHeadlights();
         }
-      } else if (code === 'KeyG') {
-        if (engine.aiTrainManager?.activePassengerTrain) {
-          engine.toggleTrainDoors();
-        }
-      } else if (code === 'KeyC') {
-        if (engine.aiTrainManager?.activePassengerTrain) {
-          engine.toggleTrainCamera();
+      } else if (code === keybinds.crafting) {
+        if (engine.vehicleManager?.vehicleState.isOccupied) {
+          engine.toggleVehicleLock();
         } else {
-          engine.player.toggleView();
-          setCameraView(engine.player.cameraView);
+          setCraftingStation(undefined);
+          setIsCraftingOpen((prev) => !prev);
           soundEngine.playUIClick();
         }
-      } else if (code === 'KeyK') {
-        if (engine.vehicleManager) {
-          engine.toggleVehicleLock();
-        }
-      } else if (code === 'KeyR') {
+      } else if (code === keybinds.reload) {
         if (engine.aiTrainManager?.activePassengerTrain && engine.aiTrainManager.activePassengerTrain.manualDriving) {
           engine.toggleTrainReverse();
         } else if (engine.buildingMgr.activeDef) {
           engine.buildingMgr.rotatePreview();
           soundEngine.playUIClick();
         }
-      } else if (code === 'KeyE') {
+      } else if (code === keybinds.interact) {
         engine.handleInteractKey();
+      } else if (code === 'KeyO') {
+        setIsBaseDashboardOpen((prev) => {
+          const next = !prev;
+          if (next) setLiveBaseState(engine.getBaseState());
+          return next;
+        });
+        soundEngine.playUIClick();
+      } else if (code === 'KeyT') {
+        setIsTrainControlCenterOpen((prev) => !prev);
+        soundEngine.playUIClick();
+      } else if (code === 'KeyX') {
+        setIsCompendiumOpen((prev) => !prev);
+        soundEngine.playUIClick();
+      } else if (code === 'KeyN') {
+        setShowMinimap((prev) => !prev);
+        soundEngine.playUIClick();
+      } else if (code === 'KeyP') {
+        setIsPhotoMode((prev) => !prev);
+        soundEngine.playUIClick();
+      } else if (code === 'KeyQ') {
+        quickConsumeRef.current('heal');
       } else if (code === 'F3') {
         engine.physicsManager.toggleDebugMode();
         soundEngine.playUIClick();
       } else if (code === 'Escape') {
-        // Close open modals first, otherwise pause
-        if (
+        if (isPhotoMode) {
+          setIsPhotoMode(false);
+        } else if (
           isBuildOpen ||
           isInventoryOpen ||
           isCraftingOpen ||
@@ -702,7 +1307,17 @@ export default function App() {
           isRailwayTicketsOpen ||
           isMedicalClinicOpen ||
           isApartmentStatusOpen ||
+          isSecurityCommandCenterOpen ||
+          isRailwayNetworkMapOpen ||
+          isBaseDashboardOpen ||
+          isTrainControlCenterOpen ||
+          isCompendiumOpen ||
+          isAchievementsOpen ||
+          isFishingOpen ||
+          isBlueprintModalOpen ||
+          isExtractionVictoryOpen ||
           !!activeDialogue ||
+          !!activeFriendModal ||
           openChestStructure
         ) {
           setIsBuildOpen(false);
@@ -719,6 +1334,15 @@ export default function App() {
           setIsRailwayTicketsOpen(false);
           setIsMedicalClinicOpen(false);
           setIsApartmentStatusOpen(false);
+          setIsSecurityCommandCenterOpen(false);
+          setIsRailwayNetworkMapOpen(false);
+          setIsBaseDashboardOpen(false);
+          setIsTrainControlCenterOpen(false);
+          setIsCompendiumOpen(false);
+          setIsAchievementsOpen(false);
+          setIsFishingOpen(false);
+          setIsBlueprintModalOpen(false);
+          setIsExtractionVictoryOpen(false);
           setActiveDialogue(null);
           setActiveFriendModal(null);
           setOpenChestStructure(null);
@@ -739,16 +1363,20 @@ export default function App() {
       if (activeDialogue) { if (e.code === 'Escape') setActiveDialogue(null); return; }
 
       const code = e.code;
-      if (code === 'KeyW') engine.inputState.forward = false;
-      if (code === 'KeyS') engine.inputState.backward = false;
-      if (code === 'KeyA') engine.inputState.left = false;
-      if (code === 'KeyD') engine.inputState.right = false;
-      if (code === 'Space') engine.inputState.jump = false;
-      if (code === 'ShiftLeft' || code === 'ShiftRight') engine.inputState.sprint = false;
+      if (code === keybinds.moveForward) engine.inputState.forward = false;
+      if (code === keybinds.moveBackward) engine.inputState.backward = false;
+      if (code === keybinds.moveLeft) engine.inputState.left = false;
+      if (code === keybinds.moveRight) engine.inputState.right = false;
+      if (code === keybinds.jump) engine.inputState.jump = false;
+      if (code === keybinds.sprint || code === 'ShiftRight') engine.inputState.sprint = false;
+      if (code === keybinds.crouch) {
+        engine.inputState.crouch = false;
+        setIsCrouching(false);
+      }
     };
 
     // Mouse Look / Pointer Lock
-    const isModalActive = isPauseOpen || isInventoryOpen || isBuildOpen || isMapOpen || isNoticeBoardOpen || isArmoryOpen || isFridgeOpen || isPhoneOpen || !!activeDialogue;
+    const isModalActive = isAnyModalBlockingInput;
 
     const handleMouseMove = (e: MouseEvent) => {
       const engine = engineRef.current;
@@ -841,10 +1469,27 @@ export default function App() {
     isArmoryOpen,
     isFridgeOpen,
     isPhoneOpen,
+    isRailwayOperationsOpen,
+    isRailwayTicketsOpen,
+    isMedicalClinicOpen,
+    isApartmentStatusOpen,
+    isSecurityCommandCenterOpen,
+    isRailwayNetworkMapOpen,
+    isBaseDashboardOpen,
+    isTrainControlCenterOpen,
+    isCompendiumOpen,
+    isAchievementsOpen,
+    isFishingOpen,
+    isBlueprintModalOpen,
+    isExtractionVictoryOpen,
+    isPhotoMode,
+    isAnyModalBlockingInput,
     activeDialogue,
+    activeFriendModal,
     openChestStructure,
     inventory,
     settings.mouseSensitivity,
+    keybinds,
   ]);
 
   // Crafting Recipe Execution
@@ -871,51 +1516,129 @@ export default function App() {
     // 2. Add crafted result
     collectItem(recipe.resultItemId, recipe.resultCount);
 
-    // 3. Update quest progress if crafting hammer or weapon
+    // 3. Update quest and bounty progress
     if (engineRef.current) {
       if (recipe.resultItemId === 'builder_hammer') {
         engineRef.current.updateQuestProgress('craft_hammer', 1);
       } else if (recipe.resultItemId === 'stun_baton' || recipe.resultItemId === 'pulse_crossbow') {
         engineRef.current.updateQuestProgress('craft_weapon', 1);
       }
+      if (
+        recipe.resultItemId === 'crossbow_bolts' ||
+        recipe.resultItemId === 'molotov_cocktail' ||
+        recipe.resultItemId === 'pipe_bomb'
+      ) {
+        engineRef.current.callbacks.onBountyProgress?.('craft_ammo', 1);
+      }
+      if (
+        recipe.resultItemId === 'cooked_steak' ||
+        recipe.resultItemId === 'grilled_fish' ||
+        recipe.resultItemId === 'herb_stew'
+      ) {
+        soundEngine.playSizzleCook();
+      }
     }
   };
 
-  // Consume / Use Item from backpack
+  // Consume / Use / Equip / Throw Item from backpack or hotbar
   const handleUseItem = (slotIndex: number, isFromHotbar: boolean) => {
     const list = isFromHotbar ? hotbar : inventory;
     const slot = list[slotIndex];
     if (!slot) return;
 
     const item = slot.item;
+
+    // Equippable tactical armor & masks (do not consume stack)
+    if (item.id === 'scrap_armor_vest' || item.id === 'thermal_coat') {
+      const nextArmor = stats.equippedArmorId === item.id ? undefined : item.id;
+      setStats((prev) => {
+        if (engineRef.current) engineRef.current.playerStats.equippedArmorId = nextArmor;
+        return { ...prev, equippedArmorId: nextArmor };
+      });
+      engineRef.current?.callbacks.onInteractionPrompt(
+        nextArmor ? `Equipped ${item.name}` : `Unequipped ${item.name}`
+      );
+      return;
+    }
+    if (item.id === 'gas_mask') {
+      const nextMask = stats.equippedMaskId === item.id ? undefined : item.id;
+      setStats((prev) => {
+        if (engineRef.current) engineRef.current.playerStats.equippedMaskId = nextMask;
+        return { ...prev, equippedMaskId: nextMask };
+      });
+      engineRef.current?.callbacks.onInteractionPrompt(
+        nextMask ? 'Equipped CBRN Gas Mask' : 'Removed CBRN Gas Mask'
+      );
+      return;
+    }
+
     let applied = false;
 
+    if (item.id === 'antibiotic_shot') {
+      setStats((prev) => {
+        if (engineRef.current) {
+          engineRef.current.playerStats.infection = 0;
+          engineRef.current.playerStats.radiationExposure = 0;
+          engineRef.current.playerStats.health = Math.min(prev.maxHealth, prev.health + 20);
+        }
+        return {
+          ...prev,
+          infection: 0,
+          radiationExposure: 0,
+          health: Math.min(prev.maxHealth, prev.health + 20),
+        };
+      });
+      engineRef.current?.callbacks.onInteractionPrompt('Antidote administered: Infection & radiation purged.');
+      applied = true;
+    } else if (item.id === 'flashlight_battery') {
+      setStats((prev) => {
+        if (engineRef.current) engineRef.current.playerStats.flashlightBattery = 100;
+        return { ...prev, flashlightBattery: 100 };
+      });
+      engineRef.current?.callbacks.onInteractionPrompt('Flashlight Battery recharged to 100%.');
+      applied = true;
+    } else if (item.id === 'charcoal_filter') {
+      setStats((prev) => {
+        if (engineRef.current) engineRef.current.playerStats.radiationExposure = Math.max(0, (prev.radiationExposure ?? 0) - 25);
+        return { ...prev, radiationExposure: Math.max(0, (prev.radiationExposure ?? 0) - 25) };
+      });
+      engineRef.current?.callbacks.onInteractionPrompt('Fresh Charcoal Filter fitted.');
+      applied = true;
+    } else if (item.id === 'molotov_cocktail' || item.id === 'noise_flare' || item.id === 'pipe_bomb') {
+      engineRef.current?.throwTacticalItem(item.id);
+      applied = true;
+    }
+
     if (item.hungerRestore) {
-      setStats((prev) => ({
-        ...prev,
-        hunger: Math.min(100, prev.hunger + (item.hungerRestore || 0)),
-      }));
+      setStats((prev) => {
+        const nextHunger = Math.min(100, prev.hunger + (item.hungerRestore || 0));
+        if (engineRef.current) engineRef.current.playerStats.hunger = nextHunger;
+        return { ...prev, hunger: nextHunger };
+      });
       applied = true;
     }
     if (item.thirstRestore) {
-      setStats((prev) => ({
-        ...prev,
-        thirst: Math.min(100, prev.thirst + (item.thirstRestore || 0)),
-      }));
+      setStats((prev) => {
+        const nextThirst = Math.min(100, prev.thirst + (item.thirstRestore || 0));
+        if (engineRef.current) engineRef.current.playerStats.thirst = nextThirst;
+        return { ...prev, thirst: nextThirst };
+      });
       applied = true;
     }
-    if (item.healthRestore) {
-      setStats((prev) => ({
-        ...prev,
-        health: Math.min(prev.maxHealth, prev.health + (item.healthRestore || 0)),
-      }));
+    if (item.healthRestore && item.id !== 'antibiotic_shot') {
+      setStats((prev) => {
+        const nextHealth = Math.max(0, Math.min(prev.maxHealth, prev.health + (item.healthRestore || 0)));
+        if (engineRef.current) engineRef.current.playerStats.health = nextHealth;
+        return { ...prev, health: nextHealth };
+      });
       applied = true;
     }
     if (item.staminaRestore) {
-      setStats((prev) => ({
-        ...prev,
-        stamina: Math.min(prev.maxStamina, prev.stamina + (item.staminaRestore || 0)),
-      }));
+      setStats((prev) => {
+        const nextStam = Math.min(prev.maxStamina, prev.stamina + (item.staminaRestore || 0));
+        if (engineRef.current) engineRef.current.playerStats.stamina = nextStam;
+        return { ...prev, stamina: nextStam };
+      });
       applied = true;
     }
 
@@ -938,6 +1661,83 @@ export default function App() {
         });
       }
     }
+  };
+
+  const handleSalvageItem = (slotIndex: number, isFromHotbar: boolean) => {
+    handleDropItem(slotIndex, isFromHotbar);
+    const hasRecycler = engineRef.current?.hasPerk('perk_scrap_recycler');
+    collectItem('metal_scrap', hasRecycler ? 4 : 3);
+    collectItem('electronic_parts', 1);
+  };
+
+  const handleRepairItem = (slotIndex: number, isFromHotbar: boolean) => {
+    let needed = 2;
+    setInventory((prev) => {
+      const next = [...prev];
+      for (let i = 0; i < next.length && needed > 0; i++) {
+        const s = next[i];
+        if (s && s.item.id === 'metal_scrap') {
+          const take = Math.min(s.count, needed);
+          s.count -= take;
+          needed -= take;
+          if (s.count <= 0) next[i] = null;
+        }
+      }
+      return next;
+    });
+    if (isFromHotbar) {
+      setHotbar((prev) => {
+        const u = [...prev];
+        const cur = u[slotIndex];
+        if (cur) u[slotIndex] = { ...cur, durability: cur.item.maxDurability || 100 };
+        return u;
+      });
+    } else {
+      setInventory((prev) => {
+        const u = [...prev];
+        const cur = u[slotIndex];
+        if (cur) u[slotIndex] = { ...cur, durability: cur.item.maxDurability || 100 };
+        return u;
+      });
+    }
+  };
+
+  const handleAttachWeaponMod = (weaponId: string, modId: WeaponModId) => {
+    if (!engineRef.current) return;
+    if (!engineRef.current.applyWeaponMod(weaponId, modId)) return;
+    // Consume 1 mod kit from hotbar or inventory
+    const hbIdx = hotbarRef.current.findIndex((s) => s?.item.id === modId);
+    if (hbIdx !== -1) {
+      setHotbar((prev) => {
+        const u = [...prev];
+        const cur = u[hbIdx]!;
+        u[hbIdx] = cur.count <= 1 ? null : { ...cur, count: cur.count - 1 };
+        return u;
+      });
+    } else {
+      const invIdx = inventoryRef.current.findIndex((s) => s?.item.id === modId);
+      if (invIdx !== -1) {
+        setInventory((prev) => {
+          const u = [...prev];
+          const cur = u[invIdx]!;
+          u[invIdx] = cur.count <= 1 ? null : { ...cur, count: cur.count - 1 };
+          return u;
+        });
+      }
+    }
+    setWeaponMods((prev) => ({
+      ...prev,
+      [weaponId]: [...(prev[weaponId] || []), modId],
+    }));
+  };
+
+  const handleClaimBounty = (bountyId: string) => {
+    const target = bounties.find((b) => b.id === bountyId);
+    if (!target || !target.completed || target.claimed) return;
+    setBounties((prev) => prev.map((b) => (b.id === bountyId ? { ...b, claimed: true } : b)));
+    engineRef.current?.addXP(target.rewardXp);
+    target.rewardItems.forEach((ri) => collectItem(ri.itemId, ri.count));
+    engineRef.current?.callbacks.onInteractionPrompt(`Bounty Complete: ${target.title} (+${target.rewardXp} XP)`);
   };
 
   const handleDropItem = (slotIndex: number, isFromHotbar: boolean) => {
@@ -980,14 +1780,21 @@ export default function App() {
 
   const handleUpgradeSkill = (key: keyof PlayerStats['skills']) => {
     if (stats.skillPoints <= 0) return;
-    setStats((prev) => ({
-      ...prev,
-      skillPoints: prev.skillPoints - 1,
-      skills: {
-        ...prev.skills,
-        [key]: prev.skills[key] + 1,
-      },
-    }));
+    setStats((prev) => {
+      const next = {
+        ...prev,
+        skillPoints: prev.skillPoints - 1,
+        skills: {
+          ...prev.skills,
+          [key]: prev.skills[key] + 1,
+        },
+      };
+      if (engineRef.current) {
+        engineRef.current.playerStats.skillPoints = next.skillPoints;
+        engineRef.current.playerStats.skills = { ...next.skills };
+      }
+      return next;
+    });
   };
 
   const handleManualSave = (slotId: string = 'autosave', slotName?: string) => {
@@ -1007,6 +1814,8 @@ export default function App() {
           onStartNewGame={startNewGame}
           onContinueGame={continueGame}
           onLoadSaveSlot={loadSaveSlot}
+          onOpenAchievements={() => setIsAchievementsOpen(true)}
+          onOpenCompendium={() => setIsCompendiumOpen(true)}
           hasContinue={hasContinue}
           isLaunching={isLaunching}
           launchError={launchError}
@@ -1079,156 +1888,264 @@ export default function App() {
             }}
           />
 
-          <HUD
-            stats={stats}
-            timeMinutes={timeMinutes}
-            dayCount={dayCount}
-            isNight={isNight}
-            isDusk={isDusk}
-            interactionPrompt={interactionPrompt}
-            hotbar={hotbar}
-            selectedIndex={selectedHotbarIndex}
-            onSelectSlot={(idx) => {
-              setSelectedHotbarIndex(idx);
-              soundEngine.playUIClick();
-            }}
-            activeQuest={quests.find((q) => !q.completed) || null}
-            cameraView={cameraView}
-            isFlashlightOn={isFlashlightOn}
-            onOpenBuild={() => {
-              setIsBuildOpen(true);
-              soundEngine.playUIClick();
-            }}
-            onOpenInventory={() => {
-              setIsInventoryOpen(true);
-              soundEngine.playUIClick();
-            }}
-            onOpenCharacter={() => {
-              setIsCharacterOpen(true);
-              soundEngine.playUIClick();
-            }}
-            onOpenMap={() => {
-              setIsMapOpen(true);
-              soundEngine.playUIClick();
-            }}
-            onOpenJournal={() => {
-              setIsJournalOpen(true);
-              soundEngine.playUIClick();
-            }}
-            onToggleCamera={() => {
-              if (engineRef.current) {
-                engineRef.current.player.toggleView();
-                setCameraView(engineRef.current.player.cameraView);
-                soundEngine.playUIClick();
-              }
-            }}
-            onZoomCamera={(delta) => {
-              if (engineRef.current) {
-                engineRef.current.player.adjustCameraDistance(delta);
-              }
-            }}
-            onToggleFlashlight={() => {
-              if (engineRef.current) {
-                const active = engineRef.current.player.toggleFlashlight();
-                setIsFlashlightOn(active);
-                soundEngine.playUIClick();
-              }
-            }}
-            onOpenPause={() => {
-              if (engineRef.current) {
-                engineRef.current.setPaused(true);
-                setIsPauseOpen(true);
-                soundEngine.playUIClick();
-              }
-            }}
-            companion={companion}
-            onToggleCompanionOrder={() => {
-              if (engineRef.current && companion) {
-                const next = companion.state === 'follow' ? 'stay' : 'follow';
-                engineRef.current.wildlifeManager.setCompanionOrder(next);
-                setCompanion({ ...engineRef.current.wildlifeManager.companionState! });
-                soundEngine.playUIClick();
-              }
-            }}
-            ecosystemDossier={isBioScannerActive ? ecosystemDossier : null}
-            onLogSpeciesDossier={(agentId) => engineRef.current?.logSpeciesDossier(agentId)}
-            ecosystemMetrics={ecosystemMetrics}
-            isBioScannerActive={isBioScannerActive}
-            onToggleBioScanner={() => setIsBioScannerActive((prev) => !prev)}
-            navigationState={navigationState}
-            onToggleHitboxDebug={() => {
-              if (engineRef.current) {
-                engineRef.current.physicsManager.toggleDebugMode();
-                soundEngine.playUIClick();
-              }
-            }}
-            onTogglePerfDiagnostic={() => setIsPerfOpen((prev) => !prev)}
-            isPerfOpen={isPerfOpen}
-            qualityMode={qualityMode}
-            onCycleQualityMode={handleCycleQualityMode}
-            touchControlsMode={touchControlsMode}
-            onToggleTouchControlsMode={handleToggleTouchControlsMode}
-            onInteract={() => {
-              if (engineRef.current) engineRef.current.handleInteractKey();
-            }}
-          />
-
-          {/* Active Drivable Vehicle HUD */}
-          {activeVehicle && (
-            <VehicleHUD
-              vehicleState={activeVehicle}
-              speed={vehicleSpeed}
-              onExitVehicle={() => engineRef.current?.exitVehicle()}
-              onToggleHeadlights={() => engineRef.current?.toggleVehicleHeadlights()}
-              onToggleLock={() => engineRef.current?.toggleVehicleLock()}
-            />
+          {/* HUD-Free Photo Mode Floating Control Strip */}
+          {isPhotoMode && (
+            <div className="pointer-events-auto fixed bottom-6 left-1/2 z-40 flex -translate-x-1/2 items-center gap-2 rounded-full border border-neutral-700/80 bg-neutral-950/90 px-4 py-2 shadow-2xl">
+              <button
+                type="button"
+                onClick={handleCaptureScreenshot}
+                className="flex items-center gap-1.5 rounded-full bg-amber-500 hover:bg-amber-400 px-3.5 py-1.5 text-xs font-bold uppercase tracking-wider text-neutral-950 cursor-pointer transition-all active:scale-95"
+              >
+                <Camera className="h-3.5 w-3.5" />
+                <span>Capture PNG</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIsPhotoMode(false)}
+                className="flex items-center gap-1 rounded-full border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 px-3 py-1.5 text-xs font-semibold text-neutral-200 cursor-pointer"
+              >
+                <CloseIcon className="h-3.5 w-3.5" />
+                <span>Exit [P]</span>
+              </button>
+            </div>
           )}
 
-          {/* Active Train HUD (Exploration, Walking & Cab Driving) */}
-          {trainHUDData && (
-            <TrainHUD
-              hudData={trainHUDData}
-              onExitTrain={() => engineRef.current?.exitPassengerTrain()}
-              onToggleDrive={() => engineRef.current?.toggleTrainDrive()}
-              onToggleSit={() => engineRef.current?.toggleTrainSit()}
-              onThrottleUp={() => engineRef.current?.throttleTrainUp()}
-              onThrottleDown={() => engineRef.current?.throttleTrainDown()}
-              onToggleReverse={() => engineRef.current?.toggleTrainReverse()}
-              onHonkHorn={() => engineRef.current?.honkTrainHorn()}
-              onToggleHeadlights={() => engineRef.current?.toggleTrainHeadlights()}
-              onToggleDoors={() => engineRef.current?.toggleTrainDoors()}
-              onCycleCamera={() => engineRef.current?.toggleTrainCamera()}
-            />
+          {photoToast && (
+            <div className="pointer-events-none fixed top-14 left-1/2 z-50 -translate-x-1/2 rounded-full border border-emerald-500/50 bg-emerald-950/95 px-4 py-1.5 text-xs font-semibold text-emerald-200 shadow-xl">
+              {photoToast}
+            </div>
           )}
 
-          {/* Indian Railways Mega Terminal HUD & Level Quick-Nav */}
-          <RailwayStationHUD
-            isVisible={isStationHUDVisible}
-            activeTrainInfo={liveStationTrainInfo}
-            currentFloor={currentStationFloor}
-            onSelectFloor={(fl) => {
-              setCurrentStationFloor(fl);
-              engineRef.current?.fastTravelToFloor(fl);
-            }}
-            onNavigateToFacility={(type) => {
-              engineRef.current?.navigateToStationFacility(type);
-            }}
-            onOpenTickets={() => setIsRailwayTicketsOpen(true)}
-            onOpenOperations={() => setIsRailwayOperationsOpen(true)}
-            onOpenMap={() => setIsRailwayNetworkMapOpen(true)}
-            onOpenJourney={() => setIsRailwayTicketsOpen(true)}
-            onOpenPause={() => {
-              if (engineRef.current) engineRef.current.setPaused(true);
-              setIsPauseOpen(true);
-            }}
-            activeFacilityWaypoint={activeFacilityWaypoint}
-          />
+          {!isPhotoMode && (
+            <>
+              <HUD
+                stats={stats}
+                timeMinutes={timeMinutes}
+                dayCount={dayCount}
+                isNight={isNight}
+                isDusk={isDusk}
+                interactionPrompt={interactionPrompt}
+                hotbar={hotbar}
+                selectedIndex={selectedHotbarIndex}
+                onSelectSlot={(idx) => {
+                  setSelectedHotbarIndex(idx);
+                  soundEngine.playUIClick();
+                }}
+                activeQuest={quests.find((q) => !q.completed) || null}
+                cameraView={cameraView}
+                isFlashlightOn={isFlashlightOn}
+                biomeName={currentBiome.name}
+                biomeTempC={currentBiome.tempC}
+                playerPos={playerCoords}
+                onOpenBuild={() => {
+                  setIsBuildOpen(true);
+                  soundEngine.playUIClick();
+                }}
+                onOpenInventory={() => {
+                  setIsInventoryOpen(true);
+                  soundEngine.playUIClick();
+                }}
+                onOpenCharacter={() => {
+                  setIsCharacterOpen(true);
+                  soundEngine.playUIClick();
+                }}
+                onOpenMap={() => {
+                  setIsMapOpen(true);
+                  soundEngine.playUIClick();
+                }}
+                onOpenJournal={() => {
+                  setIsJournalOpen(true);
+                  soundEngine.playUIClick();
+                }}
+                onOpenBaseDashboard={() => {
+                  if (engineRef.current) setLiveBaseState(engineRef.current.getBaseState());
+                  setIsBaseDashboardOpen(true);
+                  soundEngine.playUIClick();
+                }}
+                onOpenTrainControl={() => {
+                  setIsTrainControlCenterOpen(true);
+                  soundEngine.playUIClick();
+                }}
+                onOpenCompendium={() => {
+                  setIsCompendiumOpen(true);
+                  soundEngine.playUIClick();
+                }}
+                onToggleMinimap={() => {
+                  setShowMinimap((prev) => !prev);
+                  soundEngine.playUIClick();
+                }}
+                isMinimapOpen={showMinimap}
+                onEnterPhotoMode={() => {
+                  setIsPhotoMode(true);
+                  soundEngine.playUIClick();
+                }}
+                onQuickHeal={() => handleQuickConsume('heal')}
+                onQuickEat={() => handleQuickConsume('eat')}
+                onQuickDrink={() => handleQuickConsume('drink')}
+                quickCounts={quickCounts}
+                isGamepadConnected={isGamepadConnected}
+                onToggleCamera={() => {
+                  if (engineRef.current) {
+                    engineRef.current.player.toggleView();
+                    setCameraView(engineRef.current.player.cameraView);
+                    soundEngine.playUIClick();
+                  }
+                }}
+                onZoomCamera={(delta) => {
+                  if (engineRef.current) {
+                    engineRef.current.player.adjustCameraDistance(delta);
+                  }
+                }}
+                onToggleFlashlight={() => {
+                  if (engineRef.current) {
+                    const active = engineRef.current.player.toggleFlashlight();
+                    setIsFlashlightOn(active);
+                    soundEngine.playUIClick();
+                  }
+                }}
+                onOpenPause={() => {
+                  if (engineRef.current) {
+                    engineRef.current.setPaused(true);
+                    setIsPauseOpen(true);
+                    soundEngine.playUIClick();
+                  }
+                }}
+                companion={companion}
+                onToggleCompanionOrder={() => {
+                  if (engineRef.current && companion) {
+                    const next = companion.state === 'follow' ? 'stay' : 'follow';
+                    engineRef.current.wildlifeManager.setCompanionOrder(next);
+                    setCompanion({ ...engineRef.current.wildlifeManager.companionState! });
+                    soundEngine.playUIClick();
+                  }
+                }}
+                ecosystemDossier={isBioScannerActive ? ecosystemDossier : null}
+                onLogSpeciesDossier={(agentId) => engineRef.current?.logSpeciesDossier(agentId)}
+                ecosystemMetrics={ecosystemMetrics}
+                isBioScannerActive={isBioScannerActive}
+                onToggleBioScanner={() => setIsBioScannerActive((prev) => !prev)}
+                navigationState={navigationState}
+                onToggleHitboxDebug={() => {
+                  if (engineRef.current) {
+                    engineRef.current.physicsManager.toggleDebugMode();
+                    soundEngine.playUIClick();
+                  }
+                }}
+                onTogglePerfDiagnostic={() => setIsPerfOpen((prev) => !prev)}
+                isPerfOpen={isPerfOpen}
+                qualityMode={qualityMode}
+                onCycleQualityMode={handleCycleQualityMode}
+                touchControlsMode={touchControlsMode}
+                onToggleTouchControlsMode={handleToggleTouchControlsMode}
+                showCoordinates={settings.showCoordinates}
+                onInteract={() => {
+                  if (engineRef.current) engineRef.current.handleInteractKey();
+                }}
+                weather={weather}
+                damageNumbers={damageNumbers}
+                hitmarkerActive={hitmarkerActive}
+                bossStatus={bossStatus}
+                supplyDrop={worldEvent?.supplyDrop ?? null}
+                extraction={worldEvent?.extraction ?? null}
+                isCrouching={isCrouching}
+                isRadioOpen={isRadioOpen}
+                onToggleRadio={() => {
+                  soundEngine.playRadioBroadcastBeep();
+                  setIsRadioOpen((p) => !p);
+                }}
+                onOpenBlueprints={() => {
+                  soundEngine.playUIClick();
+                  setIsBlueprintModalOpen(true);
+                }}
+                onTriggerRebirth={() => {
+                  engineRef.current?.triggerRebirthNGPlus();
+                  setIsExtractionVictoryOpen(false);
+                }}
+              />
 
-          {/* Horde Alert Event Banner */}
-          <HordeAlertBanner event={hordeEvent} onDismiss={() => setHordeEvent(null)} />
+              <SurvivalRadioPanel
+                isOpen={isRadioOpen}
+                onClose={() => setIsRadioOpen(false)}
+                dayCount={dayCount}
+                biomeName={currentBiome.name}
+                weather={weather}
+                isNight={isNight}
+                hasActiveSupplyDrop={Boolean(worldEvent?.supplyDrop && !worldEvent.supplyDrop.looted)}
+                activeBossNearby={Boolean(bossStatus)}
+                bounties={bounties}
+                onClaimBounty={handleClaimBounty}
+              />
 
-          {/* Mobile Touch Overlay & Quick Shortcuts */}
-          <MobileControls
+              <CornerMinimap
+                engineRef={engineRef}
+                isVisible={showMinimap}
+                onClose={() => setShowMinimap(false)}
+                onOpenFullMap={() => {
+                  setIsMapOpen(true);
+                  soundEngine.playUIClick();
+                }}
+              />
+
+              {/* Active Drivable Vehicle HUD */}
+              {activeVehicle && (
+                <VehicleHUD
+                  vehicleState={activeVehicle}
+                  speed={vehicleSpeed}
+                  onExitVehicle={() => engineRef.current?.exitVehicle()}
+                  onToggleHeadlights={() => engineRef.current?.toggleVehicleHeadlights()}
+                  onToggleLock={() => engineRef.current?.toggleVehicleLock()}
+                />
+              )}
+
+              {/* Active Train HUD (Exploration, Walking & Cab Driving) */}
+              {trainHUDData && (
+                <TrainHUD
+                  hudData={trainHUDData}
+                  onExitTrain={() => engineRef.current?.exitPassengerTrain()}
+                  onToggleDrive={() => engineRef.current?.toggleTrainDrive()}
+                  onToggleSit={() => engineRef.current?.toggleTrainSit()}
+                  onThrottleUp={() => engineRef.current?.throttleTrainUp()}
+                  onThrottleDown={() => engineRef.current?.throttleTrainDown()}
+                  onToggleReverse={() => engineRef.current?.toggleTrainReverse()}
+                  onHonkHorn={() => engineRef.current?.honkTrainHorn()}
+                  onToggleHeadlights={() => engineRef.current?.toggleTrainHeadlights()}
+                  onToggleDoors={() => engineRef.current?.toggleTrainDoors()}
+                  onCycleCamera={() => engineRef.current?.toggleTrainCamera()}
+                />
+              )}
+
+              {/* Indian Railways Mega Terminal HUD & Level Quick-Nav */}
+              <RailwayStationHUD
+                isVisible={isStationHUDVisible}
+                activeTrainInfo={liveStationTrainInfo}
+                currentFloor={currentStationFloor}
+                onSelectFloor={(fl) => {
+                  setCurrentStationFloor(fl);
+                  engineRef.current?.fastTravelToFloor(fl);
+                }}
+                onNavigateToFacility={(type) => {
+                  engineRef.current?.navigateToStationFacility(type);
+                }}
+                onOpenTickets={() => setIsRailwayTicketsOpen(true)}
+                onOpenOperations={() => setIsRailwayOperationsOpen(true)}
+                onOpenDispatch={() => setIsTrainControlCenterOpen(true)}
+                onOpenMap={() => setIsRailwayNetworkMapOpen(true)}
+                onOpenJourney={() => setIsRailwayTicketsOpen(true)}
+                onOpenPause={() => {
+                  if (engineRef.current) engineRef.current.setPaused(true);
+                  setIsPauseOpen(true);
+                }}
+                activeFacilityWaypoint={activeFacilityWaypoint}
+              />
+
+              {/* Horde Alert Event Banner */}
+              <HordeAlertBanner event={hordeEvent} onDismiss={() => setHordeEvent(null)} />
+            </>
+          )}
+
+          {/* Mobile Touch Overlay & Quick Shortcuts (hidden during Photo Mode) */}
+          {!isPhotoMode && (
+            <MobileControls
             onMoveChange={(move) => {
               if (engineRef.current) {
                 engineRef.current.inputState.forward = move.forward;
@@ -1380,7 +2297,8 @@ export default function App() {
             }}
             isCrouching={engineRef.current?.inputState.crouch ?? false}
             onHonkHorn={() => soundEngine.playVehicleHorn()}
-          />
+            />
+          )}
 
           {/* Build Catalog Modal */}
           <BuildMenu
@@ -1403,6 +2321,9 @@ export default function App() {
             onUseItem={handleUseItem}
             onDropItem={handleDropItem}
             onMoveToHotbar={handleMoveToHotbar}
+            equippedArmorId={stats.equippedArmorId}
+            equippedMaskId={stats.equippedMaskId}
+            onOpenBlueprints={() => setIsBlueprintModalOpen(true)}
           />
 
           {/* Crafting Modal */}
@@ -1414,30 +2335,32 @@ export default function App() {
             onCraftRecipe={handleCraftRecipe}
           />
 
-          {/* Radar Map Modal */}
-          <MapModal
-            isOpen={isMapOpen}
-            onClose={() => setIsMapOpen(false)}
-            playerPos={
-              engineRef.current
-                ? [engineRef.current.player.position.x, engineRef.current.player.position.y, engineRef.current.player.position.z]
-                : [0, 0, 0]
-            }
-            playerYaw={engineRef.current ? engineRef.current.player.yaw : 0}
-            safeZoneCenter={
-              engineRef.current
-                ? [engineRef.current.buildingMgr.safeZoneCenter.x, 0, engineRef.current.buildingMgr.safeZoneCenter.z]
-                : [0, 0, 0]
-            }
-            safeZoneRadius={engineRef.current ? engineRef.current.buildingMgr.safeZoneRadius : 15}
-            structures={engineRef.current ? engineRef.current.buildingMgr.structures : []}
-            zombies={engineRef.current ? engineRef.current.zombieMgr.zombies : []}
-            resources={engineRef.current ? engineRef.current.terrain.resources : []}
-            discoveredChunks={engineRef.current ? engineRef.current.worldPersistence.discoveredChunks : new Set(['0_0'])}
-            waypoints={engineRef.current ? engineRef.current.worldPersistence.waypoints : []}
-            onAddWaypoint={(wp) => engineRef.current?.worldPersistence.addWaypoint(wp)}
-            onRemoveWaypoint={(id) => engineRef.current?.worldPersistence.removeWaypoint(id)}
-          />
+          {/* Radar Map Modal (Lazy) */}
+          <Suspense fallback={null}>
+            <MapModal
+              isOpen={isMapOpen}
+              onClose={() => setIsMapOpen(false)}
+              playerPos={
+                engineRef.current
+                  ? [engineRef.current.player.position.x, engineRef.current.player.position.y, engineRef.current.player.position.z]
+                  : [0, 0, 0]
+              }
+              playerYaw={engineRef.current ? engineRef.current.player.yaw : 0}
+              safeZoneCenter={
+                engineRef.current
+                  ? [engineRef.current.buildingMgr.safeZoneCenter.x, 0, engineRef.current.buildingMgr.safeZoneCenter.z]
+                  : [0, 0, 0]
+              }
+              safeZoneRadius={engineRef.current ? engineRef.current.buildingMgr.safeZoneRadius : 15}
+              structures={engineRef.current ? engineRef.current.buildingMgr.structures : []}
+              zombies={engineRef.current ? engineRef.current.zombieMgr.zombies : []}
+              resources={engineRef.current ? engineRef.current.terrain.resources : []}
+              discoveredChunks={engineRef.current ? engineRef.current.worldPersistence.discoveredChunks : new Set(['0_0'])}
+              waypoints={engineRef.current ? engineRef.current.worldPersistence.waypoints : []}
+              onAddWaypoint={(wp) => engineRef.current?.worldPersistence.addWaypoint(wp)}
+              onRemoveWaypoint={(id) => engineRef.current?.worldPersistence.removeWaypoint(id)}
+            />
+          </Suspense>
 
           {/* Quest Journal Modal */}
           <QuestJournalModal
@@ -1454,7 +2377,74 @@ export default function App() {
             onClose={() => setIsCharacterOpen(false)}
             stats={stats}
             onUpgradeSkill={handleUpgradeSkill}
+            onUnlockPerk={(perkId, cost) => engineRef.current?.unlockTalentPerk(perkId, cost)}
           />
+
+          {/* Fishing Minigame Modal */}
+          <FishingModal
+            isOpen={isFishingOpen}
+            onClose={() => setIsFishingOpen(false)}
+            hasLuckyPerk={engineRef.current?.hasPerk('perk_fisherman_luck') ?? false}
+            onCatchFish={(count) => {
+              collectItem('raw_fish', count);
+              engineRef.current?.callbacks.onBountyProgress?.('catch_fish', count);
+            }}
+          />
+
+          {/* Blueprint Sharing, Salvage & Weapon Mods Modal */}
+          <Suspense fallback={null}>
+            <BlueprintManagerModal
+              isOpen={isBlueprintModalOpen}
+              onClose={() => setIsBlueprintModalOpen(false)}
+              structures={engineRef.current?.buildingMgr.structures || []}
+              playerPos={playerCoords}
+              inventory={inventory}
+              hotbar={hotbar}
+              weaponMods={weaponMods}
+              onDeployBlueprint={(items, name) => {
+                if (engineRef.current) {
+                  engineRef.current.buildingMgr.placeBlueprintStructures(items, playerCoords);
+                  engineRef.current.callbacks.onInteractionPrompt(`Blueprint Deployed: ${name}`);
+                }
+              }}
+              onSalvageItem={handleSalvageItem}
+              onRepairItem={handleRepairItem}
+              onAttachWeaponMod={handleAttachWeaponMod}
+            />
+          </Suspense>
+
+          {/* Extraction Complete & NG+ Rebirth Victory Modal */}
+          {isExtractionVictoryOpen && (
+            <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4">
+              <div className="w-full max-w-md rounded-2xl border border-amber-500/50 bg-neutral-950 p-6 text-center text-neutral-100 shadow-2xl">
+                <h2 className="text-2xl font-black tracking-wide text-amber-400">
+                  Evacuation Complete
+                </h2>
+                <p className="mt-2 text-xs text-neutral-300 leading-relaxed">
+                  You held the perimeter until the extraction signal stabilized. Continue into Rebirth NG+ Cycle {(stats.rebirthCount || 0) + 1} with your level, perks, and inventory intact, or stay in this world.
+                </p>
+                <div className="mt-5 flex flex-col gap-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      engineRef.current?.triggerRebirthNGPlus();
+                      setIsExtractionVictoryOpen(false);
+                    }}
+                    className="w-full rounded-xl bg-amber-500 hover:bg-amber-400 py-3 text-xs font-bold uppercase tracking-wider text-neutral-950 cursor-pointer"
+                  >
+                    Start Rebirth NG+ Cycle {(stats.rebirthCount || 0) + 1}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsExtractionVictoryOpen(false)}
+                    className="w-full rounded-xl border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 py-2.5 text-xs font-semibold text-neutral-200 cursor-pointer"
+                  >
+                    Continue Exploring Current World
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Storage Chest Modal */}
           <StorageChestModal
@@ -1511,6 +2501,11 @@ export default function App() {
           <NoticeBoardModal
             isOpen={isNoticeBoardOpen}
             onClose={() => setIsNoticeBoardOpen(false)}
+            bounties={bounties}
+            onClaimBounty={handleClaimBounty}
+            dayCount={dayCount}
+            biomeName={currentBiome.name}
+            weather={weather}
           />
 
           {/* Pause Menu */}
@@ -1542,27 +2537,62 @@ export default function App() {
                   localStorage.setItem('last_sanctuary_touch_mode', mode);
                 } catch {}
               }}
+              onOpenAchievements={() => setIsAchievementsOpen(true)}
+              onOpenCompendium={() => setIsCompendiumOpen(true)}
+              onCaptureScreenshot={() => {
+                if (engineRef.current) {
+                  engineRef.current.setPaused(false);
+                }
+                setIsPauseOpen(false);
+                requestAnimationFrame(() => handleCaptureScreenshot());
+              }}
+              keybinds={keybinds}
+              onUpdateKeybinds={(next) => {
+                setKeybinds(next);
+                saveKeybinds(next);
+              }}
+              onResetKeybinds={() => setKeybinds(resetKeybinds())}
+              sandboxSettings={sandboxSettings}
+              onUpdateSandboxSettings={(patch) => {
+                setSandboxSettings((prev) => {
+                  const next = { ...prev, ...patch };
+                  engineRef.current?.setSandboxSettings(next);
+                  return next;
+                });
+              }}
+              currentWeather={weather}
+              onForceWeather={(w) => {
+                if (!engineRef.current) return;
+                if (w === 'auto') {
+                  engineRef.current.weatherManager.clearManualOverride();
+                } else {
+                  engineRef.current.weatherManager.setWeather(w, true);
+                  setWeather(w);
+                }
+              }}
             />
           )}
 
           {/* Floor 3 Armory Vault Modal (100 Fictional Entries) */}
-          <ArmoryCatalogModal
-            isOpen={isArmoryOpen}
-            onClose={() => setIsArmoryOpen(false)}
-            onCollectItem={(item: ArmoryCatalogItem) => {
-              setInventory((prev) => {
-                const updated = [...prev];
-                const emptyIdx = updated.findIndex((s) => s === null);
-                if (emptyIdx !== -1) {
-                  updated[emptyIdx] = { item, count: 1 };
+          <Suspense fallback={null}>
+            <ArmoryCatalogModal
+              isOpen={isArmoryOpen}
+              onClose={() => setIsArmoryOpen(false)}
+              onCollectItem={(item: ArmoryCatalogItem) => {
+                setInventory((prev) => {
+                  const updated = [...prev];
+                  const emptyIdx = updated.findIndex((s) => s === null);
+                  if (emptyIdx !== -1) {
+                    updated[emptyIdx] = { item, count: 1 };
+                  }
+                  return updated;
+                });
+                if (engineRef.current) {
+                  engineRef.current.callbacks.onInteractionPrompt(`Vault Item Retrieved: ${item.name}`);
                 }
-                return updated;
-              });
-              if (engineRef.current) {
-                engineRef.current.callbacks.onInteractionPrompt(`Vault Item Retrieved: ${item.name}`);
-              }
-            }}
-          />
+              }}
+            />
+          </Suspense>
 
           {/* Floor 1 Refrigerator Food Storage Modal */}
           <FridgeStorageModal
@@ -1602,27 +2632,29 @@ export default function App() {
           />
 
           {/* Passenger Ticket Booking & Smart TVM Kiosk Modal */}
-          <RailwayTicketModal
-            isOpen={isRailwayTicketsOpen}
-            onClose={() => setIsRailwayTicketsOpen(false)}
-            playerCredits={500}
-            activeTicket={activeRailwayTicket || undefined}
-            onPurchaseTicket={(ticket) => {
-              setActiveRailwayTicket(ticket);
-              if (engineRef.current) {
-                engineRef.current.activeRailwayTicket = ticket;
-              }
-            }}
-            onBoardTrainDirectly={(ticket) => {
-              setActiveRailwayTicket(ticket);
-              engineRef.current?.boardAssignedTrain(ticket);
-              setIsRailwayTicketsOpen(false);
-            }}
-            onFastTravelToDestination={(destinationStation) => {
-              engineRef.current?.fastTravelToStation(destinationStation);
-              setIsRailwayTicketsOpen(false);
-            }}
-          />
+          <Suspense fallback={null}>
+            <RailwayTicketModal
+              isOpen={isRailwayTicketsOpen}
+              onClose={() => setIsRailwayTicketsOpen(false)}
+              playerCredits={500}
+              activeTicket={activeRailwayTicket || undefined}
+              onPurchaseTicket={(ticket) => {
+                setActiveRailwayTicket(ticket);
+                if (engineRef.current) {
+                  engineRef.current.activeRailwayTicket = ticket;
+                }
+              }}
+              onBoardTrainDirectly={(ticket) => {
+                setActiveRailwayTicket(ticket);
+                engineRef.current?.boardAssignedTrain(ticket);
+                setIsRailwayTicketsOpen(false);
+              }}
+              onFastTravelToDestination={(destinationStation) => {
+                engineRef.current?.fastTravelToStation(destinationStation);
+                setIsRailwayTicketsOpen(false);
+              }}
+            />
+          </Suspense>
 
           {/* India Dynamic Railway Network Glowing World Map Modal */}
           <IndiaRailwayNetworkModal
@@ -1833,6 +2865,58 @@ export default function App() {
             playerPosition={isSecurityCommandCenterOpen && engineRef.current ? [engineRef.current.player.position.x, engineRef.current.player.position.y, engineRef.current.player.position.z] : undefined}
           />
 
+          {/* Apex Sanctuary Central Terminal Dashboard [O] */}
+          {isBaseDashboardOpen && (liveBaseState || engineRef.current) && (
+            <Suspense fallback={null}>
+              <BaseManagementDashboardModal
+                isOpen={isBaseDashboardOpen}
+                onClose={() => setIsBaseDashboardOpen(false)}
+                baseState={liveBaseState || engineRef.current!.getBaseState()}
+                onToggleGenerator={() => {
+                  engineRef.current?.toggleBaseGenerator();
+                  if (engineRef.current) setLiveBaseState(engineRef.current.getBaseState());
+                }}
+                onToggleGateLock={() => {
+                  engineRef.current?.toggleBaseGateLock();
+                  if (engineRef.current) setLiveBaseState(engineRef.current.getBaseState());
+                }}
+                onToggleAlarm={() => {
+                  engineRef.current?.toggleBaseAlarm();
+                  if (engineRef.current) setLiveBaseState(engineRef.current.getBaseState());
+                }}
+                onAssignNpcRole={(npcId: string, role: NPCRole) => {
+                  engineRef.current?.assignBaseNpcRole(npcId, role);
+                  if (engineRef.current) setLiveBaseState(engineRef.current.getBaseState());
+                }}
+                onUnlockResearch={(techId: string) => {
+                  engineRef.current?.unlockBaseResearch(techId);
+                  if (engineRef.current) setLiveBaseState(engineRef.current.getBaseState());
+                }}
+                onUpgradeBaseLevel={() => {
+                  engineRef.current?.upgradeBaseLevel();
+                  if (engineRef.current) setLiveBaseState(engineRef.current.getBaseState());
+                }}
+                onDrawCleanWater={() => {
+                  engineRef.current?.drawBaseCleanWater();
+                  if (engineRef.current) setLiveBaseState(engineRef.current.getBaseState());
+                }}
+                onWithdrawRation={() => {
+                  engineRef.current?.withdrawBaseRation();
+                  if (engineRef.current) setLiveBaseState(engineRef.current.getBaseState());
+                }}
+              />
+            </Suspense>
+          )}
+
+          {/* Central Train Control Dispatch Console [T] */}
+          <Suspense fallback={null}>
+            <TrainControlCenter
+              isOpen={isTrainControlCenterOpen}
+              onClose={() => setIsTrainControlCenterOpen(false)}
+              engine={engineRef.current}
+            />
+          </Suspense>
+
           {/* Performance Diagnostics Overlay */}
           <PerformanceDiagnostic
             engine={engineRef.current}
@@ -1843,6 +2927,40 @@ export default function App() {
           />
         </>
       )}
+
+      {/* 37 Biomes & Wildlife Field Compendium Modal [X] */}
+      <Suspense fallback={null}>
+        <FieldCompendiumModal
+          isOpen={isCompendiumOpen}
+          onClose={() => setIsCompendiumOpen(false)}
+          codexState={codexState}
+          currentBiomeId={gameState === 'playing' ? currentBiome.id : undefined}
+        />
+      </Suspense>
+
+      {/* Achievements & Survival Summary Modal */}
+      <Suspense fallback={null}>
+        <AchievementsModal
+          isOpen={isAchievementsOpen}
+          onClose={() => setIsAchievementsOpen(false)}
+          careerStats={careerStats}
+          liveSummary={
+            gameState === 'playing' && engineRef.current
+              ? {
+                  dayCount,
+                  level: stats.level,
+                  structuresCount: engineRef.current.buildingMgr.structures.length,
+                  hordesDefeated: engineRef.current.nightHordesDefeated,
+                  rescuedCount: engineRef.current.rescueManager.rescuedCount,
+                  discoveredChunksCount: engineRef.current.worldPersistence.discoveredChunks.size,
+                }
+              : null
+          }
+        />
+      </Suspense>
+
+      {/* Offline Mode Connectivity Indicator */}
+      <OfflineIndicator />
     </div>
   );
 }

@@ -100,3 +100,87 @@ export async function deleteSaveSlot(slotId: string): Promise<void> {
     localStorage.removeItem(`lsr_save_${slotId}`);
   }
 }
+
+export async function exportSaveSlotAsJson(
+  slotId: string
+): Promise<{ filename: string; json: string } | null> {
+  const save = await loadGameFromSlot(slotId);
+  if (!save) return null;
+
+  const safeSlot = (save.metadata?.id || slotId).replace(/[^a-zA-Z0-9_-]/g, '_');
+  const day = save.dayCount || save.metadata?.dayCount || 1;
+  const filename = `last-sanctuary-${safeSlot}-day${day}.json`;
+  const json = JSON.stringify(save, null, 2);
+  return { filename, json };
+}
+
+export async function downloadSaveSlotJson(slotId: string): Promise<boolean> {
+  const exported = await exportSaveSlotAsJson(slotId);
+  if (!exported) return false;
+
+  const blob = new Blob([exported.json], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = exported.filename;
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+
+export async function validateAndImportSaveJson(
+  rawJson: string,
+  targetSlotId?: string
+): Promise<SaveSlotMetadata> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(rawJson);
+  } catch {
+    throw new Error('Invalid JSON file. Please select a valid Last Sanctuary save backup.');
+  }
+
+  if (!parsed || typeof parsed !== 'object') {
+    throw new Error('Save file does not contain a valid save object.');
+  }
+
+  const candidate = parsed as Partial<FullGameSave>;
+  if (
+    !candidate.metadata ||
+    typeof candidate.metadata !== 'object' ||
+    !Array.isArray(candidate.playerPosition) ||
+    candidate.playerPosition.length !== 3 ||
+    !candidate.playerStats ||
+    !Array.isArray(candidate.inventory) ||
+    !Array.isArray(candidate.hotbar)
+  ) {
+    throw new Error('Missing required survival save fields (metadata, position, stats, or inventory).');
+  }
+
+  const slotId =
+    targetSlotId ||
+    (typeof candidate.metadata.id === 'string' && candidate.metadata.id.trim().length > 0
+      ? candidate.metadata.id.trim()
+      : `imported_${Date.now()}`);
+
+  const importedMeta: SaveSlotMetadata = {
+    ...candidate.metadata,
+    id: slotId,
+    name: targetSlotId
+      ? targetSlotId === 'autosave'
+        ? 'Autosave Slot'
+        : targetSlotId.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+      : candidate.metadata.name || `Imported Save (${slotId})`,
+    timestamp: Date.now(),
+  };
+
+  const normalizedSave: FullGameSave = {
+    ...(candidate as FullGameSave),
+    metadata: importedMeta,
+  };
+
+  await saveGameToSlot(normalizedSave);
+  return importedMeta;
+}
+

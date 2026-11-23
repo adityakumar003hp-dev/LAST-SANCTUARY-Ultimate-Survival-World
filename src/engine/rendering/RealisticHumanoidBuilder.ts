@@ -619,7 +619,7 @@ export function buildRealisticHumanoid(opts: HumanoidBuildOptions = {}): Realist
     headMesh.add(arc, mic);
   }
 
-  // --- 3. ARTICULATED SCULPTED ARMS (Preserving shoulder pivot y=1.44, x=±0.295) ---
+  // --- 3. ARTICULATED SCULPTED ARMS WITH ELBOW SUB-PIVOTS (shoulder y=1.43, elbow y=-0.30) ---
   const buildArm = (side: -1 | 1, pivotName: string): THREE.Group => {
     const arm = new THREE.Group();
     arm.name = pivotName;
@@ -633,23 +633,29 @@ export function buildRealisticHumanoid(opts: HumanoidBuildOptions = {}): Realist
     upper.castShadow = castShadow;
     arm.add(upper);
 
+    const forearmPivot = new THREE.Group();
+    forearmPivot.name = side < 0 ? 'leftForearm' : 'rightForearm';
+    forearmPivot.position.set(0, -0.30, 0);
+    arm.add(forearmPivot);
+
     const fore = new THREE.Mesh(g.armFore, jacketMat);
+    fore.position.set(0, 0.30, 0);
     fore.castShadow = castShadow;
-    arm.add(fore);
+    forearmPivot.add(fore);
 
     const palm = new THREE.Mesh(g.palm, skinMat);
-    palm.position.set(0, -0.61, 0);
-    arm.add(palm);
+    palm.position.set(0, -0.31, 0);
+    forearmPivot.add(palm);
 
     const thumb = new THREE.Mesh(g.finger, skinMat);
-    thumb.position.set(-side * 0.036, -0.61, dir * 0.02);
+    thumb.position.set(-side * 0.036, -0.31, dir * 0.02);
     thumb.rotation.z = side * 0.5;
-    arm.add(thumb);
+    forearmPivot.add(thumb);
 
     for (let f = 0; f < 4; f++) {
       const finger = new THREE.Mesh(g.finger, skinMat);
-      finger.position.set((f - 1.5) * 0.016, -0.665, dir * 0.006);
-      arm.add(finger);
+      finger.position.set((f - 1.5) * 0.016, -0.365, dir * 0.006);
+      forearmPivot.add(finger);
     }
 
     root.add(arm);
@@ -662,7 +668,7 @@ export function buildRealisticHumanoid(opts: HumanoidBuildOptions = {}): Realist
     rightArm.rotation.x = opts.initialRightArmPitch;
   }
 
-  // --- 4. ARTICULATED SCULPTED LEGS & LACED BOOTS (Hip pivot y=0.76, x=±0.145) ---
+  // --- 4. ARTICULATED SCULPTED LEGS WITH KNEE SUB-PIVOTS & LACED BOOTS (hip y=0.76, knee y=-0.35) ---
   const buildLeg = (side: -1 | 1, pivotName: string): THREE.Group => {
     const leg = new THREE.Group();
     leg.name = pivotName;
@@ -672,23 +678,29 @@ export function buildRealisticHumanoid(opts: HumanoidBuildOptions = {}): Realist
     thigh.castShadow = castShadow;
     leg.add(thigh);
 
+    const shinPivot = new THREE.Group();
+    shinPivot.name = side < 0 ? 'leftShin' : 'rightShin';
+    shinPivot.position.set(0, -0.35, 0);
+    leg.add(shinPivot);
+
     const shin = new THREE.Mesh(g.legShin, pantsMat);
+    shin.position.set(0, 0.35, 0);
     shin.castShadow = castShadow;
-    leg.add(shin);
+    shinPivot.add(shin);
 
     const bootShaft = new THREE.Mesh(g.bootUpper, bootMat);
-    bootShaft.position.set(0, -0.73, 0);
+    bootShaft.position.set(0, -0.38, 0);
     bootShaft.castShadow = castShadow;
-    leg.add(bootShaft);
+    shinPivot.add(bootShaft);
 
     const bootToe = new THREE.Mesh(g.bootToe, bootMat);
-    bootToe.position.set(0, -0.70, dir * 0.065);
+    bootToe.position.set(0, -0.35, dir * 0.065);
     bootToe.castShadow = castShadow;
-    leg.add(bootToe);
+    shinPivot.add(bootToe);
 
     const bootSole = new THREE.Mesh(g.bootSole, soleMat);
-    bootSole.position.set(0, -0.744, dir * 0.042);
-    leg.add(bootSole);
+    bootSole.position.set(0, -0.394, dir * 0.042);
+    shinPivot.add(bootSole);
 
     root.add(leg);
     return leg;
@@ -713,11 +725,11 @@ export function buildRealisticHumanoid(opts: HumanoidBuildOptions = {}): Realist
 // ============================================================================
 
 export function buildRealisticZombie(
-  type: 'walker' | 'runner' | 'brute' | 'screamer' | 'crawler',
+  type: 'walker' | 'runner' | 'brute' | 'screamer' | 'crawler' | 'spitter' | 'juggernaut' | 'stalker' | 'alpha_boss',
   scale: number
 ): THREE.Group {
   const g = getSharedGeos();
-  const isBrute = type === 'brute';
+  const isBrute = type === 'brute' || type === 'juggernaut' || type === 'alpha_boss';
   const dir = 1; // ZombieManager faces +Z
 
   const fleshPBR = getZombieFleshPBR(isBrute);
@@ -731,15 +743,31 @@ export function buildRealisticZombie(
   });
 
   const clothHex =
-    type === 'brute' ? 0x2c2e28 : type === 'runner' ? 0x3b2826 : type === 'screamer' ? 0x352b3b : 0x282b2e;
+    type === 'brute'
+      ? 0x2c2e28
+      : type === 'juggernaut'
+        ? 0x1e293b
+        : type === 'alpha_boss'
+          ? 0x3b0764
+          : type === 'spitter'
+            ? 0x1a2e05
+            : type === 'stalker'
+              ? 0x09090b
+              : type === 'runner'
+                ? 0x3b2826
+                : type === 'screamer'
+                  ? 0x352b3b
+                  : 0x282b2e;
   const clothMat = getPooledFabricMat(clothHex, 'tactical');
   const pantsMat = getPooledFabricMat(0x1b1e22, 'denim');
   const boneMat = getPooledSimpleMat('zombie_bone', { color: 0xd6ccb4, roughness: 0.55 });
   const bloodMat = getPooledSimpleMat('zombie_blood', { color: 0x5c0c10, roughness: 0.25, metalness: 0.1 });
-  const eyeGlowMat = getPooledSimpleMat('zombie_eye_glow', {
-    color: 0xff2233,
-    emissive: 0xff1122,
-    emissiveIntensity: 1.65,
+  const eyeHex =
+    type === 'spitter' ? 0x84cc16 : type === 'stalker' ? 0x38bdf8 : type === 'alpha_boss' ? 0xf59e0b : 0xff2233;
+  const eyeGlowMat = getPooledSimpleMat(`zombie_eye_glow_${type}`, {
+    color: eyeHex,
+    emissive: eyeHex,
+    emissiveIntensity: type === 'alpha_boss' ? 2.4 : 1.65,
     roughness: 0.15,
   });
 
@@ -749,9 +777,57 @@ export function buildRealisticZombie(
   // Hunched spine / emaciated chest
   const torso = new THREE.Mesh(isBrute ? g.torsoMasc : g.torsoFem, clothMat);
   torso.position.set(0, 1.12, 0.04);
-  torso.rotation.x = type === 'crawler' ? 0.55 : 0.18;
+  torso.rotation.x = type === 'crawler' ? 0.55 : type === 'stalker' ? 0.34 : 0.18;
   torso.castShadow = true;
   root.add(torso);
+
+  // Variant attachments: Armor for Juggernaut, Acid sacs for Spitter, Mutagenic spikes for Alpha Boss
+  if (type === 'juggernaut' || type === 'alpha_boss') {
+    const armorMat = getPooledSimpleMat(`z_armor_${type}`, {
+      color: type === 'alpha_boss' ? 0x450a0a : 0x334155,
+      metalness: 0.78,
+      roughness: 0.32,
+      emissive: type === 'alpha_boss' ? 0x991b1b : 0x000000,
+      emissiveIntensity: type === 'alpha_boss' ? 0.5 : 0,
+    });
+    const chestPlate = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.38, 0.28), armorMat);
+    chestPlate.position.set(0, 1.2, 0.06);
+    root.add(chestPlate);
+    for (const side of [-1, 1]) {
+      const pauldron = new THREE.Mesh(new THREE.SphereGeometry(0.14, 10, 8), armorMat);
+      pauldron.position.set(side * 0.33, 1.44, 0.04);
+      root.add(pauldron);
+    }
+    if (type === 'alpha_boss') {
+      const coreMat = getPooledSimpleMat('alpha_boss_core', {
+        color: 0xf97316,
+        emissive: 0xf59e0b,
+        emissiveIntensity: 2.0,
+        roughness: 0.2,
+      });
+      const core = new THREE.Mesh(new THREE.OctahedronGeometry(0.13, 1), coreMat);
+      core.position.set(0, 1.22, 0.22);
+      root.add(core);
+      for (const side of [-1, 1]) {
+        const horn = new THREE.Mesh(new THREE.ConeGeometry(0.05, 0.34, 6), coreMat);
+        horn.position.set(side * 0.14, 1.88, 0.08);
+        horn.rotation.z = -side * 0.35;
+        root.add(horn);
+      }
+    }
+  } else if (type === 'spitter') {
+    const acidMat = getPooledSimpleMat('spitter_acid_sac', {
+      color: 0x84cc16,
+      emissive: 0x65a30d,
+      emissiveIntensity: 1.4,
+      roughness: 0.25,
+    });
+    const sac1 = new THREE.Mesh(new THREE.SphereGeometry(0.11, 8, 8), acidMat);
+    sac1.position.set(-0.1, 1.24, 0.17);
+    const sac2 = new THREE.Mesh(new THREE.SphereGeometry(0.08, 8, 8), acidMat);
+    sac2.position.set(0.12, 1.12, 0.16);
+    root.add(sac1, sac2);
+  }
 
   // Exposed necrotic wound & ribs across torn chest
   const wound = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), bloodMat);
@@ -779,7 +855,7 @@ export function buildRealisticZombie(
   head.name = 'head';
   head.position.set(0, 1.66, 0.11);
   head.rotation.x = 0.14;
-  head.rotation.z = (type === 'screamer' ? -0.18 : 0.08);
+  head.rotation.z = type === 'screamer' ? -0.18 : 0.08;
   root.add(head);
 
   const cranium = new THREE.Mesh(g.cranium, fleshMat);
@@ -789,7 +865,7 @@ export function buildRealisticZombie(
 
   const jaw = new THREE.Mesh(g.jaw, fleshMat);
   jaw.position.set(0, -0.085, 0.035);
-  jaw.rotation.x = type === 'screamer' ? 0.35 : 0.18;
+  jaw.rotation.x = type === 'screamer' || type === 'spitter' ? 0.35 : 0.18;
   head.add(jaw);
 
   // Jagged Teeth
@@ -811,42 +887,58 @@ export function buildRealisticZombie(
     head.add(eye);
   }
 
-  // Reached Zombie Arms with Tattered Sleeves + Pale Clawed Forearms
+  // Reached Zombie Arms with Tattered Sleeves + Articulated Elbow & Pale Clawed Forearms
   const buildZombieArm = (side: -1 | 1, name: string, reachRot: number) => {
     const arm = new THREE.Group();
     arm.name = name;
-    arm.position.set(side * 0.295, 1.40, 0.06);
+    arm.position.set(side * 0.295, 1.4, 0.06);
     arm.rotation.x = reachRot;
 
     const shoulder = new THREE.Mesh(g.shoulderCap, clothMat);
     const upper = new THREE.Mesh(g.armUpper, clothMat);
+    arm.add(shoulder, upper);
+
+    const forearmPivot = new THREE.Group();
+    forearmPivot.name = side < 0 ? 'leftForearm' : 'rightForearm';
+    forearmPivot.position.set(0, -0.30, 0);
+    arm.add(forearmPivot);
+
     const fore = new THREE.Mesh(g.armFore, fleshMat);
+    fore.position.set(0, 0.30, 0);
     const palm = new THREE.Mesh(g.palm, fleshMat);
-    palm.position.set(0, -0.61, 0);
-    arm.add(shoulder, upper, fore, palm);
+    palm.position.set(0, -0.31, 0);
+    forearmPivot.add(fore, palm);
 
     for (let f = 0; f < 4; f++) {
       const claw = new THREE.Mesh(g.finger, bloodMat);
-      claw.position.set((f - 1.5) * 0.017, -0.67, 0.015);
+      claw.position.set((f - 1.5) * 0.017, -0.37, 0.015);
       claw.rotation.x = 0.45;
-      arm.add(claw);
+      forearmPivot.add(claw);
     }
     root.add(arm);
   };
   buildZombieArm(-1, 'leftArm', -Math.PI / 2.8);
   buildZombieArm(1, 'rightArm', -Math.PI / 2.6);
 
-  // Shambling Legs
+  // Shambling Legs with Articulated Knee Pivots
   const buildZombieLeg = (side: -1 | 1, name: string) => {
     const leg = new THREE.Group();
     leg.name = name;
     leg.position.set(side * 0.145, 0.75, 0);
     const thigh = new THREE.Mesh(g.legThigh, pantsMat);
-    const shin = new THREE.Mesh(g.legShin, side > 0 ? fleshMat : pantsMat); // torn pant leg on right calf
-    const boot = new THREE.Mesh(g.bootToe, bloodMat);
-    boot.position.set(0, -0.71, 0.055);
     thigh.castShadow = true;
-    leg.add(thigh, shin, boot);
+    leg.add(thigh);
+
+    const shinPivot = new THREE.Group();
+    shinPivot.name = side < 0 ? 'leftShin' : 'rightShin';
+    shinPivot.position.set(0, -0.35, 0);
+    leg.add(shinPivot);
+
+    const shin = new THREE.Mesh(g.legShin, side > 0 ? fleshMat : pantsMat); // torn pant leg on right calf
+    shin.position.set(0, 0.35, 0);
+    const boot = new THREE.Mesh(g.bootToe, bloodMat);
+    boot.position.set(0, -0.36, 0.055);
+    shinPivot.add(shin, boot);
     root.add(leg);
   };
   buildZombieLeg(-1, 'leftLeg');

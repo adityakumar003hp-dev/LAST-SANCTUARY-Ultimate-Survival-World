@@ -1,9 +1,11 @@
-import React, { useState, useEffect } from 'react';
-import { Play, RotateCcw, FolderOpen, HelpCircle, Shield, Award, Sparkles, X, Trash2, AlertTriangle, Database } from 'lucide-react';
-import { Difficulty, GameMode, SaveSlotMetadata, FullGameSave } from '../types/game';
-import { getAllSaveSlots, deleteSaveSlot } from '../utils/storage';
+import React, { useState, useEffect, useRef } from 'react';
+import { Play, FolderOpen, HelpCircle, Shield, Award, Sparkles, X, Trash2, AlertTriangle, Database, Download, Upload, BookMarked, Sliders, Trophy } from 'lucide-react';
+import { Difficulty, GameMode, SandboxSettings, SaveSlotMetadata } from '../types/game';
+import { getAllSaveSlots, deleteSaveSlot, downloadSaveSlotJson, validateAndImportSaveJson } from '../utils/storage';
+import { getLeaderboardRuns, LeaderboardEntry } from '../utils/blueprintShare';
 import { soundEngine } from '../utils/audio';
 import { seedAllVerificationTestSaves } from '../utils/checkpointTestSaves';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface MainMenuProps {
   onStartNewGame: (config: {
@@ -11,9 +13,12 @@ interface MainMenuProps {
     difficulty: Difficulty;
     gameMode: GameMode;
     seed: number;
+    sandboxSettings: SandboxSettings;
   }) => void;
   onContinueGame: () => void;
   onLoadSaveSlot: (slotId: string) => void;
+  onOpenAchievements?: () => void;
+  onOpenCompendium?: () => void;
   hasContinue: boolean;
   isLaunching?: boolean;
   launchError?: string | null;
@@ -24,6 +29,8 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   onStartNewGame,
   onContinueGame,
   onLoadSaveSlot,
+  onOpenAchievements,
+  onOpenCompendium,
   hasContinue,
   isLaunching = false,
   launchError = null,
@@ -32,18 +39,33 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const [showNewGameModal, setShowNewGameModal] = useState(false);
   const [showLoadModal, setShowLoadModal] = useState(false);
   const [showControlsModal, setShowControlsModal] = useState(false);
+  const [showHallOfFame, setShowHallOfFame] = useState(false);
+  const [showSandboxDrawer, setShowSandboxDrawer] = useState(false);
+  const [leaderboardRuns, setLeaderboardRuns] = useState<LeaderboardEntry[]>([]);
   const [saveSlots, setSaveSlots] = useState<SaveSlotMetadata[]>([]);
   const [confirmDeleteSlot, setConfirmDeleteSlot] = useState<SaveSlotMetadata | null>(null);
   const [isSeedingTestSaves, setIsSeedingTestSaves] = useState(false);
+  const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // New Game Form
   const [characterName, setCharacterName] = useState('Survivor');
   const [difficulty, setDifficulty] = useState<Difficulty>('standard');
   const [gameMode, setGameMode] = useState<GameMode>('survival');
   const [seed, setSeed] = useState(42);
+  const [sandboxSettings, setSandboxSettings] = useState<SandboxSettings>({
+    lootMultiplier: 1.0,
+    zombieDensity: 1.0,
+    dayLengthMultiplier: 1.0,
+    weatherIntensity: 1.0,
+    friendlyFire: false,
+    permadeath: false,
+    infinitePower: false,
+  });
 
   useEffect(() => {
     loadSlots();
+    setLeaderboardRuns(getLeaderboardRuns());
   }, []);
 
   const loadSlots = async () => {
@@ -60,6 +82,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       difficulty,
       gameMode,
       seed,
+      sandboxSettings,
     });
   };
 
@@ -174,16 +197,73 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             className="flex items-center justify-center gap-2 rounded-xl bg-neutral-900/80 hover:bg-neutral-800 border border-neutral-800 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold text-neutral-300 transition-all cursor-pointer"
           >
             <HelpCircle className="h-4 w-4 text-neutral-400 shrink-0" />
-            <span>Survivor Guide & Controls</span>
+            <span>Survivor Guide &amp; Controls</span>
           </button>
+
+          {onOpenCompendium && (
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.playUIClick();
+                onOpenCompendium();
+              }}
+              className="flex items-center justify-center gap-2 rounded-xl bg-neutral-900/80 hover:bg-neutral-800 border border-neutral-800 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold text-neutral-300 transition-all cursor-pointer"
+            >
+              <BookMarked className="h-4 w-4 text-emerald-400 shrink-0" />
+              <span>37 Biomes &amp; Wildlife Codex</span>
+            </button>
+          )}
+
+          {onOpenAchievements && (
+            <button
+              type="button"
+              onClick={() => {
+                soundEngine.playUIClick();
+                onOpenAchievements();
+              }}
+              className="flex items-center justify-center gap-2 rounded-xl bg-neutral-900/80 hover:bg-neutral-800 border border-neutral-800 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold text-neutral-300 transition-all cursor-pointer"
+            >
+              <Award className="h-4 w-4 text-amber-400 shrink-0" />
+              <span>Achievements &amp; Career</span>
+            </button>
+          )}
+
+          <button
+            type="button"
+            onClick={() => {
+              soundEngine.playUIClick();
+              setLeaderboardRuns(getLeaderboardRuns());
+              setShowHallOfFame(true);
+            }}
+            className="flex items-center justify-center gap-2 rounded-xl bg-neutral-900/80 hover:bg-neutral-800 border border-neutral-800 py-2.5 sm:py-3 text-xs sm:text-sm font-semibold text-neutral-300 transition-all cursor-pointer"
+          >
+            <Trophy className="h-4 w-4 text-amber-400 shrink-0" />
+            <span>Survival Hall of Fame</span>
+          </button>
+
+          <PWAInstallButton />
         </div>
 
         {/* Footer Details (In flow so short viewports never overlap buttons) */}
-        <div className="mt-5 sm:mt-8 pb-2 flex flex-col items-center gap-1 text-xs font-mono text-neutral-500 px-4 text-center">
+        <div className="mt-5 sm:mt-8 pb-2 flex flex-col items-center gap-1.5 text-xs font-mono text-neutral-500 px-4 text-center">
           <span className="text-amber-400/90 font-bold tracking-widest">OWNER-ADITYA, MADE IN INDIA</span>
-          <span className="text-[10px] sm:text-[11px] text-neutral-600">
-            v4.0 Final Implementation • Three.js 3D Engine • Portrait & Landscape Ready
-          </span>
+          <div className="flex flex-wrap items-center justify-center gap-2 text-[10px] sm:text-[11px] text-neutral-500">
+            <span>Three.js 3D Engine</span>
+            <span aria-hidden="true">·</span>
+            <a
+              href="/guide.html"
+              className="text-neutral-400 hover:text-amber-400 underline underline-offset-4 transition-colors"
+            >
+              Survival Guide
+            </a>
+            <span aria-hidden="true">·</span>
+            <a
+              href="/sitemap.html"
+              className="text-neutral-400 hover:text-amber-400 underline underline-offset-4 transition-colors"
+            >
+              Site Map
+            </a>
+          </div>
         </div>
       </div>
 
@@ -289,6 +369,115 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                 </div>
               </div>
 
+              {/* Sandbox Customizer Drawer */}
+              <div className="rounded-xl border border-neutral-800 bg-neutral-900/50">
+                <button
+                  type="button"
+                  onClick={() => setShowSandboxDrawer((v) => !v)}
+                  className="flex w-full items-center justify-between px-3.5 py-2.5 text-xs font-bold text-neutral-200 cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <Sliders className="h-3.5 w-3.5 text-amber-400" />
+                    <span>Sandbox Rules Customizer</span>
+                  </span>
+                  <span className="text-[11px] font-mono text-amber-400">
+                    {showSandboxDrawer ? 'Hide' : 'Configure'}
+                  </span>
+                </button>
+                {showSandboxDrawer && (
+                  <div className="border-t border-neutral-800 p-3.5 flex flex-col gap-3 text-xs font-mono tabular-nums">
+                    <div>
+                      <div className="flex justify-between text-neutral-300 mb-1">
+                        <span>Loot Yield Multiplier</span>
+                        <span>{sandboxSettings.lootMultiplier.toFixed(1)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="3.0"
+                        step="0.25"
+                        value={sandboxSettings.lootMultiplier}
+                        onChange={(e) =>
+                          setSandboxSettings((s) => ({ ...s, lootMultiplier: parseFloat(e.target.value) }))
+                        }
+                        className="w-full accent-amber-500 cursor-pointer"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-neutral-300 mb-1">
+                        <span>Zombie Horde Density</span>
+                        <span>{sandboxSettings.zombieDensity.toFixed(1)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="2.5"
+                        step="0.25"
+                        value={sandboxSettings.zombieDensity}
+                        onChange={(e) =>
+                          setSandboxSettings((s) => ({ ...s, zombieDensity: parseFloat(e.target.value) }))
+                        }
+                        className="w-full accent-amber-500 cursor-pointer"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-neutral-300 mb-1">
+                        <span>Daylight Cycle Duration</span>
+                        <span>{sandboxSettings.dayLengthMultiplier.toFixed(1)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0.5"
+                        max="2.0"
+                        step="0.25"
+                        value={sandboxSettings.dayLengthMultiplier}
+                        onChange={(e) =>
+                          setSandboxSettings((s) => ({ ...s, dayLengthMultiplier: parseFloat(e.target.value) }))
+                        }
+                        className="w-full accent-amber-500 cursor-pointer"
+                      />
+                    </div>
+                    <div>
+                      <div className="flex justify-between text-neutral-300 mb-1">
+                        <span>Weather Storm Intensity</span>
+                        <span>{sandboxSettings.weatherIntensity.toFixed(1)}x</span>
+                      </div>
+                      <input
+                        type="range"
+                        min="0"
+                        max="2.0"
+                        step="0.25"
+                        value={sandboxSettings.weatherIntensity}
+                        onChange={(e) =>
+                          setSandboxSettings((s) => ({ ...s, weatherIntensity: parseFloat(e.target.value) }))
+                        }
+                        className="w-full accent-amber-500 cursor-pointer"
+                      />
+                    </div>
+                    <div className="flex flex-wrap gap-3 pt-1 font-sans">
+                      <label className="flex items-center gap-2 text-neutral-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={sandboxSettings.permadeath}
+                          onChange={(e) => setSandboxSettings((s) => ({ ...s, permadeath: e.target.checked }))}
+                          className="accent-rose-500"
+                        />
+                        <span>Permadeath</span>
+                      </label>
+                      <label className="flex items-center gap-2 text-neutral-300 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={sandboxSettings.infinitePower}
+                          onChange={(e) => setSandboxSettings((s) => ({ ...s, infinitePower: e.target.checked }))}
+                          className="accent-amber-500"
+                        />
+                        <span>Infinite Base Power</span>
+                      </label>
+                    </div>
+                  </div>
+                )}
+              </div>
+
               {/* Start Button */}
               <button
                 onClick={handleLaunchNew}
@@ -296,6 +485,51 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               >
                 Awaken Survivor
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* --- Survival Hall of Fame (LocalStorage) --- */}
+      {showHallOfFame && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-3 sm:p-4">
+          <div className="flex w-full max-w-lg max-h-[86dvh] flex-col rounded-2xl bg-neutral-950 border border-neutral-800 shadow-2xl p-5 text-neutral-100">
+            <div className="flex items-center justify-between border-b border-neutral-800 pb-3">
+              <div className="flex items-center gap-2">
+                <Trophy className="h-5 w-5 text-amber-400" />
+                <h3 className="text-lg font-bold">Survival Hall of Fame</h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowHallOfFame(false)}
+                className="rounded-lg p-1 text-neutral-400 hover:text-white cursor-pointer"
+              >
+                <X className="h-5 w-5" />
+              </button>
+            </div>
+            <div className="mt-4 flex-1 overflow-y-auto flex flex-col gap-2">
+              {leaderboardRuns.length === 0 ? (
+                <div className="py-10 text-center text-xs text-neutral-500">
+                  No completed or fallen runs recorded on this device yet. Survive, extract, or fall in battle to log your career score.
+                </div>
+              ) : (
+                leaderboardRuns.map((run, idx) => (
+                  <div
+                    key={run.id}
+                    className="flex items-center justify-between gap-3 rounded-xl border border-neutral-800 bg-neutral-900/60 px-4 py-3 text-xs"
+                  >
+                    <div>
+                      <div className="font-bold text-neutral-100">
+                        #{idx + 1} · {run.survivorName} {run.extracted ? '(Extracted)' : '(Fallen)'}
+                      </div>
+                      <div className="text-[11px] font-mono text-neutral-400 tabular-nums mt-0.5">
+                        Day {run.daysSurvived} · {run.kills} Kills · {run.bosses} Bosses · NG+ {run.rebirths}
+                      </div>
+                    </div>
+                    <span className="font-mono text-[11px] uppercase text-amber-400">{run.difficulty}</span>
+                  </div>
+                ))
+              )}
             </div>
           </div>
         </div>
@@ -323,28 +557,78 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               </button>
             </div>
 
-            {/* Test Checkpoints Seeder Banner */}
-            <div className="mt-3 flex items-center justify-between rounded-xl border border-amber-800/40 bg-amber-950/20 px-3.5 py-2">
+            {/* Test Checkpoints Seeder & JSON Import Bar */}
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2 rounded-xl border border-amber-800/40 bg-amber-950/20 px-3.5 py-2.5">
               <div className="flex items-center gap-2">
                 <Database className="h-4 w-4 text-amber-400 shrink-0" />
                 <span className="text-xs text-amber-200">
-                  Quick-load test checkpoints (Missions 5, 15, 53, 55, 70)
+                  Test Checkpoints or JSON Backup Restore
                 </span>
               </div>
-              <button
-                onClick={async () => {
-                  setIsSeedingTestSaves(true);
-                  await seedAllVerificationTestSaves();
-                  await loadSlots();
-                  setIsSeedingTestSaves(false);
-                  soundEngine.playBuildSnap();
-                }}
-                disabled={isSeedingTestSaves}
-                className="rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 transition-all cursor-pointer shadow disabled:opacity-50"
-              >
-                {isSeedingTestSaves ? 'Seeding...' : 'Seed Test Saves'}
-              </button>
+              <div className="flex items-center gap-2">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".json,application/json"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const file = e.target.files?.[0];
+                    if (!file) return;
+                    try {
+                      const raw = await file.text();
+                      const imported = await validateAndImportSaveJson(raw);
+                      await loadSlots();
+                      soundEngine.playBuildSnap();
+                      setSaveStatus({
+                        type: 'success',
+                        text: `Imported "${imported.name}" successfully.`,
+                      });
+                    } catch (err: any) {
+                      setSaveStatus({
+                        type: 'error',
+                        text: err?.message || 'Failed to import save file.',
+                      });
+                    } finally {
+                      e.target.value = '';
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  className="flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 text-neutral-200 text-[11px] font-semibold px-2.5 py-1 transition-all cursor-pointer"
+                >
+                  <Upload className="h-3.5 w-3.5 text-amber-400" />
+                  <span>Import JSON</span>
+                </button>
+                <button
+                  onClick={async () => {
+                    setIsSeedingTestSaves(true);
+                    await seedAllVerificationTestSaves();
+                    await loadSlots();
+                    setIsSeedingTestSaves(false);
+                    soundEngine.playBuildSnap();
+                    setSaveStatus({ type: 'success', text: 'Verification checkpoint saves seeded.' });
+                  }}
+                  disabled={isSeedingTestSaves}
+                  className="rounded-lg bg-amber-500 hover:bg-amber-400 text-neutral-950 text-[11px] font-bold uppercase tracking-wider px-2.5 py-1 transition-all cursor-pointer shadow disabled:opacity-50"
+                >
+                  {isSeedingTestSaves ? 'Seeding...' : 'Seed Test Saves'}
+                </button>
+              </div>
             </div>
+
+            {saveStatus && (
+              <div
+                className={`mt-2.5 rounded-xl border px-3.5 py-2 text-xs font-medium ${
+                  saveStatus.type === 'success'
+                    ? 'border-emerald-800/70 bg-emerald-950/60 text-emerald-300'
+                    : 'border-rose-800/70 bg-rose-950/60 text-rose-300'
+                }`}
+              >
+                {saveStatus.text}
+              </div>
+            )}
 
             {/* Slot List */}
             <div className="flex-1 overflow-y-auto py-3 flex flex-col gap-2.5">
@@ -390,15 +674,30 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
+                    <div className="flex items-center gap-1.5 shrink-0">
                       <button
                         onClick={() => {
                           soundEngine.playUIClick();
                           onLoadSaveSlot(slot.id);
                         }}
-                        className="rounded-lg bg-amber-500 hover:bg-amber-400 px-4 py-2 text-xs font-bold uppercase tracking-wider text-neutral-950 cursor-pointer shadow transition-transform active:scale-95"
+                        className="rounded-lg bg-amber-500 hover:bg-amber-400 px-3.5 py-2 text-xs font-bold uppercase tracking-wider text-neutral-950 cursor-pointer shadow transition-transform active:scale-95"
                       >
                         Load
+                      </button>
+                      <button
+                        type="button"
+                        onClick={async () => {
+                          const ok = await downloadSaveSlotJson(slot.id);
+                          setSaveStatus(
+                            ok
+                              ? { type: 'success', text: `Exported "${slot.name}" as JSON backup.` }
+                              : { type: 'error', text: 'Could not read save slot for export.' }
+                          );
+                        }}
+                        className="rounded-lg p-2 text-neutral-400 hover:text-amber-300 hover:bg-neutral-800 cursor-pointer transition-colors"
+                        title="Export Save JSON"
+                      >
+                        <Download className="h-4 w-4" />
                       </button>
                       <button
                         onClick={() => {
@@ -416,7 +715,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
               ) : (
                 <div className="flex h-full flex-col items-center justify-center text-center text-xs text-neutral-500 py-12">
                   <p>No saved sanctuary worlds detected.</p>
-                  <p className="mt-1 text-neutral-600">Click &ldquo;Seed Test Saves&rdquo; above to try out test checkpoints!</p>
+                  <p className="mt-1 text-neutral-600">Import a JSON backup or click &ldquo;Seed Test Saves&rdquo; above!</p>
                 </div>
               )}
             </div>
@@ -471,21 +770,19 @@ export const MainMenu: React.FC<MainMenuProps> = ({
 
             <div className="mt-4 flex flex-col gap-2 text-xs">
               {[
-                { key: 'W / A / S / D', action: 'Move Survivor in 3D world' },
-                { key: 'Mouse Look / Drag', action: 'Rotate Camera View' },
-                { key: 'Left Click', action: 'Attack Zombies / Harvest Trees & Rocks / Place Structure' },
-                { key: 'Space', action: 'Jump' },
-                { key: 'Shift (Hold)', action: 'Sprint' },
-                { key: 'E', action: 'Interact (Open Gates, Stashes, Workbenches, Supply Crates)' },
-                { key: 'B', action: 'Open Building Catalog' },
-                { key: 'I', action: 'Open Backpack & Equipment' },
-                { key: 'M', action: 'Surveillance Radar Map' },
-                { key: 'C', action: 'Character RPG Stats & Skills' },
-                { key: 'J', action: 'Missions & Story Journal' },
-                { key: 'V', action: 'Toggle 1st / 3rd-Person Camera' },
-                { key: 'F', action: 'Flashlight' },
-                { key: 'R', action: 'Rotate Placement Ghost (in Build Mode)' },
-                { key: '1 - 8', action: 'Select Hotbar Tool/Weapon' },
+                { key: 'W / A / S / D', action: 'Move Survivor / Drive Vehicle or Boat' },
+                { key: 'L-Ctrl', action: 'Crouch Stealth / Swim Dive' },
+                { key: 'Tab', action: 'Quick-Swap Melee / Ranged Hotbar Slot' },
+                { key: 'G / U', action: 'Throw Molotov or Flare / Cast Fishing Rod' },
+                { key: '[', action: 'Toggle Emergency Ham Radio & Bounties' },
+                { key: 'Left Click', action: 'Attack / Headshot / Harvest / Place Structure' },
+                { key: 'Space / Shift', action: 'Jump or Surface / Sprint' },
+                { key: 'E', action: 'Interact (Gates, Stashes, Salvage Bench, Beacon, Vehicles)' },
+                { key: 'H / L', action: 'Vehicle or Train Horn / Headlights' },
+                { key: 'B / I / C / K', action: 'Build / Backpack / Stats & Perks / Craft' },
+                { key: 'M / N / V / P', action: 'Map / Minimap / Camera Perspective / Photo Mode' },
+                { key: 'Q / F / Z', action: 'Quick-Heal / Flashlight / Bio-Scanner' },
+                { key: 'R / 1-8', action: 'Rotate Blueprint / Equip Hotbar Slot' },
               ].map((item, idx) => (
                 <div
                   key={idx}

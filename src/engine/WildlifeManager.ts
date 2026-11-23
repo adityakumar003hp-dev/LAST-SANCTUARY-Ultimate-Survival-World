@@ -10,7 +10,7 @@ import { isProtectedSpawnZone } from './world/ProtectedSpawnZones';
 import { CompanionState, EcosystemDossier, EcosystemMetrics } from '../types/game';
 import { soundEngine } from '../utils/audio';
 import { UnifiedPhysicsManager } from './physics/UnifiedPhysicsManager';
-import { getDinosaurSkinPBR, getFurPBR, getRockPBR } from '../utils/proceduralTextures';
+import { getDinosaurSkinPBR, getFurPBR, getRockPBR, getSoftParticleTexture } from '../utils/proceduralTextures';
 
 export type WildlifeKind = 'mammal' | 'bird' | 'dinosaur' | 'aquatic' | 'reptile' | 'amphibian' | 'insect' | 'rare';
 export type AnimalDiet = 'carnivore' | 'herbivore' | 'omnivore' | 'piscivore';
@@ -710,6 +710,7 @@ export class WildlifeManager {
   }
 
   private initParticleSystems() {
+    const softTex = getSoftParticleTexture();
     // Mating Heart / Life Glow Particles
     const mCount = 20;
     const mGeo = new THREE.BufferGeometry();
@@ -718,9 +719,12 @@ export class WildlifeManager {
     mGeo.setAttribute('position', new THREE.BufferAttribute(mPos, 3));
     const mMat = new THREE.PointsMaterial({
       color: 0xff66cc,
-      size: 0.35,
+      size: 0.42,
+      map: softTex,
       transparent: true,
       opacity: 0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending,
     });
     this.matingParticles = new THREE.Points(mGeo, mMat);
     this.particleGroup.add(this.matingParticles);
@@ -733,9 +737,11 @@ export class WildlifeManager {
     fGeo.setAttribute('position', new THREE.BufferAttribute(fPos, 3));
     const fMat = new THREE.PointsMaterial({
       color: 0x991111,
-      size: 0.28,
+      size: 0.36,
+      map: softTex,
       transparent: true,
       opacity: 0,
+      depthWrite: false,
     });
     this.feedingParticles = new THREE.Points(fGeo, fMat);
     this.particleGroup.add(this.feedingParticles);
@@ -817,10 +823,16 @@ export class WildlifeManager {
         }
       }
 
-      // Handle Death / Carcass decay
+      // Handle Death / Smooth Carcass collapse & decay
       if (a.state === 'dead') {
         a.deathTimer = (a.deathTimer || 0) + delta;
-        a.group.position.y -= delta * 0.08;
+        const collapseT = Math.min(1, a.deathTimer / 0.45);
+        const easedCollapse = 1 - Math.pow(1 - collapseT, 3);
+        a.group.rotation.z = THREE.MathUtils.lerp(0, Math.PI / 2.2, easedCollapse);
+        a.group.rotation.x = THREE.MathUtils.lerp(0, 0.14, easedCollapse);
+        if (a.deathTimer > 15.0) {
+          a.group.position.y -= delta * 0.35;
+        }
         if (a.deathTimer > 18.0) {
           this.disposeAgent(id, a);
         }
@@ -1106,7 +1118,7 @@ export class WildlifeManager {
 
       if (predator.health <= 0) {
         predator.state = 'dead';
-        predator.group.rotation.z = Math.PI / 2.2;
+        predator.deathTimer = 0;
         return;
       }
     }
@@ -1135,10 +1147,9 @@ export class WildlifeManager {
     }
 
     if (prey.health <= 0) {
-      // Prey is killed
+      // Prey is killed (smooth collapse handled in update())
       prey.state = 'dead';
       prey.deathTimer = 0;
-      prey.group.rotation.z = Math.PI / 2.2;
       predator.state = 'feed';
       predator.stateTimer = 8.0;
       predator.killsCount++;
@@ -1266,30 +1277,38 @@ export class WildlifeManager {
     }
 
     // Ground Elevation & Aquatic Positioning
+    const idPhase = (a.id.charCodeAt(0) + (a.id.charCodeAt(a.id.length - 1) || 0)) * 0.73;
     if (a.species.kind === 'bird') {
-      const flightAlt = 8.0 + Math.sin(performance.now() * 0.002 + a.group.position.x * 0.1) * 2.5;
+      const flightAlt = 8.0 + Math.sin(this.particleTimer * 1.8 + idPhase + a.group.position.x * 0.08) * 2.5;
       const ground = getTerrainHeight(a.group.position.x, a.group.position.z, this.seed);
       a.group.position.y = Math.max(ground + 0.5, ground + flightAlt);
-      a.group.rotation.z = THREE.MathUtils.damp(a.group.rotation.z, Math.sin(performance.now() * 0.01) * 0.15, 6, delta);
+      const bankTarget = Math.sin(this.particleTimer * 1.4 + idPhase) * (a.state === 'flee' ? 0.34 : 0.20);
+      a.group.rotation.z = THREE.MathUtils.damp(a.group.rotation.z, bankTarget, 5, delta);
       const wingL = a.group.getObjectByName('wing_left');
       const wingR = a.group.getObjectByName('wing_right');
       if (wingL && wingR) {
-        const flap = Math.sin(performance.now() * 0.014 + a.age) * 0.55;
+        const flapFreq = a.state === 'flee' || a.state === 'hunt' ? 18.0 : 12.5;
+        const flap = Math.sin(this.particleTimer * flapFreq + idPhase) * (a.state === 'flee' ? 0.72 : 0.54);
         wingL.rotation.z = flap;
         wingR.rotation.z = -flap;
       }
     } else if (a.species.kind === 'aquatic') {
       const ground = getTerrainHeight(a.group.position.x, a.group.position.z, this.seed);
-      a.group.position.y = Math.min(-0.35, ground + 0.5);
-      a.group.rotation.z = Math.sin(performance.now() * 0.005 + a.group.position.z) * 0.1;
+      a.group.position.y = Math.min(-0.35, ground + 0.5) + Math.sin(this.particleTimer * 2.2 + idPhase) * 0.08;
+      a.group.rotation.z = Math.sin(this.particleTimer * 4.5 + idPhase) * 0.12;
+      const tailOld = a.group.getObjectByName('tail') || a.group.getObjectByName('tail_base');
+      if (tailOld) {
+        tailOld.rotation.y = Math.sin(this.particleTimer * 9.0 + idPhase) * 0.35;
+      }
     } else {
       const ground = getTerrainHeight(a.group.position.x, a.group.position.z, this.seed);
+      const isMoving = distToTarget > 0.35;
       a.group.position.y = ground;
-      this.animateAgentLimbs(a, distToTarget > 0.35, delta);
+      this.animateAgentLimbs(a, isMoving, delta, idPhase);
     }
   }
 
-  private animateAgentLimbs(a: WildlifeAgent, isMoving: boolean, _delta: number) {
+  private animateAgentLimbs(a: WildlifeAgent, isMoving: boolean, _delta: number, idPhase: number = 0) {
     const legL = a.group.getObjectByName('leg_left');
     const legR = a.group.getObjectByName('leg_right');
     const legBackL = a.group.getObjectByName('leg_back_l');
@@ -1302,51 +1321,58 @@ export class WildlifeManager {
     const jaw = a.group.getObjectByName('jaw');
     const chest = a.group.getObjectByName('chest');
 
-    const now = performance.now();
+    const t = this.particleTimer;
 
-    // 1. Leg Walk / Sprint Cycle (all 4 legs when quadruped)
+    // 1. Leg Walk / Sprint Cycle (all 4 legs when quadruped, individualized phase)
     if (legL && legR) {
       if (isMoving) {
-        const cycleSpeed = a.state === 'hunt' || a.state === 'flee' ? 0.016 : a.isJuvenile ? 0.014 : 0.009;
+        const cycleRate = a.state === 'hunt' || a.state === 'flee' ? 14.5 : a.state === 'stalk' ? 5.5 : a.isJuvenile ? 12.0 : 8.5;
         const speedFactor = Math.max(0.7, a.species.speed / 3.8);
-        const cycle = Math.sin(now * cycleSpeed * speedFactor);
-        legL.rotation.x = cycle * 0.65;
-        legR.rotation.x = -cycle * 0.65;
-        if (legBackL) legBackL.rotation.x = -cycle * 0.6;
-        if (legBackR) legBackR.rotation.x = cycle * 0.6;
+        const phase = t * cycleRate * speedFactor + idPhase;
+        const cycle = Math.sin(phase);
+        const strideAmp = a.state === 'hunt' || a.state === 'flee' ? 0.72 : a.state === 'stalk' ? 0.42 : 0.60;
+        legL.rotation.x = cycle * strideAmp;
+        legR.rotation.x = -cycle * strideAmp;
+        if (legBackL) legBackL.rotation.x = -cycle * (strideAmp * 0.92);
+        if (legBackR) legBackR.rotation.x = cycle * (strideAmp * 0.92);
+
+        // Natural vertical stride bounce & subtle shoulder roll
+        a.group.position.y += Math.abs(Math.sin(phase)) * (a.state === 'hunt' || a.state === 'flee' ? 0.08 : 0.035);
+        a.group.rotation.z = THREE.MathUtils.damp(a.group.rotation.z, Math.cos(phase) * 0.04, 10, _delta);
       } else {
         legL.rotation.x = THREE.MathUtils.damp(legL.rotation.x, 0, 10, _delta);
         legR.rotation.x = THREE.MathUtils.damp(legR.rotation.x, 0, 10, _delta);
         if (legBackL) legBackL.rotation.x = THREE.MathUtils.damp(legBackL.rotation.x, 0, 10, _delta);
         if (legBackR) legBackR.rotation.x = THREE.MathUtils.damp(legBackR.rotation.x, 0, 10, _delta);
+        a.group.rotation.z = THREE.MathUtils.damp(a.group.rotation.z, 0, 8, _delta);
       }
     }
 
     // 2. Realistic Sinusoidal Tail Waves
     if (tailBase) {
-      const tailWaveSpeed = isMoving ? 0.008 : 0.004;
+      const tailWaveSpeed = isMoving ? 7.5 : 3.4;
       const tailAmp = isMoving ? 0.28 : 0.14;
-      tailBase.rotation.y = Math.sin(now * tailWaveSpeed) * tailAmp;
+      tailBase.rotation.y = Math.sin(t * tailWaveSpeed + idPhase) * tailAmp;
       if (tailMid) {
-        tailMid.rotation.y = Math.sin(now * tailWaveSpeed - 0.7) * (tailAmp * 1.3);
+        tailMid.rotation.y = Math.sin(t * tailWaveSpeed + idPhase - 0.7) * (tailAmp * 1.3);
       }
       if (tailTip) {
-        tailTip.rotation.y = Math.sin(now * tailWaveSpeed - 1.4) * (tailAmp * 1.6);
+        tailTip.rotation.y = Math.sin(t * tailWaveSpeed + idPhase - 1.4) * (tailAmp * 1.6);
       }
     } else if (tailOld) {
-      tailOld.rotation.y = Math.sin(now * 0.006) * 0.2;
+      tailOld.rotation.y = Math.sin(t * 5.2 + idPhase) * 0.22;
     }
 
     // 3. Respiration / Chest Expansion
     if (chest) {
-      const breath = 1.0 + Math.sin(now * 0.0025) * 0.035;
+      const breath = 1.0 + Math.sin(t * 2.4 + idPhase) * 0.035;
       chest.scale.set(breath, breath, 1.0);
     }
 
     // 4. Predatory Jaw Snap & Head Dipping
     if (jaw) {
       if (a.state === 'attack' || a.state === 'feed') {
-        jaw.rotation.x = Math.max(0, Math.sin(now * 0.015) * 0.5);
+        jaw.rotation.x = Math.max(0, Math.sin(t * 14.0 + idPhase) * 0.5);
       } else {
         jaw.rotation.x = THREE.MathUtils.damp(jaw.rotation.x, 0, 12, _delta);
       }
@@ -1354,11 +1380,14 @@ export class WildlifeManager {
 
     if (head) {
       if (a.state === 'graze' || a.state === 'drink' || a.state === 'feed') {
-        head.rotation.x = THREE.MathUtils.damp(head.rotation.x, 0.45, 6, _delta);
+        const peck = Math.sin(t * 4.5 + idPhase) * 0.06;
+        head.rotation.x = THREE.MathUtils.damp(head.rotation.x, 0.45 + peck, 6, _delta);
       } else if (a.state === 'stalk') {
         head.rotation.x = THREE.MathUtils.damp(head.rotation.x, 0.22, 6, _delta);
       } else {
+        const lookScan = !isMoving ? Math.sin(t * 1.1 + idPhase) * 0.08 : 0;
         head.rotation.x = THREE.MathUtils.damp(head.rotation.x, 0, 8, _delta);
+        head.rotation.y = THREE.MathUtils.damp(head.rotation.y, lookScan, 4, _delta);
       }
     }
   }

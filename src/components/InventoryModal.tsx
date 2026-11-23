@@ -11,7 +11,21 @@ interface InventoryModalProps {
   onUseItem: (slotIndex: number, isHotbar: boolean) => void;
   onDropItem: (slotIndex: number, isHotbar: boolean) => void;
   onMoveToHotbar: (invIndex: number, hotbarIndex: number) => void;
+  equippedArmorId?: string;
+  equippedMaskId?: string;
+  onOpenBlueprints?: () => void;
 }
+
+const USABLE_DIRECTLY_IDS = new Set([
+  'flashlight_battery',
+  'charcoal_filter',
+  'scrap_armor_vest',
+  'thermal_coat',
+  'gas_mask',
+  'molotov_cocktail',
+  'noise_flare',
+  'pipe_bomb',
+]);
 
 export const InventoryModal: React.FC<InventoryModalProps> = ({
   isOpen,
@@ -21,6 +35,9 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
   onUseItem,
   onDropItem,
   onMoveToHotbar,
+  equippedArmorId,
+  equippedMaskId,
+  onOpenBlueprints,
 }) => {
   const [selectedItem, setSelectedItem] = useState<{
     slot: InventorySlot;
@@ -44,10 +61,22 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
         <div className="flex items-center justify-between border-b border-neutral-800 px-6 py-4">
           <div className="flex items-center gap-2">
             <Package className="h-5 w-5 text-amber-500" />
-            <h2 className="text-lg font-bold tracking-wide">Survivor Backpack & Equipment</h2>
+            <h2 className="text-lg font-bold tracking-wide">Survivor Backpack &amp; Equipment</h2>
           </div>
-          <div className="flex items-center gap-4">
-            <div className="text-xs font-mono text-neutral-400">
+          <div className="flex items-center gap-3">
+            {onOpenBlueprints && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenBlueprints();
+                }}
+                className="rounded-lg border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 px-3 py-1 text-xs font-semibold text-amber-300 cursor-pointer whitespace-nowrap"
+              >
+                Salvage &amp; Mods
+              </button>
+            )}
+            <div className="text-xs font-mono text-neutral-400 tabular-nums">
               Weight: <span className="text-amber-400 font-bold">{totalWeight.toFixed(1)}</span> / {maxCarryWeight} kg
             </div>
             <button
@@ -145,46 +174,51 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
           <div className="w-full md:w-80 p-4 sm:p-6 flex flex-col justify-between bg-neutral-950/70 shrink-0">
             {selectedItem ? (
               <div>
-                <div className="flex items-start justify-between">
+                <div className="flex items-start justify-between gap-2">
                   <h3 className="text-base font-bold text-neutral-100">{selectedItem.slot.item.name}</h3>
-                  <span className="text-[10px] uppercase font-mono font-bold bg-neutral-800 text-amber-400 px-2 py-0.5 rounded">
+                  <span className="text-[10px] uppercase font-mono font-bold text-amber-400">
                     {selectedItem.slot.item.category}
                   </span>
                 </div>
+                {(selectedItem.slot.item.id === equippedArmorId || selectedItem.slot.item.id === equippedMaskId) && (
+                  <div className="mt-1 text-[11px] font-semibold text-emerald-400">
+                    Currently Equipped
+                  </div>
+                )}
                 <p className="mt-2 text-xs text-neutral-300 leading-relaxed">
                   {selectedItem.slot.item.description}
                 </p>
 
                 {/* Stats */}
-                <div className="mt-4 flex flex-col gap-1.5 rounded-lg bg-neutral-900 p-3 text-xs border border-neutral-800">
-                  <div className="flex justify-between text-neutral-400">
+                <div className="mt-4 flex flex-col gap-1.5 rounded-lg bg-neutral-900 p-3 text-xs border border-neutral-800 font-mono tabular-nums">
+                  <div className="flex justify-between text-neutral-400 font-sans">
                     <span>Stack Quantity:</span>
                     <span className="font-mono text-neutral-200">{selectedItem.slot.count}</span>
                   </div>
-                  <div className="flex justify-between text-neutral-400">
+                  <div className="flex justify-between text-neutral-400 font-sans">
                     <span>Weight per unit:</span>
                     <span className="font-mono text-neutral-200">{selectedItem.slot.item.weight} kg</span>
                   </div>
                   {selectedItem.slot.item.hungerRestore && (
-                    <div className="flex justify-between text-orange-400">
+                    <div className="flex justify-between text-orange-400 font-sans">
                       <span>Restores Hunger:</span>
                       <span className="font-mono font-bold">+{selectedItem.slot.item.hungerRestore}%</span>
                     </div>
                   )}
                   {selectedItem.slot.item.thirstRestore && (
-                    <div className="flex justify-between text-sky-400">
+                    <div className="flex justify-between text-sky-400 font-sans">
                       <span>Restores Thirst:</span>
                       <span className="font-mono font-bold">+{selectedItem.slot.item.thirstRestore}%</span>
                     </div>
                   )}
                   {selectedItem.slot.item.healthRestore && (
-                    <div className="flex justify-between text-rose-400">
+                    <div className="flex justify-between text-rose-400 font-sans">
                       <span>Restores Health:</span>
                       <span className="font-mono font-bold">+{selectedItem.slot.item.healthRestore} HP</span>
                     </div>
                   )}
                   {selectedItem.slot.item.damage && (
-                    <div className="flex justify-between text-amber-400">
+                    <div className="flex justify-between text-amber-400 font-sans">
                       <span>Base Damage:</span>
                       <span className="font-mono font-bold">{selectedItem.slot.item.damage}</span>
                     </div>
@@ -193,23 +227,35 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
 
                 {/* Actions */}
                 <div className="mt-6 flex flex-col gap-2">
-                  {(selectedItem.slot.item.category === 'consumable' || selectedItem.slot.item.category === 'medical') && (
+                  {(selectedItem.slot.item.category === 'consumable' ||
+                    selectedItem.slot.item.category === 'medical' ||
+                    USABLE_DIRECTLY_IDS.has(selectedItem.slot.item.id)) && (
                     <button
                       onClick={() => {
                         onUseItem(selectedItem.index, selectedItem.isHotbar);
                         soundEngine.playUIClick();
                         setSelectedItem(null);
                       }}
-                      className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-500 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all cursor-pointer shadow-md"
+                      className="w-full rounded-lg bg-emerald-600 hover:bg-emerald-500 py-2.5 text-xs font-bold uppercase tracking-wider text-white transition-all cursor-pointer shadow-md whitespace-nowrap"
                     >
-                      Consume / Apply
+                      {selectedItem.slot.item.id === 'scrap_armor_vest' ||
+                      selectedItem.slot.item.id === 'thermal_coat' ||
+                      selectedItem.slot.item.id === 'gas_mask'
+                        ? selectedItem.slot.item.id === equippedArmorId || selectedItem.slot.item.id === equippedMaskId
+                          ? 'Unequip Gear'
+                          : 'Equip Gear'
+                        : selectedItem.slot.item.id === 'molotov_cocktail' ||
+                          selectedItem.slot.item.id === 'noise_flare' ||
+                          selectedItem.slot.item.id === 'pipe_bomb'
+                        ? 'Throw Tactical Item'
+                        : 'Consume / Apply'}
                     </button>
                   )}
 
                   {!selectedItem.isHotbar && (
                     <button
                       onClick={() => {
-                        onMoveToHotbar(selectedItem.index, 0); // moves to first available or index 0
+                        onMoveToHotbar(selectedItem.index, 0);
                         soundEngine.playUIClick();
                         setSelectedItem(null);
                       }}
@@ -235,7 +281,7 @@ export const InventoryModal: React.FC<InventoryModalProps> = ({
               </div>
             ) : (
               <div className="flex h-full items-center justify-center text-center text-xs text-neutral-500">
-                Click any item in your backpack or hotbar to inspect properties, consume, or equip.
+                Click any item in your backpack or hotbar to inspect properties, consume, equip, or throw.
               </div>
             )}
           </div>

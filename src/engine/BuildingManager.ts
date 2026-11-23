@@ -25,6 +25,7 @@ export class BuildingManager {
   public activeRotationY: number = 0;
   public safeZoneRadius: number = 15;
   public safeZoneCenter: THREE.Vector3 = new THREE.Vector3(954, 0, 22);
+  private animClock: number = 0;
 
   constructor(scene: THREE.Scene) {
     this.scene = scene;
@@ -129,6 +130,38 @@ export class BuildingManager {
       this.instantiatePlacedMesh(s);
     });
     this.updateSafeZone();
+  }
+
+  public placeBlueprintStructures(
+    items: { typeId: string; dx: number; dy: number; dz: number; rotationY: number }[],
+    origin: [number, number, number]
+  ): PlacedStructure[] {
+    const deployed: PlacedStructure[] = [];
+    items.forEach((item, idx) => {
+      const def = STRUCTURES[item.typeId];
+      if (!def) return;
+      const x = Math.round((origin[0] + item.dx) * 2) / 2;
+      const z = Math.round((origin[2] + item.dz) * 2) / 2;
+      const groundY = getTerrainHeight(x, z);
+      const y = groundY + (Number.isFinite(item.dy) ? Math.max(0, Math.min(8, item.dy)) : 0);
+      const placed: PlacedStructure = {
+        uid: `bp_${Date.now()}_${idx}_${Math.floor(Math.random() * 1000)}`,
+        typeId: item.typeId,
+        position: [x, y, z],
+        rotationY: item.rotationY || 0,
+        currentHealth: def.maxHealth,
+        maxHealth: def.maxHealth,
+        isOpen: false,
+        storageItems: def.isStorage ? new Array(16).fill(null) : undefined,
+      };
+      this.structures.push(placed);
+      this.instantiatePlacedMesh(placed);
+      deployed.push(placed);
+    });
+    if (deployed.length > 0) {
+      this.updateSafeZone();
+    }
+    return deployed;
   }
 
   private updateSafeZone() {
@@ -385,14 +418,6 @@ export class BuildingManager {
 
     struct.isOpen = !struct.isOpen;
     UnifiedPhysicsManager.getInstance()?.setDoorOpenState(uid, struct.isOpen);
-
-    const group = this.structureMeshes.get(uid);
-    if (group) {
-      const doorLeaf = group.getObjectByName('doorLeaf');
-      if (doorLeaf) {
-        doorLeaf.rotation.y = struct.isOpen ? -Math.PI / 2 : 0;
-      }
-    }
     return struct.isOpen;
   }
 
@@ -683,7 +708,17 @@ export class BuildingManager {
         railR.position.set(halfW, def.height - 0.7, 0);
         group.add(railT, railL, railR);
 
-        // Climbing ladder
+        // Diagonal cross-braces for structural authenticity
+        const braceGeo = new THREE.BoxGeometry(0.1, def.height * 0.72, 0.1);
+        const br1 = new THREE.Mesh(braceGeo, woodMat);
+        br1.position.set(0, (def.height - 1.2) * 0.5, -halfD);
+        br1.rotation.z = 0.55;
+        const br2 = new THREE.Mesh(braceGeo, woodMat);
+        br2.position.set(0, (def.height - 1.2) * 0.5, -halfD);
+        br2.rotation.z = -0.55;
+        group.add(br1, br2);
+
+        // Climbing ladder + steel rungs
         const ladderGeo = new THREE.BoxGeometry(0.6, def.height - 1.2, 0.1);
         const ladder = new THREE.Mesh(ladderGeo, metalMat);
         ladder.position.set(0, (def.height - 1.2) / 2, halfD + 0.1);
@@ -695,6 +730,7 @@ export class BuildingManager {
         // Steel tripod stand
         const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, def.height, 8), metalMat);
         pole.position.y = def.height / 2;
+        pole.castShadow = !isPreview;
         group.add(pole);
 
         // Brazier bowl
@@ -702,15 +738,19 @@ export class BuildingManager {
         bowl.position.y = def.height - 0.15;
         group.add(bowl);
 
-        // Ember flame mesh
-        const flameMat = new THREE.MeshBasicMaterial({ color: 0xffaa22 });
-        const flame = new THREE.Mesh(new THREE.SphereGeometry(0.18, 6, 6), flameMat);
-        flame.position.y = def.height;
+        // Sculpted layered flame cone
+        const flameMat = isPreview
+          ? this.previewMatValid
+          : new THREE.MeshBasicMaterial({ color: 0xffaa22, transparent: true, opacity: 0.92 });
+        const flame = new THREE.Mesh(new THREE.ConeGeometry(0.19, 0.48, 7), flameMat);
+        flame.name = 'flameMesh';
+        flame.position.y = def.height + 0.14;
         group.add(flame);
 
         if (!isPreview) {
-          const torchLight = new THREE.PointLight(0xff9933, 1.8, 16);
-          torchLight.position.y = def.height + 0.2;
+          const torchLight = new THREE.PointLight(0xff9933, 1.85, 16);
+          torchLight.name = 'fireLight';
+          torchLight.position.y = def.height + 0.24;
           torchLight.castShadow = false;
           group.add(torchLight);
         }
@@ -760,14 +800,22 @@ export class BuildingManager {
         log2.position.y = 0.2;
         group.add(log, log2);
 
-        // Embers
-        const ember = new THREE.Mesh(new THREE.SphereGeometry(0.2, 6, 6), new THREE.MeshBasicMaterial({ color: 0xff6600 }));
-        ember.position.y = 0.25;
-        group.add(ember);
+        // Glowing coal bed + dynamic tapered flame
+        const ember = new THREE.Mesh(new THREE.SphereGeometry(0.22, 7, 6), isPreview ? this.previewMatValid : new THREE.MeshBasicMaterial({ color: 0xff5500 }));
+        ember.scale.y = 0.55;
+        ember.position.y = 0.18;
+        const campFlame = new THREE.Mesh(
+          new THREE.ConeGeometry(0.24, 0.62, 7),
+          isPreview ? this.previewMatValid : new THREE.MeshBasicMaterial({ color: 0xffaa33, transparent: true, opacity: 0.9 })
+        );
+        campFlame.name = 'flameMesh';
+        campFlame.position.y = 0.45;
+        group.add(ember, campFlame);
 
         if (!isPreview) {
-          const fireLight = new THREE.PointLight(0xff7722, 2.0, 14);
-          fireLight.position.y = 0.5;
+          const fireLight = new THREE.PointLight(0xff7722, 2.1, 15);
+          fireLight.name = 'fireLight';
+          fireLight.position.y = 0.65;
           group.add(fireLight);
         }
         break;
@@ -857,9 +905,23 @@ export class BuildingManager {
         leftWall.receiveShadow = !isPreview;
         group.add(leftWall);
 
-        const winFrameL = new THREE.Mesh(new THREE.BoxGeometry(0.35, 1.0, 1.4), metalMat);
+        const glassMat = isPreview
+          ? this.previewMatValid
+          : new THREE.MeshPhysicalMaterial({
+              color: 0x355366,
+              roughness: 0.12,
+              metalness: 0.15,
+              reflectivity: 0.9,
+              clearcoat: 1.0,
+              transparent: true,
+              opacity: 0.72,
+            });
+
+        const winFrameL = new THREE.Mesh(new THREE.BoxGeometry(0.34, 1.04, 1.44), metalMat);
         winFrameL.position.set(-3.05, 1.6, 0);
-        group.add(winFrameL);
+        const winGlassL = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.84, 1.24), glassMat);
+        winGlassL.position.set(-3.05, 1.6, 0);
+        group.add(winFrameL, winGlassL);
 
         // --- 4. Right Wall with Framed Window ---
         const rightWall = new THREE.Mesh(new THREE.BoxGeometry(0.3, 2.7, 5.6), woodMat);
@@ -868,9 +930,26 @@ export class BuildingManager {
         rightWall.receiveShadow = !isPreview;
         group.add(rightWall);
 
-        const winFrameR = new THREE.Mesh(new THREE.BoxGeometry(0.35, 1.0, 1.4), metalMat);
+        const winFrameR = new THREE.Mesh(new THREE.BoxGeometry(0.34, 1.04, 1.44), metalMat);
         winFrameR.position.set(3.05, 1.6, 0);
-        group.add(winFrameR);
+        const winGlassR = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.84, 1.24), glassMat);
+        winGlassR.position.set(3.05, 1.6, 0);
+        group.add(winFrameR, winGlassR);
+
+        // --- 4b. Structural Timber Corner Posts & Porch Step ---
+        const cornerPostGeo = new THREE.BoxGeometry(0.24, 2.95, 0.24);
+        for (const cx of [-3.12, 3.12]) {
+          for (const cz of [-2.72, 2.72]) {
+            const cPost = new THREE.Mesh(cornerPostGeo, stoneMat);
+            cPost.position.set(cx, 1.5, cz);
+            cPost.castShadow = !isPreview;
+            group.add(cPost);
+          }
+        }
+        const porchStep = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.16, 0.75), stoneMat);
+        porchStep.position.set(0, 0.08, 3.1);
+        porchStep.receiveShadow = !isPreview;
+        group.add(porchStep);
 
         // --- 5. Front Wall with 2.0m Doorway Opening ---
         const frontWallL = new THREE.Mesh(new THREE.BoxGeometry(2.2, 2.7, 0.3), woodMat);
@@ -901,18 +980,23 @@ export class BuildingManager {
         doorLeaf.add(doorLatch);
         group.add(doorLeaf);
 
-        // --- 6. Gabled Pitched Timber Roof ---
-        const roofL = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.18, 6.0), woodMat);
+        // --- 6. Gabled Pitched Timber Roof + Ridge Cap ---
+        const roofL = new THREE.Mesh(new THREE.BoxGeometry(3.55, 0.18, 6.1), woodMat);
         roofL.position.set(-1.5, 3.45, 0);
         roofL.rotation.z = 0.42;
         roofL.castShadow = !isPreview;
         group.add(roofL);
 
-        const roofR = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.18, 6.0), woodMat);
+        const roofR = new THREE.Mesh(new THREE.BoxGeometry(3.55, 0.18, 6.1), woodMat);
         roofR.position.set(1.5, 3.45, 0);
         roofR.rotation.z = -0.42;
         roofR.castShadow = !isPreview;
         group.add(roofR);
+
+        const ridgeCap = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.22, 6.2), metalMat);
+        ridgeCap.position.set(0, 4.16, 0);
+        ridgeCap.castShadow = !isPreview;
+        group.add(ridgeCap);
 
         // --- 7. Interior Furniture (Table & Chairs) ---
         const table = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.15, 0.9), woodMat);
@@ -1118,6 +1202,106 @@ export class BuildingManager {
         group.add(pole, lamp);
         break;
       }
+      case 'sentry_turret': {
+        // Tripod steel base
+        for (let i = 0; i < 3; i++) {
+          const ang = (i / 3) * Math.PI * 2;
+          const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.07, 1.05, 8), metalMat);
+          leg.position.set(Math.sin(ang) * 0.36, 0.45, Math.cos(ang) * 0.36);
+          leg.rotation.z = Math.sin(ang) * 0.42;
+          leg.rotation.x = -Math.cos(ang) * 0.42;
+          leg.castShadow = true;
+          group.add(leg);
+        }
+        const pedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.22, 0.45, 10), metalMat);
+        pedestal.position.y = 0.95;
+        group.add(pedestal);
+
+        // Rotating turret head group (aimed dynamically by TacticalCombatEffects)
+        const headGroup = new THREE.Group();
+        headGroup.name = 'turretHead';
+        headGroup.position.y = 1.32;
+        const housing = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.32, 0.56), metalMat);
+        const barrelL = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.036, 0.72, 8), metalMat);
+        barrelL.rotation.x = Math.PI / 2;
+        barrelL.position.set(-0.08, 0.02, 0.46);
+        const barrelR = barrelL.clone();
+        barrelR.position.x = 0.08;
+        const sensorMat = isPreview ? this.previewMatValid : new THREE.MeshBasicMaterial({ color: 0x38bdf8 });
+        const sensor = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.08, 0.12), sensorMat);
+        sensor.position.set(0, 0.2, 0.18);
+        headGroup.add(housing, barrelL, barrelR, sensor);
+        group.add(headGroup);
+        break;
+      }
+      case 'electric_fence': {
+        for (const px of [-1.35, 1.35]) {
+          const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, def.height, 8), metalMat);
+          post.position.set(px, def.height / 2, 0);
+          post.castShadow = true;
+          group.add(post);
+        }
+        const arcMat = isPreview
+          ? this.previewMatValid
+          : new THREE.MeshStandardMaterial({ color: 0x38bdf8, emissive: 0x0284c7, emissiveIntensity: 1.4 });
+        for (let r = 0; r < 4; r++) {
+          const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, def.width - 0.15, 6), arcMat);
+          rail.name = r === 0 ? 'electricRail' : '';
+          rail.rotation.z = Math.PI / 2;
+          rail.position.y = 0.5 + r * 0.52;
+          group.add(rail);
+        }
+        break;
+      }
+      case 'landmine_trap': {
+        const disc = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.38, 0.14, 12), metalMat);
+        disc.position.y = 0.07;
+        const ledMat = isPreview ? this.previewMatValid : new THREE.MeshBasicMaterial({ color: 0xef4444 });
+        const led = new THREE.Mesh(new THREE.SphereGeometry(0.06, 8, 8), ledMat);
+        led.position.y = 0.16;
+        group.add(disc, led);
+        break;
+      }
+      case 'salvage_bench': {
+        const table = new THREE.Mesh(new THREE.BoxGeometry(def.width, 0.14, def.depth), metalMat);
+        table.position.y = 0.88;
+        for (const lx of [-0.75, 0.75]) {
+          for (const lz of [-0.36, 0.36]) {
+            const leg = new THREE.Mesh(new THREE.BoxGeometry(0.1, 0.88, 0.1), woodMat);
+            leg.position.set(lx, 0.44, lz);
+            group.add(leg);
+          }
+        }
+        const grinder = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.24, 12), metalMat);
+        grinder.rotation.z = Math.PI / 2;
+        grinder.position.set(-0.4, 1.08, 0);
+        const modScreen = new THREE.Mesh(
+          new THREE.BoxGeometry(0.45, 0.34, 0.06),
+          isPreview ? this.previewMatValid : new THREE.MeshBasicMaterial({ color: 0xf59e0b })
+        );
+        modScreen.position.set(0.42, 1.12, -0.2);
+        group.add(table, grinder, modScreen);
+        break;
+      }
+      case 'evacuation_beacon': {
+        const base = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.45, 1.8), metalMat);
+        base.position.y = 0.22;
+        const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.28, 3.8, 8), metalMat);
+        mast.position.y = 2.15;
+        const radarHead = new THREE.Group();
+        radarHead.name = 'radarHead';
+        radarHead.position.y = 3.8;
+        const dish = new THREE.Mesh(new THREE.ConeGeometry(0.75, 0.55, 12, 1, true), metalMat);
+        dish.position.set(0, 0, 0.2);
+        dish.rotation.x = Math.PI / 3;
+        const emitterMat = isPreview ? this.previewMatValid : new THREE.MeshBasicMaterial({ color: 0x10b981 });
+        const beaconOrb = new THREE.Mesh(new THREE.SphereGeometry(0.22, 12, 12), emitterMat);
+        beaconOrb.name = 'beaconOrb';
+        beaconOrb.position.y = 0.45;
+        radarHead.add(dish, beaconOrb);
+        group.add(base, mast, radarHead);
+        break;
+      }
       default: {
         const fallback = new THREE.Mesh(new THREE.BoxGeometry(def.width, def.height, def.depth), woodMat);
         fallback.position.y = def.height / 2;
@@ -1126,6 +1310,63 @@ export class BuildingManager {
     }
 
     return group;
+  }
+
+  public updateAnimations(delta: number, playerPos: THREE.Vector3) {
+    this.animClock += delta;
+    const t = this.animClock;
+
+    for (let i = 0; i < this.structures.length; i++) {
+      const s = this.structures[i];
+      const group = this.structureMeshes.get(s.uid);
+      if (!group) continue;
+
+      if (s.typeId === 'wooden_gate' || s.typeId === 'starter_cabin') {
+        const doorLeaf = group.getObjectByName('doorLeaf');
+        if (doorLeaf) {
+          const targetRot = s.isOpen ? -Math.PI / 2 : 0;
+          if (Math.abs(doorLeaf.rotation.y - targetRot) > 0.002) {
+            doorLeaf.rotation.y = THREE.MathUtils.damp(doorLeaf.rotation.y, targetRot, 10, delta);
+          } else {
+            doorLeaf.rotation.y = targetRot;
+          }
+        }
+      }
+
+      const dx = s.position[0] - playerPos.x;
+      const dz = s.position[2] - playerPos.z;
+      if (dx * dx + dz * dz > 4225) continue;
+
+      if (s.typeId === 'perimeter_torch' || s.typeId === 'campfire') {
+        const phase = (s.position[0] * 0.7 + s.position[2] * 1.1) % 6.28;
+        const flicker = 0.88 + Math.sin(t * 11.5 + phase) * 0.14 + Math.sin(t * 23.0 + phase * 1.7) * 0.08;
+        const flame = group.getObjectByName('flameMesh');
+        if (flame) {
+          flame.scale.set(0.94 + flicker * 0.08, flicker, 0.94 + flicker * 0.08);
+          flame.rotation.y = t * 1.6 + phase;
+        }
+        const fireLight = group.getObjectByName('fireLight') as THREE.PointLight | undefined;
+        if (fireLight && fireLight.visible) {
+          const baseInt = s.typeId === 'campfire' ? 2.1 : 1.85;
+          fireLight.intensity = baseInt * flicker;
+        }
+      } else if (s.typeId === 'evacuation_beacon') {
+        const radarHead = group.getObjectByName('radarHead');
+        if (radarHead) {
+          radarHead.rotation.y += delta * 1.45;
+        }
+        const orb = group.getObjectByName('beaconOrb');
+        if (orb) {
+          const pulse = 0.85 + Math.sin(t * 5.0) * 0.25;
+          orb.scale.setScalar(pulse);
+        }
+      } else if (s.typeId === 'electric_fence') {
+        const rail = group.getObjectByName('electricRail') as THREE.Mesh | undefined;
+        if (rail && rail.material instanceof THREE.MeshStandardMaterial) {
+          rail.material.emissiveIntensity = 1.15 + Math.sin(t * 16.0 + s.position[0]) * 0.55;
+        }
+      }
+    }
   }
 
   public dispose() {

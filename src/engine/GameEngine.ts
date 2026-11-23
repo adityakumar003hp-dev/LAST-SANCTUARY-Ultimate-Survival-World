@@ -3,13 +3,15 @@ import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { RealismShaderGlobals, CinematicPostShader } from './shaders/RealismShaders';
 import { WorldTerrain, getTerrainHeight } from './Terrain';
 import { BuildingManager } from './BuildingManager';
 import { ZombieManager } from './ZombieManager';
 import { PlayerController } from './PlayerController';
 import { soundEngine } from '../utils/audio';
 import { getWaterRippleNormalMap } from '../utils/proceduralTextures';
-import { HarvestableResource, PlacedStructure, PlayerStats, Quest, SaveSlotMetadata, FullGameSave, GameMode, Difficulty, ItemDefinition, VehicleState, CompanionState, EcosystemDossier, EcosystemMetrics, InventorySlot, RailwayTicket, GraphicsQuality, GraphicsQualityMode } from '../types/game';
+import { HarvestableResource, PlacedStructure, PlayerStats, Quest, SaveSlotMetadata, FullGameSave, GameMode, Difficulty, ItemDefinition, VehicleState, CompanionState, EcosystemDossier, EcosystemMetrics, InventorySlot, RailwayTicket, GraphicsQuality, GraphicsQualityMode, BaseLevel, BaseState, NPCRole } from '../types/game';
 import { ITEMS } from '../data/items';
 import { saveGameToSlot } from '../utils/storage';
 import { ChunkManager } from './world/ChunkManager';
@@ -18,6 +20,11 @@ import { WildlifeManager } from './WildlifeManager';
 import { SurvivorRescueManager, SurvivorDialogue } from './SurvivorRescueManager';
 import { NPCSettlementManager } from './base/NPCSettlementManager';
 import { VehicleParkingManager } from './base/VehicleParkingManager';
+import { PowerManager } from './base/PowerManager';
+import { WaterManager } from './base/WaterManager';
+import { FoodStorageManager } from './base/FoodStorageManager';
+import { SecurityManager } from './base/SecurityManager';
+import { ResearchManager } from './base/ResearchManager';
 import { PrologueManager } from './prologue/PrologueManager';
 import { ProloguePhase, PrologueSubtitle, PrologueSaveData, StoryCompanion } from '../types/prologue';
 import { UnifiedPhysicsManager } from './physics/UnifiedPhysicsManager';
@@ -30,6 +37,10 @@ import { AtmosphericSky } from './rendering/AtmosphericSky';
 import { HouseInteractionController, HouseInteractionType } from './interaction/HouseInteractionController';
 import { isProtectedSpawnZone } from './world/ProtectedSpawnZones';
 import { StorylineCheckpointManager } from './campaign/StorylineCheckpointManager';
+import { WeatherManager } from './weather/WeatherManager';
+import { TacticalCombatEffects } from './combat/TacticalCombatEffects';
+import { WorldEventsManager, ExtractionState } from './world/WorldEventsManager';
+import { WeatherType, SandboxSettings, WeaponModId, RadiantBounty, SupplyDropState, ZombieEntity } from '../types/game';
 
 export interface GameEngineCallbacks {
   onStatsChange: (stats: PlayerStats) => void;
@@ -66,6 +77,27 @@ export interface GameEngineCallbacks {
   onGetInventory?: () => (InventorySlot | null)[];
   onGetHotbar?: () => (InventorySlot | null)[];
   onGetSelectedHotbarIndex?: () => number;
+  onBiomeChange?: (biomeId: string, biomeName: string) => void;
+  onSpeciesScanned?: (speciesId: string) => void;
+  onCareerEvent?: (event: {
+    type:
+      | 'zombie_killed'
+      | 'structure_built'
+      | 'resource_harvested'
+      | 'species_logged'
+      | 'survivor_rescued'
+      | 'horde_defeated'
+      | 'save_created';
+    count?: number;
+  }) => void;
+  onWeatherChange?: (weather: WeatherType) => void;
+  onHitEvent?: (ev: { amount: number; isHeadshot?: boolean; isStealth?: boolean; screenX: number; screenY: number }) => void;
+  onBossStatusChange?: (boss: { name: string; health: number; maxHealth: number } | null) => void;
+  onWorldEventUpdate?: (ev: { supplyDrop: SupplyDropState | null; extraction: ExtractionState }) => void;
+  onBountyProgress?: (targetType: RadiantBounty['targetType'], amount?: number) => void;
+  onExtractionVictory?: () => void;
+  onOpenBlueprintModal?: () => void;
+  onOpenFishingModal?: () => void;
 }
 
 export class GameEngine {
@@ -85,6 +117,12 @@ export class GameEngine {
   public rescueManager: SurvivorRescueManager;
   public npcSettlementManager: NPCSettlementManager;
   public vehicleManager: VehicleParkingManager;
+  public baseLevel: BaseLevel = 2;
+  public powerManager: PowerManager;
+  public waterManager: WaterManager;
+  public foodManager: FoodStorageManager;
+  public securityManager: SecurityManager;
+  public researchManager: ResearchManager;
   public prologueManager: PrologueManager;
   public physicsManager: UnifiedPhysicsManager;
   public dynamicPropPhysics: DynamicPropPhysicsManager;
@@ -94,6 +132,9 @@ export class GameEngine {
   public atmosphericSky: AtmosphericSky;
   public houseInteractionCtrl: HouseInteractionController;
   public storylineManager: StorylineCheckpointManager;
+  public weatherManager: WeatherManager;
+  public combatEffects: TacticalCombatEffects;
+  public worldEventsManager: WorldEventsManager;
 
   // Environment, Lights & Post-Processing
   private dirLight: THREE.DirectionalLight;
@@ -104,7 +145,10 @@ export class GameEngine {
   private lastEnvPhase: string = '';
   private composer: EffectComposer | null = null;
   private bloomPass: UnrealBloomPass | null = null;
+  private cinematicPass: ShaderPass | null = null;
   private usePostProcessing: boolean = false;
+  private wetAccum: number = 0;
+  private engineClock: number = 0;
 
   // Time & Horde Simulation
   public gameTimeMinutes: number = 480; // 08:00 AM
@@ -154,10 +198,26 @@ export class GameEngine {
   private scannerTimer: number = 0;
   private securityScreenTimer: number = 0;
   private uiSyncTimer: number = 0;
+  private lastReportedBiomeId: string = '';
+  private lastReportedWeather: WeatherType = 'clear';
+  private weatherFogMultiplier: number = 1.0;
+  private geigerTimer: number = 0;
+  public sandboxSettings: SandboxSettings = {
+    lootMultiplier: 1.0,
+    zombieDensity: 1.0,
+    dayLengthMultiplier: 1.0,
+    weatherIntensity: 1.0,
+    friendlyFire: false,
+    permadeath: false,
+    infinitePower: false,
+  };
+  public weaponMods: Record<string, WeaponModId[]> = {};
+  public deathBagData: { position: [number, number, number]; items: (InventorySlot | null)[] } | null = null;
   private static readonly _camDir = new THREE.Vector3();
   private static readonly _tmpVecA = new THREE.Vector3();
   private static readonly _tmpVecB = new THREE.Vector3();
   private static readonly _tmpVecC = new THREE.Vector3();
+  private static readonly _sunScreenVec = new THREE.Vector3();
   private static readonly _sunColor = new THREE.Color();
 
   // Input State (Supports both digital key flags and 360-degree analog touch)
@@ -332,6 +392,7 @@ export class GameEngine {
     this.dirLight.shadow.camera.bottom = -d;
     this.dirLight.shadow.bias = -0.00025;
     this.dirLight.shadow.normalBias = 0.03;
+    this.dirLight.shadow.radius = 2.6;
     this.scene.add(this.dirLight);
     this.scene.add(this.dirLight.target);
 
@@ -364,11 +425,14 @@ export class GameEngine {
           0.94
         );
         this.composer.addPass(this.bloomPass);
+        this.cinematicPass = new ShaderPass(CinematicPostShader);
+        this.composer.addPass(this.cinematicPass);
         this.composer.addPass(new OutputPass());
-        this.usePostProcessing = false; // Enabled explicitly in quality / ultra_5x tiers
+        this.usePostProcessing = false; // Enabled cleanly per quality tier
       } catch {
         this.composer = null;
         this.bloomPass = null;
+        this.cinematicPass = null;
         this.usePostProcessing = false;
       }
     }
@@ -390,12 +454,45 @@ export class GameEngine {
     this.rescueManager = new SurvivorRescueManager(this.scene, seed);
     this.npcSettlementManager = new NPCSettlementManager(this.scene);
     this.vehicleManager = new VehicleParkingManager(this.scene);
+    this.powerManager = new PowerManager();
+    this.waterManager = new WaterManager();
+    this.foodManager = new FoodStorageManager();
+    this.securityManager = new SecurityManager();
+    this.researchManager = new ResearchManager();
     this.aiTrainManager = new AITrainManager(this.scene, seed);
     this.player.aiTrainManager = this.aiTrainManager;
+    this.weatherManager = new WeatherManager(this.scene);
+    this.combatEffects = new TacticalCombatEffects(this.scene);
+    this.worldEventsManager = new WorldEventsManager(this.scene, (x, z) => getTerrainHeight(x, z, seed));
     if (initialSave?.activeRailwayTicket) {
       this.activeRailwayTicket = initialSave.activeRailwayTicket;
     }
     if (initialSave) this.rescueManager.importRescued(initialSave.rescuedSurvivorIds);
+    if (initialSave?.baseState) {
+      const bs = initialSave.baseState;
+      this.baseLevel = bs.level ?? 2;
+      if (bs.power) this.powerManager.state = { ...this.powerManager.state, ...bs.power };
+      if (bs.water) this.waterManager.state = { ...this.waterManager.state, ...bs.water };
+      if (bs.food) this.foodManager.state = { ...this.foodManager.state, ...bs.food };
+      if (bs.security) {
+        this.securityManager.state = {
+          ...this.securityManager.state,
+          ...bs.security,
+          cctvChannels:
+            bs.security.cctvChannels && bs.security.cctvChannels.length > 0
+              ? bs.security.cctvChannels
+              : this.securityManager.state.cctvChannels,
+        };
+      }
+      if (bs.npcs && bs.npcs.length > 0) {
+        bs.npcs.forEach((savedNpc) => this.npcSettlementManager.assignRole(savedNpc.id, savedNpc.role));
+      }
+      if (bs.research && bs.research.length > 0) {
+        bs.research.forEach((tech) => {
+          if (tech.unlocked) this.researchManager.unlockTech(tech.id);
+        });
+      }
+    }
     if (initialSave?.baseState?.vehicle) {
       this.vehicleManager.vehicleState = { ...initialSave.baseState.vehicle };
       this.vehicleManager.mesh.position.set(...this.vehicleManager.vehicleState.position);
@@ -461,6 +558,26 @@ export class GameEngine {
         this.playerStats.oxygen = 100;
         this.playerStats.maxOxygen = 100;
       }
+      this.playerStats.flashlightBattery = this.playerStats.flashlightBattery ?? 100;
+      this.playerStats.radiationExposure = this.playerStats.radiationExposure ?? 0;
+      this.playerStats.noiseLevel = this.playerStats.noiseLevel ?? 0;
+      this.playerStats.perkUnlocks = this.playerStats.perkUnlocks ?? [];
+      this.playerStats.killStats = this.playerStats.killStats ?? { total: 0, headshots: 0, bosses: 0, stealth: 0 };
+      this.playerStats.rebirthCount = initialSave.rebirthCount ?? this.playerStats.rebirthCount ?? 0;
+      if (initialSave.weatherType) {
+        this.weatherManager.setWeather(initialSave.weatherType);
+      }
+      if (initialSave.sandboxSettings) {
+        this.sandboxSettings = { ...this.sandboxSettings, ...initialSave.sandboxSettings };
+        this.weatherManager.setIntensityMultiplier(this.sandboxSettings.weatherIntensity);
+      }
+      if (initialSave.weaponMods) {
+        this.weaponMods = { ...initialSave.weaponMods };
+      }
+      if (initialSave.deathBag) {
+        this.deathBagData = initialSave.deathBag;
+        this.combatEffects.setDeathBag(initialSave.deathBag.position);
+      }
       this.player.position.set(...initialSave.playerPosition);
       this.player.yaw = initialSave.playerRotation;
       if (initialSave.structures && initialSave.structures.length > 0) {
@@ -503,6 +620,12 @@ export class GameEngine {
         infection: 0,
         oxygen: 100,
         maxOxygen: 100,
+        flashlightBattery: 100,
+        radiationExposure: 0,
+        noiseLevel: 6,
+        perkUnlocks: [],
+        killStats: { total: 0, headshots: 0, bosses: 0, stealth: 0 },
+        rebirthCount: 0,
         level: 1,
         xp: 0,
         xpToNextLevel: 100,
@@ -703,6 +826,8 @@ export class GameEngine {
       this.targetDesiredDpr = 1.0;
       this.renderer.shadowMap.enabled = false;
       this.usePostProcessing = false;
+      if (this.bloomPass) this.bloomPass.enabled = false;
+      if (this.cinematicPass) this.cinematicPass.enabled = false;
       this.envIntensityMultiplier = 0.88;
       this.sunIntensityMultiplier = 0.96;
       this.fogDensityMultiplier = 1.12;
@@ -715,8 +840,13 @@ export class GameEngine {
       this.targetDesiredDpr = this.isSoftwareGl ? 1.0 : Math.min(rawDpr, isMobile ? 1.1 : 1.35);
       this.renderer.shadowMap.enabled = !this.isSoftwareGl;
       this.renderer.shadowMap.type = THREE.PCFShadowMap;
-      // Direct hardware MSAA + ACES render for smooth high-FPS play
-      this.usePostProcessing = false;
+      // Enable lightweight cinematic grading + subtle sun shafts in Balanced on GPU
+      this.usePostProcessing = !this.isSoftwareGl && Boolean(this.composer);
+      if (this.bloomPass) this.bloomPass.enabled = false;
+      if (this.cinematicPass) {
+        this.cinematicPass.enabled = true;
+        this.cinematicPass.uniforms.uSunShaftIntensity.value = 0.10;
+      }
       this.envIntensityMultiplier = 0.98;
       this.sunIntensityMultiplier = 1.0;
       this.fogDensityMultiplier = 1.0;
@@ -734,9 +864,14 @@ export class GameEngine {
       this.renderer.shadowMap.type = THREE.PCFShadowMap;
       this.usePostProcessing = !this.isSoftwareGl && Boolean(this.composer);
       if (this.bloomPass) {
+        this.bloomPass.enabled = true;
         this.bloomPass.strength = 0.17;
         this.bloomPass.radius = 0.36;
         this.bloomPass.threshold = 0.91;
+      }
+      if (this.cinematicPass) {
+        this.cinematicPass.enabled = true;
+        this.cinematicPass.uniforms.uSunShaftIntensity.value = 0.18;
       }
       this.envIntensityMultiplier = 1.05;
       this.sunIntensityMultiplier = 1.04;
@@ -749,15 +884,20 @@ export class GameEngine {
       this.applyTextureAnisotropy(8);
       chunkQuality = 'high';
     } else {
-      // Ultra Realistic 5x Mode: crisp GPU supersampling, up to 3072 shadows, 16x anisotropy, HDR bloom & 4-chunk horizon
+      // Ultra Realistic 5x Mode: crisp GPU supersampling, up to 3072 shadows, 16x anisotropy, HDR bloom & volumetric shafts
       this.targetDesiredDpr = this.isSoftwareGl ? 1.0 : Math.min(Math.max(rawDpr, 1.6), isMobile ? 1.75 : 2.0);
       this.renderer.shadowMap.enabled = !this.isSoftwareGl;
       this.renderer.shadowMap.type = THREE.PCFShadowMap;
       this.usePostProcessing = !this.isSoftwareGl && Boolean(this.composer);
       if (this.bloomPass) {
+        this.bloomPass.enabled = true;
         this.bloomPass.strength = 0.21;
         this.bloomPass.radius = 0.42;
         this.bloomPass.threshold = 0.88;
+      }
+      if (this.cinematicPass) {
+        this.cinematicPass.enabled = true;
+        this.cinematicPass.uniforms.uSunShaftIntensity.value = 0.24;
       }
       this.envIntensityMultiplier = 1.18;
       this.sunIntensityMultiplier = 1.12;
@@ -783,6 +923,14 @@ export class GameEngine {
     this.lastEnvPhase = '';
     if (this.chunkManager) {
       this.chunkManager.setQuality(chunkQuality);
+    }
+  }
+
+  public setViewDistanceChunks(chunks: number) {
+    const clamped = Math.max(1, Math.min(5, Math.round(chunks)));
+    if (this.chunkManager) {
+      this.chunkManager.setStreamingRadius(clamped);
+      this.chunkManager.updatePlayerPosition(this.player.position, true);
     }
   }
 
@@ -924,11 +1072,13 @@ export class GameEngine {
 
   // --- Core Game Update ---
   private update(delta: number) {
-    // 1. Advance Game Time (1 real sec = 2 game mins)
-    this.gameTimeMinutes += delta * 2.0;
+    // 1. Advance Game Time (1 real sec = 2 game mins scaled by sandbox dayLengthMultiplier)
+    const dayScale = Math.max(0.25, this.sandboxSettings.dayLengthMultiplier || 1.0);
+    this.gameTimeMinutes += (delta * 2.0) / dayScale;
     if (this.gameTimeMinutes >= 1440) {
       this.gameTimeMinutes -= 1440;
       this.dayCount += 1;
+      this.callbacks.onBountyProgress?.('survive_night', 1);
     }
 
     const hour = this.gameTimeMinutes / 60;
@@ -936,8 +1086,28 @@ export class GameEngine {
     this.isDusk = hour >= 18.0 && hour < 21.0;
 
     // Trigger context-aware continuous diurnal & nocturnal environmental soundscape
-    const currentBiomeId = this.chunkManager.getCurrentBiome(this.player.position.x, this.player.position.z).id;
-    this.soundscapeManager.update(delta, this.gameTimeMinutes, this.player.position, this.player.yaw, currentBiomeId);
+    const currentBiome = this.chunkManager.getCurrentBiome(this.player.position.x, this.player.position.z);
+    const currentBiomeId = currentBiome.id;
+    if (currentBiomeId !== this.lastReportedBiomeId) {
+      this.lastReportedBiomeId = currentBiomeId;
+      this.callbacks.onBiomeChange?.(currentBiome.id, currentBiome.name);
+    }
+
+    // Dynamic Biome Weather update
+    const wx = this.weatherManager.update(delta, this.player.position, currentBiomeId, this.player.isSubmerged);
+    this.weatherFogMultiplier = wx.fogDensityMultiplier;
+    if (wx.weather !== this.lastReportedWeather) {
+      this.lastReportedWeather = wx.weather;
+      this.callbacks.onWeatherChange?.(wx.weather);
+    }
+    if (wx.rainCatchmentBonus > 0) {
+      this.waterManager.state.storageLiters = Math.min(
+        this.waterManager.state.maxCapacityLiters,
+        this.waterManager.state.storageLiters + wx.rainCatchmentBonus * delta * 0.2
+      );
+    }
+
+    this.soundscapeManager.update(delta, this.gameTimeMinutes, this.player.position, this.player.yaw, currentBiomeId, wx.weather);
     this.aiTrainManager.update(delta, this.player.position);
 
     // Dusk warning
@@ -958,6 +1128,7 @@ export class GameEngine {
     if (!this.isNight && !this.isDusk && hour >= 6.0 && hour < 7.0 && !this.dawnVictoryFired) {
       this.dawnVictoryFired = true;
       this.nightHordesDefeated += 1;
+      this.callbacks.onCareerEvent?.({ type: 'horde_defeated', count: 1 });
       soundEngine.playDawnVictoryChime();
       this.callbacks.onHordeEvent('dawn_victory');
       this.addXP(150);
@@ -968,6 +1139,7 @@ export class GameEngine {
     // Update Celestial Lighting & Atmospheric Scattering Sky
     const isBloodMoon = this.isNight && (this.dayCount % 7 === 0 || this.dayCount === 1);
     if (this.atmosphericSky) {
+      this.atmosphericSky.setWeatherState(wx.overcast, wx.lightningFlash);
       this.atmosphericSky.update(
         this.gameTimeMinutes,
         this.isNight,
@@ -979,6 +1151,50 @@ export class GameEngine {
     }
     this.updateAtmosphere(hour);
 
+    // Synchronize shared global realism shaders (wind, rain wetness, lightning, sun scattering)
+    this.engineClock += delta;
+    const wetTarget = wx.rainIntensity > 0.05 ? 1.0 : 0.0;
+    const wetRate = wetTarget > this.wetAccum ? 0.14 : 0.04;
+    this.wetAccum = THREE.MathUtils.clamp(
+      this.wetAccum + (wetTarget > this.wetAccum ? delta * wetRate : -delta * wetRate),
+      0,
+      1
+    );
+    RealismShaderGlobals.uTime.value = this.engineClock;
+    RealismShaderGlobals.uWindStrength.value = wx.windStrength;
+    RealismShaderGlobals.uRainIntensity.value = wx.rainIntensity;
+    RealismShaderGlobals.uWetness.value = this.wetAccum;
+    RealismShaderGlobals.uLightningFlash.value = wx.lightningFlash;
+    RealismShaderGlobals.uSunDir.value.copy(this.dirLight.position).sub(this.player.position).normalize();
+    RealismShaderGlobals.uSunColor.value.copy(this.dirLight.color);
+    if (this.atmosphericSky) {
+      RealismShaderGlobals.uHorizonColor.value.copy(this.atmosphericSky.getHorizonColor());
+    }
+
+    // Update volumetric sun-shaft & lens grading post-process uniforms
+    if (this.usePostProcessing && this.cinematicPass) {
+      this.camera.getWorldDirection(GameEngine._camDir);
+      const sunDot = Math.max(0, GameEngine._camDir.dot(RealismShaderGlobals.uSunDir.value));
+      GameEngine._sunScreenVec.copy(this.dirLight.position).project(this.camera);
+      this.cinematicPass.uniforms.uSunScreenPos.value.set(
+        GameEngine._sunScreenVec.x * 0.5 + 0.5,
+        GameEngine._sunScreenVec.y * 0.5 + 0.5
+      );
+      const baseShaft =
+        this.activeQualityMode === 'ultra_5x' ? 0.24 : this.activeQualityMode === 'quality' ? 0.18 : 0.10;
+      const dayVis = this.isNight ? 0.28 : 1.0;
+      const overcastAtten = 1.0 - wx.overcast * 0.65;
+      this.cinematicPass.uniforms.uSunShaftIntensity.value =
+        baseShaft * Math.pow(sunDot, 1.5) * dayVis * overcastAtten;
+      this.cinematicPass.uniforms.uSunColor.value.copy(this.dirLight.color);
+      this.cinematicPass.uniforms.uTime.value = this.engineClock;
+      const caBoost =
+        (this.player.isSubmerged ? 0.0022 : 0) +
+        (this.player.isSprinting ? 0.0007 : 0) +
+        (this.playerStats.health < 25 ? 0.0014 : 0);
+      this.cinematicPass.uniforms.uChromatic.value = 0.0005 + caBoost;
+    }
+
     // Animate realistic river, chunk, pool & fountain water ripples simultaneously via shared Gerstner normal map
     const waterNormal = getWaterRippleNormalMap();
     waterNormal.offset.x = (waterNormal.offset.x + delta * 0.025) % 1;
@@ -989,6 +1205,7 @@ export class GameEngine {
 
     // 2. Player, Train or Vehicle Movement & Physics
     if (this.aiTrainManager && this.aiTrainManager.activePassengerTrain) {
+      this.player.setViewmodelOverrideHidden(true);
       const train = this.aiTrainManager.activePassengerTrain;
 
       // Update player movement inside the 3-carriage train consist
@@ -1051,6 +1268,7 @@ export class GameEngine {
         this.callbacks.onVehicleChange?.(null, 0);
       }
     } else if (this.vehicleManager && this.vehicleManager.vehicleState.isOccupied) {
+      this.player.setViewmodelOverrideHidden(true);
       if (shouldSyncHud) this.callbacks.onTrainChange?.(null);
       this.vehicleManager.update(delta, this.inputState, this.terrain.seed);
 
@@ -1081,6 +1299,7 @@ export class GameEngine {
         this.callbacks.onVehicleChange?.(this.vehicleManager.vehicleState, this.vehicleManager.currentSpeed);
       }
     } else {
+      this.player.setViewmodelOverrideHidden(false);
       if (shouldSyncHud) this.callbacks.onTrainChange?.(null);
       const hasMovementInput =
         this.inputState.forward ||
@@ -1195,9 +1414,31 @@ export class GameEngine {
       }
     }
 
-    this.npcSettlementManager.update(delta, this.isNight, true);
+    this.powerManager.update(delta, hour);
+    this.waterManager.update(delta, this.powerManager.state.isPowered);
+    this.foodManager.update(delta, this.powerManager.state.isPowered, this.npcSettlementManager.npcs.length);
+    let zombiesNearPerimeter = 0;
+    if (this.zombieMgr?.zombies) {
+      for (let i = 0; i < this.zombieMgr.zombies.length; i++) {
+        const z = this.zombieMgr.zombies[i];
+        if (z.state === 'dead') continue;
+        if (
+          Math.hypot(
+            z.position[0] - this.buildingMgr.safeZoneCenter.x,
+            z.position[2] - this.buildingMgr.safeZoneCenter.z
+          ) <= 55
+        ) {
+          zombiesNearPerimeter++;
+        }
+      }
+    }
+    this.securityManager.update(zombiesNearPerimeter, this.isNight, this.powerManager.state.isPowered);
+    this.npcSettlementManager.update(delta, this.isNight, this.powerManager.state.isPowered);
     this.prologueManager.update(delta);
     const rescuedNow = this.rescueManager.update(delta, this.player.position, this.buildingMgr.safeZoneCenter, this.buildingMgr.safeZoneRadius);
+    if (rescuedNow.length > 0) {
+      this.callbacks.onCareerEvent?.({ type: 'survivor_rescued', count: rescuedNow.length });
+    }
     rescuedNow.forEach(() => { this.addXP(75); this.callbacks.onItemCollected('canned_beans', 2); this.callbacks.onItemCollected('clean_water', 2); this.callbacks.onInteractionPrompt('Survivor safely escorted to the sanctuary.'); });
 
     // Distance to Safe Zone Center & Compound Bounds
@@ -1269,6 +1510,126 @@ export class GameEngine {
       }
     }
 
+    // Flashlight battery drain & auto shutoff
+    if (this.player.isFlashlightOn) {
+      const battResist = this.hasPerk('perk_thermal_endurance') ? 0.5 : 1.0;
+      const nextBatt = Math.max(0, (this.playerStats.flashlightBattery ?? 100) - delta * 0.55 * battResist);
+      this.playerStats.flashlightBattery = nextBatt;
+      if (nextBatt <= 0 && this.player.isFlashlightOn) {
+        this.player.toggleFlashlight();
+        this.callbacks.onInteractionPrompt('Flashlight battery depleted — use Lithium Power Cell in Inventory.');
+      }
+    }
+
+    // Body Temperature & Weather Exposure
+    const nearCampfire = this.buildingMgr.structures.some(
+      (s) => (s.typeId === 'campfire' || s.typeId === 'perimeter_torch') &&
+        Math.hypot(s.position[0] - this.player.position.x, s.position[2] - this.player.position.z) < 6.0
+    );
+    const thermalCoatBonus = this.playerStats.equippedArmorId === 'thermal_coat' ? 9.0 : 0;
+    const nightChill = this.isNight ? -6.5 : 0;
+    const targetTemp = Math.max(
+      -8,
+      Math.min(46, currentBiome.temperature + (this.lastReportedWeather === 'blizzard' ? -14 : this.lastReportedWeather === 'sandstorm' ? 7 : 0) + nightChill + (nearCampfire ? 14 : 0) + thermalCoatBonus)
+    );
+    this.playerStats.temperature = THREE.MathUtils.damp(this.playerStats.temperature, targetTemp, 0.25, delta);
+    if (!isEarlyPrologue && (this.playerStats.temperature < 5 || this.playerStats.temperature > 42)) {
+      const thermalDmgMult = this.hasPerk('perk_thermal_endurance') ? 0.45 : 1.0;
+      this.damagePlayer(delta * 0.9 * thermalDmgMult);
+    }
+
+    // Toxic Fog / Radiation Hazard Exposure
+    const isUndergroundOrIndoors = this.player.position.y < -2.0 || inApartmentSafe;
+    if (this.lastReportedWeather === 'toxic_fog' && !isUndergroundOrIndoors && !isEarlyPrologue) {
+      const hasGasMask = this.playerStats.equippedMaskId === 'gas_mask';
+      if (!hasGasMask) {
+        this.playerStats.radiationExposure = Math.min(100, (this.playerStats.radiationExposure ?? 0) + delta * 2.8);
+        this.playerStats.infection = Math.min(100, this.playerStats.infection + delta * 1.4);
+      } else {
+        this.playerStats.radiationExposure = Math.max(0, (this.playerStats.radiationExposure ?? 0) - delta * 1.2);
+      }
+    } else {
+      this.playerStats.radiationExposure = Math.max(0, (this.playerStats.radiationExposure ?? 0) - delta * 2.5);
+    }
+
+    if ((this.playerStats.radiationExposure ?? 0) > 20 || this.playerStats.infection > 30) {
+      this.geigerTimer -= delta;
+      if (this.geigerTimer <= 0) {
+        this.geigerTimer = Math.max(0.35, 1.6 - (this.playerStats.radiationExposure ?? 0) * 0.012);
+        soundEngine.playGeigerTick();
+      }
+      if (!isEarlyPrologue && (this.playerStats.radiationExposure ?? 0) > 70) {
+        this.damagePlayer(delta * 1.4);
+      }
+    }
+    if (!isEarlyPrologue && this.playerStats.infection > 55) {
+      this.damagePlayer(delta * 1.1);
+    }
+
+    // Vehicle EV / Base Recharge when parked at powered base
+    const basePowered = this.powerManager.state.isPowered || this.sandboxSettings.infinitePower;
+    if (basePowered) {
+      for (const veh of this.vehicleManager.vehicles.values()) {
+        if (!veh.state.isOccupied && veh.def.fuelType !== 'pedal') {
+          const dv = Math.hypot(veh.state.position[0] - this.buildingMgr.safeZoneCenter.x, veh.state.position[2] - this.buildingMgr.safeZoneCenter.z);
+          if (dv < 55 && veh.state.batteryPercent < 100) {
+            veh.state.batteryPercent = Math.min(100, veh.state.batteryPercent + delta * 1.8);
+          }
+        }
+      }
+    }
+
+    // Stealth Noise Telemetry
+    const movingNow = this.inputState.forward || this.inputState.backward || this.inputState.left || this.inputState.right || (this.inputState.isAnalog && Math.hypot(this.inputState.analogX, this.inputState.analogZ) > 0.15);
+    const hasGhostPerk = this.hasPerk('perk_ghost_step');
+    const noiseTarget = this.player.isSprinting ? 82 : movingNow ? (this.player.isCrouching ? (hasGhostPerk ? 8 : 16) : 44) : 5;
+    this.playerStats.noiseLevel = Math.round(THREE.MathUtils.damp(this.playerStats.noiseLevel ?? 6, noiseTarget, 10, delta));
+
+    // Animate placed doors, flames, radar dishes & electric fences
+    this.buildingMgr.updateAnimations(delta, this.player.position);
+
+    // Tactical Combat Effects (Sentry Turrets, Traps, Molotovs, Flares, Pipe Bombs, Spitter Acid)
+    const turretDmgMult = this.hasPerk('perk_turret_overclock') ? 1.35 : 1.0;
+    this.combatEffects.update(
+      delta,
+      this.player.position,
+      this.zombieMgr.zombies,
+      this.buildingMgr.structures,
+      this.buildingMgr.structureMeshes,
+      basePowered,
+      turretDmgMult,
+      (zId, dmg, kbVec, isTurret) => {
+        const res = this.zombieMgr.damageZombie(zId, dmg, kbVec ? kbVec.length() : 0.8);
+        if (res?.killed) {
+          this.handleZombieKilledEffects(zId, res.xp, false, false, isTurret);
+        }
+      },
+      (dmg) => this.damagePlayer(dmg),
+      (uid) => this.buildingMgr.damageStructure(uid, 9999)
+    );
+
+    // World Events (Supply Drops, Alpha Bosses, Extraction Holdout)
+    this.worldEventsManager.update(
+      delta,
+      this.player.position,
+      this.dayCount,
+      (bossPos) => {
+        if (!this.prologueManager.isCompleted) return;
+        const alreadyBoss = this.zombieMgr.zombies.some((z) => z.isBoss && z.state !== 'dead');
+        if (!alreadyBoss) {
+          this.zombieMgr.spawnZombie('alpha_boss', [bossPos.x, bossPos.y, bossPos.z]);
+          this.callbacks.onInteractionPrompt('ALERT: Mutated Alpha Bio-Boss detected nearby!');
+        }
+      },
+      () => {
+        this.zombieMgr.spawnHordeWave(this.player.position, 5);
+      },
+      () => {
+        this.callbacks.onInteractionPrompt('EXTRACTION SIGNAL CONFIRMED — Rebirth Rescue Ready!');
+        this.callbacks.onExtractionVictory?.();
+      }
+    );
+
     // Companion combat assist against attacking zombies
     if (this.wildlifeManager.companionState && this.wildlifeManager.companionState.state !== 'stay') {
       const nearestZombie = this.zombieMgr.zombies.find((z) => {
@@ -1284,23 +1645,47 @@ export class GameEngine {
       this.uiSyncTimer = 0;
       this.callbacks.onStatsChange({ ...this.playerStats });
       this.callbacks.onTimeChange(this.gameTimeMinutes, this.dayCount, this.isNight, this.isDusk);
+
+      // Boss health bar telemetry
+      const activeBoss = this.zombieMgr.zombies.find(
+        (z) => z.isBoss && z.state !== 'dead' && Math.hypot(z.position[0] - this.player.position.x, z.position[2] - this.player.position.z) < 75
+      );
+      this.callbacks.onBossStatusChange?.(
+        activeBoss ? { name: activeBoss.bossTitle || 'Alpha Mutant', health: activeBoss.health, maxHealth: activeBoss.maxHealth } : null
+      );
+      this.callbacks.onWorldEventUpdate?.({
+        supplyDrop: this.worldEventsManager.getActiveSupplyDrop(),
+        extraction: this.worldEventsManager.getExtractionState(),
+      });
     }
 
-    // 4. Horde Director Waves at Night (only if prologue is completed)
+    // 4. Horde Director Waves at Night (scaled by sandbox zombieDensity + rebirth cycle)
     if (this.isNight && this.prologueManager.isCompleted) {
       this.hordeWaveTimer += delta;
       if (this.hordeWaveTimer >= 35.0) {
         this.hordeWaveTimer = 0;
-        const waveCount = 3 + Math.min(6, this.dayCount * 2);
+        const densityScale = Math.max(0.4, this.sandboxSettings.zombieDensity || 1.0);
+        const rebirthBonus = (this.playerStats.rebirthCount || 0) * 2;
+        const waveCount = Math.round((3 + Math.min(6, this.dayCount * 2) + rebirthBonus) * densityScale);
         this.zombieMgr.spawnHordeWave(this.player.position, waveCount);
       }
     }
 
-    // 5. Update Zombies
+    // 5. Update Zombies (stealth-scaled detection & Spitter acid)
     if (this.zombieMgr.zombies.length > 0) {
-      this.zombieMgr.update(delta, this.player.position, this.buildingMgr, (dmg) => {
-        this.damagePlayer(dmg);
-      });
+      const detectMult = this.player.isCrouching ? (hasGhostPerk ? 0.35 : 0.62) : 1.0;
+      this.zombieMgr.update(
+        delta,
+        this.player.position,
+        this.buildingMgr,
+        (dmg) => {
+          this.damagePlayer(dmg);
+        },
+        detectMult,
+        (origin, target, acidDmg) => {
+          this.combatEffects.spawnAcidSpit(origin, target, acidDmg);
+        }
+      );
     }
 
     // 6. Raycast Interaction Prompt
@@ -1434,7 +1819,7 @@ export class GameEngine {
     this.scene.background = horizonColor;
     if (this.scene.fog instanceof THREE.FogExp2) {
       this.scene.fog.color = horizonColor;
-      this.scene.fog.density = (this.isNight ? 0.014 : 0.0068) * this.fogDensityMultiplier;
+      this.scene.fog.density = (this.isNight ? 0.014 : 0.0068) * this.fogDensityMultiplier * this.weatherFogMultiplier;
     }
 
     this.dirLight.color.copy(sunColor);
@@ -1479,6 +1864,7 @@ export class GameEngine {
         const placed = this.buildingMgr.placeActiveStructure(snapTarget);
         if (placed) {
           soundEngine.playBuildSnap();
+          this.callbacks.onCareerEvent?.({ type: 'structure_built', count: 1 });
           this.updateQuestProgress('build_foundation', placed.typeId === 'wooden_foundation' ? 1 : 0);
           this.updateQuestProgress('build_wall', placed.typeId === 'wooden_wall' ? 1 : 0);
           this.updateQuestProgress('build_gate', placed.typeId === 'wooden_gate' ? 1 : 0);
@@ -1514,36 +1900,60 @@ export class GameEngine {
 
   private performMeleeRaycast() {
     this.raycaster.setFromCamera(this.screenCenter, this.camera);
-    const range = 3.2;
+    const range = 3.4;
 
-    // Check zombies first
-    let hitZombie: { id: string; dist: number } | null = null;
+    // Check zombies first (with stealth backstab + critical headshot + perk multipliers)
+    let hitZombie: { z: ZombieEntity; dist: number } | null = null;
     for (const z of this.zombieMgr.zombies) {
+      if (z.state === 'dead') continue;
       const dx = z.position[0] - this.player.position.x;
       const dz = z.position[2] - this.player.position.z;
       const d = Math.hypot(dx, dz);
       if (d < range) {
         if (!hitZombie || d < hitZombie.dist) {
-          hitZombie = { id: z.id, dist: d };
+          hitZombie = { z, dist: d };
         }
       }
     }
 
     if (hitZombie) {
-      let dmg = 20;
+      const z = hitZombie.z;
+      let dmg = 20 + (this.playerStats.skills.strength - 1) * 4;
       let knockback = 1.5;
       if (this.activeSlotItem) {
-        dmg = this.activeSlotItem.damage || 20;
-        if (this.activeSlotItem.id === 'stun_baton') knockback = 4.0;
+        dmg = (this.activeSlotItem.damage || 20) + (this.playerStats.skills.strength - 1) * 4;
+        if (this.activeSlotItem.id === 'stun_baton') knockback = 4.2;
       }
-      const res = this.zombieMgr.damageZombie(hitZombie.id, dmg, knockback);
+      if (this.hasPerk('perk_iron_strike')) {
+        dmg *= 1.25;
+        knockback *= 2.0;
+      }
+
+      // Stealth backstab if crouched and zombie unaware
+      const isStealth = this.player.isCrouching && z.state !== 'chase' && z.state !== 'attack_player';
+      if (isStealth) dmg *= 2.0;
+
+      // Headshot check via camera pitch aiming near skull elevation
+      const isHeadshot = this.player.pitch > -0.08 && this.player.pitch < 0.35;
+      if (isHeadshot) {
+        const hsMult = this.hasPerk('perk_headhunter') ? 2.15 : 1.75;
+        dmg *= hsMult;
+        soundEngine.playHeadshotPing();
+        if (this.hasPerk('perk_headhunter')) {
+          this.playerStats.stamina = Math.min(this.playerStats.maxStamina, this.playerStats.stamina + 8);
+        }
+      }
+
+      const finalDmg = Math.round(dmg);
+      const hitPos = GameEngine._tmpVecA.set(z.position[0], z.position[1] + (isHeadshot ? 1.55 : 1.15), z.position[2]);
+      this.combatEffects.spawnImpactBurst(hitPos, 'blood', isHeadshot ? 12 : 8);
+      this.spawnWorldDamageNumber(new THREE.Vector3(z.position[0], z.position[1] + 1.75, z.position[2]), finalDmg, isHeadshot, isStealth);
+
+      const res = this.zombieMgr.damageZombie(z.id, finalDmg, knockback);
       if (res) {
         soundEngine.playHurt();
         if (res.killed) {
-          this.addXP(res.xp);
-          // Drop loot (cloth / metal)
-          this.callbacks.onItemCollected('cloth_fabric', 2);
-          if (Math.random() > 0.5) this.callbacks.onItemCollected('nails_bolts', 2);
+          this.handleZombieKilledEffects(z.id, res.xp, isHeadshot, isStealth, false);
         }
       }
       return;
@@ -1577,18 +1987,26 @@ export class GameEngine {
         dmg = 40;
       }
 
+      const burstKind = nearestRes.type === 'tree' ? 'wood' : nearestRes.type === 'metal_scrap' ? 'spark' : 'stone';
+      this.combatEffects.spawnImpactBurst(
+        GameEngine._tmpVecA.set(nearestRes.position[0], nearestRes.position[1] + 1.0, nearestRes.position[2]),
+        burstKind,
+        8
+      );
       const damaged = this.terrain.damageResource(nearestRes.id, dmg);
       if (damaged && damaged.health <= 0) {
-        // Collect yield
+        this.callbacks.onCareerEvent?.({ type: 'resource_harvested', count: 1 });
         const itemDef = ITEMS[damaged.yieldItem];
         if (itemDef) {
-          this.callbacks.onResourceHarvested(damaged, itemDef, damaged.yieldAmount);
-          this.callbacks.onItemCollected(itemDef.id, damaged.yieldAmount);
+          const lootMult = (this.sandboxSettings.lootMultiplier || 1.0) * (this.hasPerk('perk_scrap_recycler') && damaged.yieldItem === 'metal_scrap' ? 1.35 : 1.0);
+          const yieldQty = Math.max(1, Math.round(damaged.yieldAmount * lootMult));
+          this.callbacks.onResourceHarvested(damaged, itemDef, yieldQty);
+          this.callbacks.onItemCollected(itemDef.id, yieldQty);
           this.addXP(15);
           if (damaged.yieldItem === 'wood') {
-            this.updateQuestProgress('gather_wood', damaged.yieldAmount);
+            this.updateQuestProgress('gather_wood', yieldQty);
           } else if (damaged.yieldItem === 'stone') {
-            this.updateQuestProgress('gather_stone', damaged.yieldAmount);
+            this.updateQuestProgress('gather_stone', yieldQty);
           }
         }
       }
@@ -1603,6 +2021,11 @@ export class GameEngine {
         if (Math.hypot(dx, dz) < 3.2) {
           if (this.buildingMgr.repairStructure(s.uid, 250)) {
             soundEngine.playBuildSnap();
+            this.combatEffects.spawnImpactBurst(
+              GameEngine._tmpVecA.set(s.position[0], s.position[1] + 1.0, s.position[2]),
+              'spark',
+              6
+            );
           }
           break;
         }
@@ -1612,28 +2035,80 @@ export class GameEngine {
 
   private performRangedShot() {
     this.raycaster.setFromCamera(this.screenCenter, this.camera);
-    const range = 50.0;
+    const range = 55.0;
+    const lookDir = GameEngine._camDir;
+    this.camera.getWorldDirection(lookDir);
 
-    // Check hit on closest zombie
-    let nearestZombie: { id: string; dist: number } | null = null;
+    this.player.triggerRecoilKick(1.0);
+    const muzzleOrigin = this.camera.position.clone().addScaledVector(lookDir, 0.9);
+    this.combatEffects.spawnImpactBurst(muzzleOrigin, 'muzzle', 4);
+
+    // Visual tracer bolt
+    this.combatEffects.spawnTracer(
+      muzzleOrigin,
+      lookDir,
+      'bolt',
+      65
+    );
+
+    const activeId = this.activeSlotItem?.id || 'pulse_crossbow';
+    const mods = this.weaponMods[activeId] || [];
+    const hasSuppressor = mods.includes('suppressor_mod');
+    const hasExtendedMag = mods.includes('extended_mag_mod');
+    const hasReflex = mods.includes('reflex_sight_mod');
+
+    // Noise alert unless suppressed
+    if (!hasSuppressor) {
+      this.playerStats.noiseLevel = 92;
+    }
+
+    // Check line-of-fire zombie alignment
+    let bestHit: { z: ZombieEntity; dist: number; hitHeight: number } | null = null;
     for (const z of this.zombieMgr.zombies) {
-      const dx = z.position[0] - this.player.position.x;
-      const dz = z.position[2] - this.player.position.z;
-      const d = Math.hypot(dx, dz);
-      if (d < range) {
-        if (!nearestZombie || d < nearestZombie.dist) {
-          nearestZombie = { id: z.id, dist: d };
+      if (z.state === 'dead') continue;
+      const toZ = new THREE.Vector3(
+        z.position[0] - this.camera.position.x,
+        z.position[1] + 1.15 - this.camera.position.y,
+        z.position[2] - this.camera.position.z
+      );
+      const proj = toZ.dot(lookDir);
+      if (proj <= 0.5 || proj > range) continue;
+      const perpSq = toZ.lengthSq() - proj * proj;
+      const hitRadius = z.isBoss ? 1.65 : z.type === 'brute' || z.type === 'juggernaut' ? 1.25 : 0.9;
+      if (perpSq <= hitRadius * hitRadius) {
+        if (!bestHit || proj < bestHit.dist) {
+          const rayYAtZ = this.camera.position.y + lookDir.y * proj;
+          bestHit = { z, dist: proj, hitHeight: rayYAtZ - z.position[1] };
         }
       }
     }
 
-    if (nearestZombie) {
-      const res = this.zombieMgr.damageZombie(nearestZombie.id, 65, 3.0);
+    if (bestHit) {
+      const { z, hitHeight } = bestHit;
+      let dmg = (this.activeSlotItem?.damage || 65) * (hasExtendedMag ? 1.15 : 1.0);
+      const isStealth = this.player.isCrouching && z.state !== 'chase' && z.state !== 'attack_player';
+      if (isStealth) dmg *= 1.85;
+
+      const isHeadshot = hitHeight >= (z.isBoss ? 2.15 : 1.38);
+      if (isHeadshot) {
+        const hsBonus = (this.hasPerk('perk_headhunter') ? 2.15 : 1.75) * (hasReflex ? 1.25 : 1.0);
+        dmg *= hsBonus;
+        soundEngine.playHeadshotPing();
+      }
+
+      const finalDmg = Math.round(dmg);
+      this.combatEffects.spawnImpactBurst(
+        GameEngine._tmpVecA.set(z.position[0], z.position[1] + (isHeadshot ? 1.55 : 1.15), z.position[2]),
+        'blood',
+        isHeadshot ? 14 : 9
+      );
+      this.spawnWorldDamageNumber(new THREE.Vector3(z.position[0], z.position[1] + 1.8, z.position[2]), finalDmg, isHeadshot, isStealth);
+
+      const res = this.zombieMgr.damageZombie(z.id, finalDmg, 3.0);
       if (res) {
         soundEngine.playHurt();
         if (res.killed) {
-          this.addXP(res.xp);
-          this.callbacks.onItemCollected('cloth_fabric', 2);
+          this.handleZombieKilledEffects(z.id, res.xp, isHeadshot, isStealth, false);
         }
       }
     }
@@ -2214,12 +2689,55 @@ export class GameEngine {
           soundEngine.playUIClick();
           this.callbacks.onOpenCrafting('workbench');
           return;
+        } else if (struct.typeId === 'salvage_bench') {
+          soundEngine.playUIClick();
+          this.callbacks.onOpenBlueprintModal?.();
+          return;
+        } else if (struct.typeId === 'evacuation_beacon') {
+          const ext = this.worldEventsManager.getExtractionState();
+          if (!ext.active && !ext.completed) {
+            this.worldEventsManager.startExtractionHoldout(struct.uid);
+            this.callbacks.onInteractionPrompt('EVACUATION BEACON ACTIVE: Hold perimeter for 90s!');
+          } else if (ext.completed) {
+            this.callbacks.onExtractionVictory?.();
+          }
+          return;
         } else if (struct.typeId === 'campfire') {
           soundEngine.playUIClick();
           this.callbacks.onOpenCrafting('campfire');
           return;
         }
       }
+    }
+
+    // Check Active World Supply Drop
+    const activeDrop = this.worldEventsManager.getActiveSupplyDrop();
+    if (activeDrop && activeDrop.landed && !activeDrop.looted) {
+      const dDrop = Math.hypot(activeDrop.position[0] - this.player.position.x, activeDrop.position[2] - this.player.position.z);
+      if (dDrop < 4.2 && this.worldEventsManager.markSupplyDropLooted()) {
+        soundEngine.playBuildSnap();
+        this.callbacks.onItemCollected('medkit', 2);
+        this.callbacks.onItemCollected('crossbow_bolts', 18);
+        this.callbacks.onItemCollected('electronic_parts', 6);
+        this.callbacks.onItemCollected('antibiotic_shot', 1);
+        this.callbacks.onItemCollected('boss_core', 1);
+        this.addXP(120);
+        this.callbacks.onInteractionPrompt('Looted Skyline Air-Drop Crate! +Medkits, +Bolts, +Circuits, +Bio-Core');
+        return;
+      }
+    }
+
+    // Check Corpse Death Bag recovery
+    const bagPos = this.combatEffects.getDeathBagPosition();
+    if (bagPos && this.deathBagData && this.player.position.distanceTo(bagPos) < 3.6) {
+      for (const slot of this.deathBagData.items) {
+        if (slot) this.callbacks.onItemCollected(slot.item.id, slot.count);
+      }
+      this.deathBagData = null;
+      this.combatEffects.setDeathBag(null);
+      soundEngine.playBuildSnap();
+      this.callbacks.onInteractionPrompt('Recovered supplies from Corpse Recovery Backpack!');
+      return;
     }
 
     // Check supply crate
@@ -2320,9 +2838,12 @@ export class GameEngine {
   }
 
   public logSpeciesDossier(agentId: string) {
-    const creature = this.wildlifeManager.getNearestCreature(this.player.position, 35.0);
+    const matched = this.wildlifeManager.creatures.find((c) => c.id === agentId);
+    const creature = matched || this.wildlifeManager.getNearestCreature(this.player.position, 35.0);
     if (!creature) return;
     this.addXP(50);
+    this.callbacks.onSpeciesScanned?.(creature.species.id);
+    this.callbacks.onCareerEvent?.({ type: 'species_logged', count: 1 });
     soundEngine.playDawnVictoryChime();
     this.callbacks.onInteractionPrompt(`Logged ${creature.species.name} (Gen ${creature.genome.generation}) in Field Chronicle! +50 XP`);
     this.updateQuestProgress('study_wildlife', 1);
@@ -2711,11 +3232,38 @@ export class GameEngine {
         } else if (struct.typeId === 'workbench') {
           this.callbacks.onInteractionPrompt('[E] Use Artisan Workbench');
           return;
+        } else if (struct.typeId === 'salvage_bench') {
+          this.callbacks.onInteractionPrompt('[E] Gear Salvage & Blueprint Terminal');
+          return;
+        } else if (struct.typeId === 'evacuation_beacon') {
+          const ext = this.worldEventsManager.getExtractionState();
+          this.callbacks.onInteractionPrompt(
+            ext.active
+              ? `Evacuation Signal Active (${Math.ceil(ext.remainingSeconds)}s remaining)`
+              : ext.completed
+                ? '[E] Complete Evacuation / Trigger NG+ Rebirth'
+                : '[E] Activate Rebirth Evacuation Radio Beacon'
+          );
+          return;
         } else if (struct.typeId === 'campfire') {
           this.callbacks.onInteractionPrompt('[E] Cook / Boil Water at Campfire');
           return;
         }
       }
+    }
+
+    // Supply Drop & Death Bag Prompts
+    const activeDropPrompt = this.worldEventsManager.getActiveSupplyDrop();
+    if (activeDropPrompt && activeDropPrompt.landed && !activeDropPrompt.looted) {
+      if (Math.hypot(activeDropPrompt.position[0] - this.player.position.x, activeDropPrompt.position[2] - this.player.position.z) < 4.2) {
+        this.callbacks.onInteractionPrompt('[E] Loot Skyline Air-Drop Supply Crate');
+        return;
+      }
+    }
+    const bagPosPrompt = this.combatEffects.getDeathBagPosition();
+    if (bagPosPrompt && this.player.position.distanceTo(bagPosPrompt) < 3.6) {
+      this.callbacks.onInteractionPrompt('[E] Recover Loot from Corpse Backpack');
+      return;
     }
 
     // Check resource prompt
@@ -2768,17 +3316,28 @@ export class GameEngine {
   public damagePlayer(amount: number) {
     // Reject malformed damage so NaN/undefined/stale values cannot trigger a false defeat.
     if (this.gameMode === 'creative' || !Number.isFinite(amount) || amount <= 0 || this.gameOverTriggered) return;
+    const armorMult = this.playerStats.equippedArmorId === 'scrap_armor_vest' ? 0.65 : 1.0;
+    const effectiveAmount = amount * armorMult;
     const maxHealth = Number.isFinite(this.playerStats.maxHealth) && this.playerStats.maxHealth > 0 ? this.playerStats.maxHealth : 100;
     const currentHealth = Number.isFinite(this.playerStats.health) ? this.playerStats.health : maxHealth;
     this.playerStats.maxHealth = maxHealth;
-    this.playerStats.health = THREE.MathUtils.clamp(currentHealth - amount, 0, maxHealth);
+    this.playerStats.health = THREE.MathUtils.clamp(currentHealth - effectiveAmount, 0, maxHealth);
     soundEngine.playHurt();
     this.callbacks.onStatsChange({ ...this.playerStats });
 
-    // This callback is PLAYER incapacitation only; no sanctuary-integrity defeat
-    // system exists in this project version, so never report the compound as fallen.
     if (this.playerStats.health <= 0 && !this.gameOverTriggered) {
       this.gameOverTriggered = true;
+      // Drop Corpse Death Bag at incapacitation spot if not permadeath
+      if (!this.sandboxSettings.permadeath) {
+        const invSnapshot = (this.callbacks.onGetInventory?.() || []).filter(Boolean) as InventorySlot[];
+        if (invSnapshot.length > 0) {
+          this.deathBagData = {
+            position: [this.player.position.x, this.player.position.y, this.player.position.z],
+            items: invSnapshot.slice(0, 12),
+          };
+          this.combatEffects.setDeathBag(this.deathBagData.position);
+        }
+      }
       console.warn('[GameOver] reason=player_health_depleted', { day: this.prologueManager.day, health: this.playerStats.health });
       this.callbacks.onGameOver();
     }
@@ -3064,6 +3623,222 @@ export class GameEngine {
     this.aiTrainManager?.toggleSitOnSeat();
   }
 
+  public hasPerk(perkId: string): boolean {
+    return Boolean(this.playerStats.perkUnlocks?.includes(perkId));
+  }
+
+  public unlockTalentPerk(perkId: string, cost: number): boolean {
+    if (this.hasPerk(perkId)) return false;
+    if (this.playerStats.skillPoints < cost) return false;
+    this.playerStats.skillPoints -= cost;
+    this.playerStats.perkUnlocks = [...(this.playerStats.perkUnlocks || []), perkId];
+    soundEngine.playDawnVictoryChime();
+    this.callbacks.onStatsChange({ ...this.playerStats });
+    return true;
+  }
+
+  public setSandboxSettings(settings: Partial<SandboxSettings>) {
+    this.sandboxSettings = { ...this.sandboxSettings, ...settings };
+    this.weatherManager.setIntensityMultiplier(this.sandboxSettings.weatherIntensity);
+  }
+
+  public applyWeaponMod(weaponId: string, modId: WeaponModId): boolean {
+    const existing = this.weaponMods[weaponId] || [];
+    if (existing.includes(modId)) return false;
+    this.weaponMods[weaponId] = [...existing, modId];
+    soundEngine.playBuildSnap();
+    this.callbacks.onInteractionPrompt(`Installed ${modId.replace('_mod', '').replace('_', ' ')} on ${weaponId}!`);
+    return true;
+  }
+
+  public throwTacticalItem(kind: 'molotov_cocktail' | 'noise_flare' | 'pipe_bomb') {
+    const dir = GameEngine._camDir;
+    this.camera.getWorldDirection(dir);
+    const dist = 10.5;
+    const lx = this.player.position.x + dir.x * dist;
+    const lz = this.player.position.z + dir.z * dist;
+    const ly = getTerrainHeight(lx, lz, this.terrain.seed);
+    this.combatEffects.spawnThrowableEffect(kind, new THREE.Vector3(lx, ly, lz));
+  }
+
+  public attemptFishing() {
+    const terrainY = getTerrainHeight(this.player.position.x, this.player.position.z, this.terrain.seed);
+    const riverX = 50 + Math.sin(this.player.position.z * 0.004) * 45;
+    const distToRiver = Math.abs(this.player.position.x - riverX);
+    if (terrainY < 1.2 || distToRiver < 28 || this.player.isSwimming) {
+      soundEngine.playFishingSplash();
+      this.callbacks.onOpenFishingModal?.();
+    } else {
+      this.callbacks.onInteractionPrompt('Move closer to the river or shoreline water to cast your line.');
+    }
+  }
+
+  public honkActiveVehicleHorn() {
+    if (this.vehicleManager.vehicleState.isOccupied) {
+      soundEngine.playVehicleHorn();
+    }
+  }
+
+  public triggerRebirthNGPlus() {
+    this.playerStats.rebirthCount = (this.playerStats.rebirthCount || 0) + 1;
+    this.dayCount = 1;
+    this.gameTimeMinutes = 480;
+    this.playerStats.health = this.playerStats.maxHealth;
+    this.playerStats.hunger = 100;
+    this.playerStats.thirst = 100;
+    this.playerStats.infection = 0;
+    this.playerStats.radiationExposure = 0;
+    this.worldEventsManager.resetExtractionState();
+    this.zombieMgr.clearAllZombies();
+    this.player.position.set(-29.8, 0.25, 41.8);
+    this.callbacks.onStatsChange({ ...this.playerStats });
+    this.callbacks.onInteractionPrompt(`REBIRTH NG+ CYCLE ${this.playerStats.rebirthCount} STARTED — Threats stronger, loot & perks retained!`);
+  }
+
+  private spawnWorldDamageNumber(worldPos: THREE.Vector3, amount: number, isHeadshot?: boolean, isStealth?: boolean) {
+    const projected = worldPos.clone().project(this.camera);
+    if (projected.z > 1) return;
+    const screenX = Math.max(10, Math.min(90, (projected.x * 0.5 + 0.5) * 100));
+    const screenY = Math.max(12, Math.min(82, (-projected.y * 0.5 + 0.5) * 100));
+    this.callbacks.onHitEvent?.({ amount, isHeadshot, isStealth, screenX, screenY });
+  }
+
+  private handleZombieKilledEffects(
+    zombieId: string,
+    xp: number,
+    isHeadshot: boolean,
+    isStealth: boolean,
+    isTurret?: boolean
+  ) {
+    const z = this.zombieMgr.zombies.find((item) => item.id === zombieId);
+    const ks = this.playerStats.killStats || { total: 0, headshots: 0, bosses: 0, stealth: 0 };
+    ks.total += 1;
+    if (isHeadshot) ks.headshots += 1;
+    if (isStealth) ks.stealth += 1;
+    if (z?.isBoss) ks.bosses += 1;
+    this.playerStats.killStats = ks;
+
+    this.addXP(xp);
+    this.callbacks.onCareerEvent?.({ type: 'zombie_killed', count: 1 });
+    this.callbacks.onBountyProgress?.('kill_any', 1);
+    if (isHeadshot) this.callbacks.onBountyProgress?.('kill_headshot', 1);
+    if (z?.type === 'brute' || z?.type === 'juggernaut') this.callbacks.onBountyProgress?.('kill_brute', 1);
+    if (z?.isBoss) {
+      this.callbacks.onBountyProgress?.('kill_boss', 1);
+      this.callbacks.onItemCollected('boss_core', 1);
+      this.callbacks.onItemCollected('electronic_parts', 6);
+      this.callbacks.onItemCollected('antibiotic_shot', 1);
+      this.callbacks.onInteractionPrompt('ALPHA MUTANT DEFEATED! Collected Alpha Bio-Core!');
+    } else if (!isTurret) {
+      this.callbacks.onItemCollected('cloth_fabric', 2);
+      if (Math.random() > 0.5) this.callbacks.onItemCollected('nails_bolts', 2);
+      if (Math.random() > 0.72) this.callbacks.onItemCollected('raw_meat', 1);
+    }
+  }
+
+  public getBaseState(): BaseState {
+    return {
+      level: this.baseLevel,
+      power: { ...this.powerManager.state },
+      water: { ...this.waterManager.state },
+      food: { ...this.foodManager.state },
+      security: {
+        ...this.securityManager.state,
+        cctvChannels: this.securityManager.state.cctvChannels.map((c) => ({ ...c })),
+      },
+      npcs: this.npcSettlementManager.npcs.map((n) => ({ ...n })),
+      research: this.researchManager.technologies.map((t) => ({ ...t })),
+      vehicle: { ...this.vehicleManager.vehicleState },
+      overallHealth: 100,
+    };
+  }
+
+  public toggleBaseGenerator(): void {
+    const running = this.powerManager.toggleGenerator();
+    this.callbacks.onInteractionPrompt(
+      running
+        ? 'Backup Diesel Generator: STARTED (+22 kW Output)'
+        : this.powerManager.state.generatorFuel <= 0
+        ? 'Backup Diesel Generator: OUT OF FUEL'
+        : 'Backup Diesel Generator: STANDBY'
+    );
+  }
+
+  public toggleBaseGateLock(): void {
+    const locked = this.securityManager.toggleGateLock();
+    const apt = this.prologueManager?.townMgr?.apartmentBuilding;
+    if (apt && apt.compoundGateOpen && locked) {
+      apt.toggleCompoundGate();
+    }
+    this.callbacks.onInteractionPrompt(
+      locked ? 'Perimeter Sanctuary Gate: LOCKED' : 'Perimeter Sanctuary Gate: UNLOCKED'
+    );
+  }
+
+  public toggleBaseAlarm(): void {
+    const armed = this.securityManager.toggleAlarmArm();
+    this.callbacks.onInteractionPrompt(armed ? 'Perimeter Defense Alarm: ARMED' : 'Perimeter Defense Alarm: DISARMED');
+  }
+
+  public assignBaseNpcRole(npcId: string, role: NPCRole): void {
+    this.npcSettlementManager.assignRole(npcId, role);
+    this.callbacks.onInteractionPrompt(`Reassigned settlement survivor to ${role.toUpperCase()} duty.`);
+  }
+
+  public unlockBaseResearch(techId: string): void {
+    if (this.researchManager.unlockTech(techId)) {
+      if (techId === 'uv_water_filtration') {
+        this.waterManager.state.purificationRate *= 2;
+      } else if (techId === 'ev_overclocking') {
+        this.powerManager.state.batteryCapacityKwh += 40;
+      }
+      this.addXP(75);
+      this.callbacks.onInteractionPrompt('Research Blueprint Unlocked! +75 XP');
+    }
+  }
+
+  public upgradeBaseLevel(): void {
+    if (this.baseLevel >= 4) return;
+    this.baseLevel = (this.baseLevel + 1) as BaseLevel;
+    this.powerManager.state.batteryCapacityKwh += this.baseLevel === 3 ? 50 : 100;
+    this.waterManager.state.maxCapacityLiters += this.baseLevel === 3 ? 400 : 800;
+    this.addXP(200);
+    this.callbacks.onInteractionPrompt(`Sanctuary Upgraded to Level ${this.baseLevel} Estate! +200 XP`);
+  }
+
+  public drawBaseCleanWater(): void {
+    if (this.waterManager.drawCleanWater(1)) {
+      this.callbacks.onItemCollected('clean_water', 1);
+      this.callbacks.onInteractionPrompt('Bottled 1 Purified Water Canteen from Sanctuary Filtration!');
+    } else {
+      this.callbacks.onInteractionPrompt('Purified water reserves empty — wait for filtration cycle.');
+    }
+  }
+
+  public withdrawBaseRation(): void {
+    if (this.foodManager.withdrawRation()) {
+      this.callbacks.onItemCollected('canned_beans', 1);
+      this.callbacks.onInteractionPrompt('Withdrew 1 Survival Ration from Cold Storage.');
+    } else {
+      this.callbacks.onInteractionPrompt('Cold storage food rations depleted.');
+    }
+  }
+
+  public captureScreenshotDataUrl(): string | null {
+    try {
+      this.updateLocalLightBudget(true);
+      if (this.usePostProcessing && this.composer) {
+        this.composer.render();
+      } else {
+        this.renderer.render(this.scene, this.camera);
+      }
+      return this.renderer.domElement.toDataURL('image/png');
+    } catch (err) {
+      console.warn('Screenshot capture failed:', err);
+      return null;
+    }
+  }
+
   public triggerAutoSave(slotId: string = 'autosave', slotName?: string) {
     const isStory = this.gameMode === 'story';
     const storyData = this.storylineManager?.exportCheckpoint();
@@ -3108,27 +3883,23 @@ export class GameEngine {
       nightHordeCountDefeated: this.nightHordesDefeated,
       ...this.worldPersistence.exportSaveData(),
       rescuedSurvivorIds: this.rescueManager.exportRescued(),
-      baseState: {
-        level: 2,
-        power: { solarProductionKw: 15, generatorProductionKw: 25, totalProductionKw: 40, consumptionKw: 12, batteryCurrentKwh: 45, batteryCapacityKwh: 80, isGeneratorRunning: false, generatorFuel: 80, isPowered: true },
-        water: { storageLiters: 450, maxCapacityLiters: 1000, rainCatchmentRate: 20, purificationRate: 15, cleanWaterLiters: 400 },
-        food: { refrigeratorRations: 30, pantryRations: 40, isRefrigerated: true, daysOfFoodRemaining: 14 },
-        security: { isAlarmArmed: false, isAlarmTriggered: false, activeGateLocked: false, nearbyZombiesDetected: 0, cctvChannels: [] },
-        npcs: [],
-        research: [],
-        vehicle: { ...this.vehicleManager.vehicleState },
-        overallHealth: 100,
-      },
+      baseState: this.getBaseState(),
       tamedCompanion: this.wildlifeManager.companionState,
       prologueState: this.prologueManager?.exportSaveData(),
       storyCheckpoint: storyData,
       unlockedFacilities: storyData?.unlockedFacilities,
+      weatherType: this.lastReportedWeather,
+      sandboxSettings: this.sandboxSettings,
+      deathBag: this.deathBagData,
+      weaponMods: this.weaponMods,
+      rebirthCount: this.playerStats.rebirthCount,
       trainSaveState: this.aiTrainManager?.getTrainSaveState(),
       railwayNPCSaveState: this.aiTrainManager?.npcManager.getSaveState(),
       activeRailwayTicket: this.activeRailwayTicket,
     };
 
     saveGameToSlot(saveData);
+    this.callbacks.onCareerEvent?.({ type: 'save_created', count: 1 });
   }
 
   public dispose() {
@@ -3163,6 +3934,9 @@ export class GameEngine {
     this.zombieMgr.dispose();
     this.objectiveNavigator.dispose();
     this.soundscapeManager.dispose();
+    this.weatherManager?.dispose();
+    this.combatEffects?.dispose();
+    this.worldEventsManager?.dispose();
     this.aiTrainManager?.dispose();
     try {
       this.atmosphericSky?.dispose();
@@ -3172,6 +3946,7 @@ export class GameEngine {
       this.pmremGenerator?.dispose();
     } catch {}
     try {
+      (this.cinematicPass as any)?.dispose?.();
       this.bloomPass?.dispose();
       this.composer?.dispose();
     } catch {}

@@ -36,6 +36,8 @@ export class AtmosphericSky {
         sunSize: { value: 0.035 },
         isNight: { value: 0.0 },
         isBloodMoon: { value: 0.0 },
+        weatherOvercast: { value: 0.0 },
+        lightningFlash: { value: 0.0 },
         time: { value: 0.0 },
       },
       vertexShader: `
@@ -58,6 +60,8 @@ export class AtmosphericSky {
         uniform float sunSize;
         uniform float isNight;
         uniform float isBloodMoon;
+        uniform float weatherOvercast;
+        uniform float lightningFlash;
         uniform float time;
 
         varying vec3 vWorldPosition;
@@ -79,9 +83,9 @@ export class AtmosphericSky {
           float v = 0.0;
           float a = 0.5;
           mat2 rot = mat2(0.80, 0.60, -0.60, 0.80);
-          for (int i = 0; i < 4; i++) {
+          for (int i = 0; i < 5; i++) {
             v += a * noise(p);
-            p = rot * p * 2.04 + vec2(1.7, 9.2);
+            p = rot * p * 2.03 + vec2(1.7, 9.2);
             a *= 0.5;
           }
           return v;
@@ -93,40 +97,44 @@ export class AtmosphericSky {
           vec3 sDir = normalize(sunPosition);
           float sunCos = dot(dir, sDir);
 
-          // 1. Atmospheric Rayleigh + Horizon Haze Gradient
+          // 1. Atmospheric Rayleigh + Horizon Haze Gradient (darkens realistically under storm overcast)
+          vec3 overcastTint = mix(vec3(0.32, 0.37, 0.42), vec3(0.05, 0.07, 0.11), isNight);
+          vec3 effTop = mix(topColor, overcastTint * 0.72, weatherOvercast * 0.85);
+          vec3 effHor = mix(horizonColor, overcastTint * 1.15, weatherOvercast * 0.78);
           vec3 sky;
           if (height > 0.0) {
             float hFactor = clamp(height * 1.9, 0.0, 1.0);
-            sky = mix(horizonColor, topColor, pow(hFactor, 0.58));
+            sky = mix(effHor, effTop, pow(hFactor, 0.58));
           } else {
-            sky = mix(horizonColor, bottomColor, clamp(-height * 3.8, 0.0, 1.0));
+            sky = mix(effHor, bottomColor, clamp(-height * 3.8, 0.0, 1.0));
           }
 
           // Azimuthal horizon glow toward the sun during golden hour & dawn
-          float sunAzimuthGlow = pow(max(0.0, sunCos), 3.0) * exp(-abs(height) * 5.2);
+          float sunAzimuthGlow = pow(max(0.0, sunCos), 3.0) * exp(-abs(height) * 5.2) * (1.0 - weatherOvercast * 0.85);
           sky += horizonColor * sunAzimuthGlow * (1.0 - isNight) * 0.35;
 
           // Subtle Milky Way star-dust band at night
-          if (isNight > 0.05) {
+          if (isNight > 0.05 && weatherOvercast < 0.7) {
             float mwCoord = dir.x * 0.68 + dir.y * 0.45 - dir.z * 0.58;
             float mwBand = exp(-mwCoord * mwCoord * 14.0) * clamp(height * 3.0, 0.0, 1.0);
             float mwNebula = fbm(dir.xz * 3.2 + dir.xy * 1.9);
             vec3 mwColor = mix(vec3(0.05, 0.08, 0.16), vec3(0.16, 0.04, 0.07), isBloodMoon);
-            sky += mwColor * mwBand * (0.4 + mwNebula * 0.9) * isNight;
+            sky += mwColor * mwBand * (0.4 + mwNebula * 0.9) * isNight * (1.0 - weatherOvercast);
           }
 
           // 2. Solar & Lunar Discs + Mie Forward-Scattering Halo
+          float clearVisibility = 1.0 - weatherOvercast * 0.88;
           if (isNight < 0.5) {
-            float mieWide = pow(max(0.0, sunCos), 8.0) * 0.22;
-            float sunGlow = pow(max(0.0, sunCos), 42.0) * 0.72;
-            float sunDisc = smoothstep(1.0 - sunSize * 0.013, 1.0 - sunSize * 0.0025, sunCos) * 4.5;
-            sky += (sunColor * sunDisc) + (sunColor * sunGlow) + (horizonColor * mieWide);
+            float mieWide = pow(max(0.0, sunCos), 7.0) * 0.25 * (1.0 - weatherOvercast * 0.65);
+            float sunGlow = pow(max(0.0, sunCos), 38.0) * 0.78 * clearVisibility;
+            float sunDisc = smoothstep(1.0 - sunSize * 0.013, 1.0 - sunSize * 0.0025, sunCos) * 4.5 * clearVisibility;
+            sky += (sunColor * sunDisc) + (sunColor * sunGlow) + (effHor * mieWide);
           } else {
             vec3 mDir = -sDir;
             float moonCos = dot(dir, mDir);
-            float moonGlow = pow(max(0.0, moonCos), 28.0) * 0.42;
+            float moonGlow = pow(max(0.0, moonCos), 28.0) * 0.45 * clearVisibility;
             float moonRadius = sunSize * 0.017;
-            float moonDisc = smoothstep(1.0 - moonRadius, 1.0 - sunSize * 0.004, moonCos) * 2.6;
+            float moonDisc = smoothstep(1.0 - moonRadius, 1.0 - sunSize * 0.004, moonCos) * 2.6 * clearVisibility;
 
             if (moonCos > 1.0 - moonRadius) {
               float mare = fbm(dir.xy * 55.0);
@@ -138,30 +146,37 @@ export class AtmosphericSky {
             sky += (activeMoonColor * moonDisc) + (activeMoonColor * moonGlow * 0.85);
           }
 
-          // 3. Two-Layer Drifting Volumetric Clouds with Sunlit Silver Lining
-          if (height > 0.03) {
-            float horizonFade = smoothstep(0.03, 0.24, height);
-            vec2 projUV = dir.xz / (height + 0.18);
-            vec2 cloudUV1 = projUV * 0.62 + vec2(time * 0.0028, time * 0.0016);
-            vec2 cloudUV2 = projUV * 1.35 + vec2(time * 0.0044, -time * 0.0012);
+          // 3. Two-Layer Drifting Volumetric Clouds with Sunlit Silver Lining & Storm Anvil Shading
+          if (height > 0.025) {
+            float horizonFade = smoothstep(0.025, 0.24, height);
+            vec2 projUV = dir.xz / (height + 0.16);
+            vec2 cloudUV1 = projUV * 0.58 + vec2(time * 0.0030, time * 0.0017);
+            vec2 cloudUV2 = projUV * 1.42 + vec2(time * 0.0048, -time * 0.0014);
 
             float density1 = fbm(cloudUV1);
             float density2 = fbm(cloudUV2);
-            float cloudShape = density1 * 0.72 + density2 * 0.28;
-            float cloudMask = smoothstep(0.47, 0.74, cloudShape);
+            float cloudShape = density1 * 0.70 + density2 * 0.30 + weatherOvercast * 0.24;
+            float cloudMask = smoothstep(0.46 - weatherOvercast * 0.16, 0.74 - weatherOvercast * 0.12, cloudShape);
 
-            // Sunward edge scattering for realistic cloud lighting
-            float sunSilver = pow(max(0.0, sunCos), 6.0) * (1.0 - isNight);
-            float cloudLight = clamp(0.45 + (density1 - density2) * 0.85 + sunSilver * 0.55, 0.25, 1.15);
+            // Sunward edge scattering + cloud-base self-shadowing
+            float sunSilver = pow(max(0.0, sunCos), 6.0) * (1.0 - isNight) * (1.0 - weatherOvercast * 0.6);
+            float cloudLight = clamp(0.45 + (density1 - density2) * 0.92 + sunSilver * 0.55 - weatherOvercast * 0.28, 0.18, 1.18);
 
             vec3 brightCloud = mix(vec3(1.0, 0.99, 0.97), sunColor, 0.25 + sunSilver * 0.45);
-            vec3 shadowCloud = mix(horizonColor * 0.72, topColor * 0.88, 0.35);
+            brightCloud = mix(brightCloud, vec3(0.42, 0.46, 0.52), weatherOvercast * 0.75);
+            vec3 shadowCloud = mix(effHor * 0.68, effTop * 0.85, 0.42);
             vec3 dayCloudColor = mix(shadowCloud, brightCloud, clamp(cloudLight, 0.0, 1.0));
 
             vec3 nightCloudColor = mix(vec3(0.05, 0.07, 0.12), vec3(0.24, 0.04, 0.06), isBloodMoon);
             vec3 cloudColor = mix(dayCloudColor, nightCloudColor, isNight);
 
-            sky = mix(sky, cloudColor, cloudMask * horizonFade * 0.84);
+            // Internal sheet lightning illuminating thick storm cloud ridges
+            if (lightningFlash > 0.01) {
+              float boltCell = pow(max(0.0, density1 - 0.35), 1.4);
+              cloudColor += vec3(0.75, 0.86, 1.0) * lightningFlash * boltCell * 1.85;
+            }
+
+            sky = mix(sky, cloudColor, cloudMask * horizonFade * mix(0.84, 0.96, weatherOvercast));
           }
 
           gl_FragColor = vec4(sky, 1.0);
@@ -220,6 +235,14 @@ export class AtmosphericSky {
   }
 
   /**
+   * Updates weather overcast cloud thickness and storm lightning flash.
+   */
+  public setWeatherState(overcast: number, lightningFlash: number) {
+    this.skyMaterial.uniforms.weatherOvercast.value = THREE.MathUtils.clamp(overcast, 0, 1);
+    this.skyMaterial.uniforms.lightningFlash.value = Math.max(0, lightningFlash);
+  }
+
+  /**
    * Updates sky colors, sun disc angle, and star brightness according to real-time day/night simulation.
    */
   public update(
@@ -238,6 +261,7 @@ export class AtmosphericSky {
     uniforms.sunPosition.value.copy(this.sunLight.position);
 
     const hour = (timeMinutes % 1440) / 60;
+    const overcastVis = 1.0 - (uniforms.weatherOvercast.value as number) * 0.85;
 
     // Atmospheric Rayleigh/Mie transitions
     if (hour >= 5.5 && hour < 8.0) {
@@ -249,7 +273,7 @@ export class AtmosphericSky {
       uniforms.sunColor.value.setRGB(1.0, 0.88, 0.6);
       uniforms.isNight.value = 0.0;
       uniforms.isBloodMoon.value = 0.0;
-      (this.starsPoints.material as THREE.PointsMaterial).opacity = Math.max(0, 1.0 - t * 1.5);
+      (this.starsPoints.material as THREE.PointsMaterial).opacity = Math.max(0, 1.0 - t * 1.5) * overcastVis;
     } else if (hour >= 8.0 && hour < 17.0) {
       // Crisp Daylight: Rich cobalt blue zenith, soft pale horizon
       uniforms.topColor.value.setRGB(0.12, 0.44, 0.88);
@@ -268,7 +292,7 @@ export class AtmosphericSky {
       uniforms.sunColor.value.setRGB(1.0, 0.45, 0.15);
       uniforms.isNight.value = t > 0.6 ? 1.0 : 0.0;
       uniforms.isBloodMoon.value = isBloodMoon ? 1.0 : 0.0;
-      (this.starsPoints.material as THREE.PointsMaterial).opacity = Math.max(0, (t - 0.5) * 2.0);
+      (this.starsPoints.material as THREE.PointsMaterial).opacity = Math.max(0, (t - 0.5) * 2.0) * overcastVis;
     } else {
       // Night / Midnight / Blood Moon
       if (isBloodMoon) {
@@ -284,7 +308,7 @@ export class AtmosphericSky {
       }
       uniforms.isNight.value = 1.0;
       uniforms.moonColor.value.setRGB(0.85, 0.92, 1.0);
-      (this.starsPoints.material as THREE.PointsMaterial).opacity = 0.95;
+      (this.starsPoints.material as THREE.PointsMaterial).opacity = 0.95 * overcastVis;
     }
   }
 

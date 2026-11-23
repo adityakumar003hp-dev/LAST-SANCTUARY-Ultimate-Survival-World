@@ -5,6 +5,7 @@
 
 import * as THREE from 'three';
 import { soundEngine } from '../../utils/audio';
+import { WeatherType } from '../../types/game';
 
 export type TimeOfDayPhase = 'dawn' | 'day' | 'dusk' | 'night';
 
@@ -248,7 +249,8 @@ export class ContextSoundscapeManager {
     gameTimeMinutes: number,
     playerPos: THREE.Vector3,
     playerYaw: number,
-    biomeId = 'green_plains'
+    biomeId = 'green_plains',
+    weatherType: WeatherType = 'clear'
   ) {
     if (this.isDisposed) return;
     if (!this.isInitialized) {
@@ -306,6 +308,17 @@ export class ContextSoundscapeManager {
         targetWindVol = 0.13;
       }
 
+      if (weatherType === 'thunderstorm' || weatherType === 'blizzard' || weatherType === 'sandstorm') {
+        targetWindFreq = 1150;
+        targetWindVol = 0.22;
+      } else if (weatherType === 'rain') {
+        targetWindFreq = 980;
+        targetWindVol = 0.15;
+      } else if (weatherType === 'toxic_fog') {
+        targetWindFreq = 260;
+        targetWindVol = 0.11;
+      }
+
       this.windFilter.frequency.setTargetAtTime(targetWindFreq, now, 0.5);
       this.windGain.gain.setTargetAtTime(targetWindVol, now, 0.5);
       this.metrics.windIntensity = targetWindVol;
@@ -322,13 +335,14 @@ export class ContextSoundscapeManager {
       this.nightSubGain.gain.setTargetAtTime(targetNightDrone, now, 0.8);
     }
 
-    // 5. Modulate Cicadas (Daytime warm-weather insects)
+    // 5. Modulate Cicadas (Daytime warm-weather insects; suppressed in heavy storms)
     if (this.cicadaBedGain) {
       let cicadaVol = 0.0;
-      if (hour >= 10.0 && hour <= 17.0 && !isUnderground) {
+      const calmWeather = weatherType === 'clear' || weatherType === 'rain';
+      if (hour >= 10.0 && hour <= 17.0 && !isUnderground && calmWeather) {
         // Peak during afternoon sun
         const peakT = 1.0 - Math.abs(hour - 13.5) / 3.5;
-        cicadaVol = Math.max(0, peakT) * (biomeId === 'green_plains' ? 0.065 : 0.045);
+        cicadaVol = Math.max(0, peakT) * (biomeId === 'green_plains' ? 0.065 : 0.045) * (weatherType === 'rain' ? 0.35 : 1);
       }
       this.cicadaBedGain.gain.setTargetAtTime(cicadaVol, now, 0.6);
       this.metrics.cicadaActivity = cicadaVol;

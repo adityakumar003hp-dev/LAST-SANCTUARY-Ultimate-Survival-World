@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   Play,
   Save,
@@ -15,10 +15,24 @@ import {
   Monitor,
   Check,
   Zap,
+  Award,
+  Download,
+  Upload,
+  BookMarked,
+  Camera,
 } from 'lucide-react';
-import { GameSettings, GraphicsQualityMode, SaveSlotMetadata } from '../types/game';
+import {
+  GameSettings,
+  GraphicsQualityMode,
+  KeybindAction,
+  KeybindConfig,
+  SandboxSettings,
+  SaveSlotMetadata,
+  WeatherType,
+} from '../types/game';
 import { soundEngine } from '../utils/audio';
-import { getAllSaveSlots } from '../utils/storage';
+import { getAllSaveSlots, downloadSaveSlotJson, validateAndImportSaveJson } from '../utils/storage';
+import { DEFAULT_KEYBINDS, KEYBIND_LABELS, formatKeyCode } from '../utils/keybinds';
 
 interface DiagnosticSnapshot {
   renderWidth: number;
@@ -41,6 +55,16 @@ interface PauseMenuProps {
   diagnosticInfo?: DiagnosticSnapshot | null;
   touchControlsMode?: 'auto' | 'always' | 'off';
   onSetTouchControlsMode?: (mode: 'auto' | 'always' | 'off') => void;
+  onOpenAchievements?: () => void;
+  onOpenCompendium?: () => void;
+  onCaptureScreenshot?: () => void;
+  keybinds?: KeybindConfig;
+  onUpdateKeybinds?: (next: KeybindConfig) => void;
+  onResetKeybinds?: () => void;
+  sandboxSettings?: SandboxSettings;
+  onUpdateSandboxSettings?: (patch: Partial<SandboxSettings>) => void;
+  currentWeather?: WeatherType;
+  onForceWeather?: (weather: WeatherType | 'auto') => void;
 }
 
 interface QualityModeOption {
@@ -101,17 +125,46 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   diagnosticInfo,
   touchControlsMode = 'auto',
   onSetTouchControlsMode,
+  onOpenAchievements,
+  onOpenCompendium,
+  onCaptureScreenshot,
+  keybinds = DEFAULT_KEYBINDS,
+  onUpdateKeybinds,
+  onResetKeybinds,
+  sandboxSettings,
+  onUpdateSandboxSettings,
+  currentWeather = 'clear',
+  onForceWeather,
 }) => {
   const [activeTab, setActiveTab] = useState<'main' | 'picture_quality' | 'settings' | 'controls' | 'save_slots'>('main');
-  const [controlsCategory, setControlsCategory] = useState<'mobile' | 'desktop'>('mobile');
+  const [controlsCategory, setControlsCategory] = useState<'mobile' | 'desktop'>('desktop');
+  const [rebindingAction, setRebindingAction] = useState<KeybindAction | null>(null);
   const [saveMessage, setSaveMessage] = useState<string | null>(null);
+  const [saveError, setSaveError] = useState<string | null>(null);
   const [existingSlots, setExistingSlots] = useState<SaveSlotMetadata[]>([]);
   const [confirmOverwriteSlot, setConfirmOverwriteSlot] = useState<{ id: string; name: string } | null>(null);
+  const importInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!rebindingAction) return;
+    const handleCaptureKey = (e: KeyboardEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.code !== 'Escape' && onUpdateKeybinds) {
+        onUpdateKeybinds({ ...keybinds, [rebindingAction]: e.code });
+        soundEngine.playBuildSnap();
+      }
+      setRebindingAction(null);
+    };
+    window.addEventListener('keydown', handleCaptureKey, { capture: true });
+    return () => window.removeEventListener('keydown', handleCaptureKey, { capture: true });
+  }, [rebindingAction, keybinds, onUpdateKeybinds]);
 
   useEffect(() => {
     if (isOpen) {
       loadSlots();
       setConfirmOverwriteSlot(null);
+      setSaveError(null);
     }
   }, [isOpen]);
 
@@ -186,10 +239,15 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
           </div>
         )}
 
-        {/* Save confirmation toast */}
+        {/* Save confirmation / error toast */}
         {saveMessage && (
           <div className="bg-emerald-950/80 border-b border-emerald-800/80 px-6 py-2 text-xs font-semibold text-emerald-300 text-center shrink-0">
             {saveMessage}
+          </div>
+        )}
+        {saveError && (
+          <div className="bg-rose-950/80 border-b border-rose-800/80 px-6 py-2 text-xs font-semibold text-rose-300 text-center shrink-0">
+            {saveError}
           </div>
         )}
 
@@ -253,8 +311,50 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                 className="flex items-center justify-center gap-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700/80 py-2.5 sm:py-3 text-sm font-semibold text-neutral-200 transition-all cursor-pointer"
               >
                 <HelpCircle className="h-4 w-4 text-amber-400" />
-                <span>Controls & Keybindings</span>
+                <span>Controls &amp; Keybindings</span>
               </button>
+
+              {onOpenCompendium && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playUIClick();
+                    onOpenCompendium();
+                  }}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700/80 py-2.5 sm:py-3 text-sm font-semibold text-neutral-200 transition-all cursor-pointer"
+                >
+                  <BookMarked className="h-4 w-4 text-emerald-400" />
+                  <span>37 Biomes &amp; Wildlife Codex</span>
+                </button>
+              )}
+
+              {onCaptureScreenshot && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playUIClick();
+                    onCaptureScreenshot();
+                  }}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700/80 py-2.5 sm:py-3 text-sm font-semibold text-neutral-200 transition-all cursor-pointer"
+                >
+                  <Camera className="h-4 w-4 text-sky-400" />
+                  <span>Capture 3D Screenshot (PNG)</span>
+                </button>
+              )}
+
+              {onOpenAchievements && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playUIClick();
+                    onOpenAchievements();
+                  }}
+                  className="flex items-center justify-center gap-2 rounded-xl bg-neutral-900 hover:bg-neutral-800 border border-neutral-700/80 py-2.5 sm:py-3 text-sm font-semibold text-neutral-200 transition-all cursor-pointer"
+                >
+                  <Award className="h-4 w-4 text-amber-400" />
+                  <span>Achievements &amp; Survival Summary</span>
+                </button>
+              )}
 
               <div className="my-1 border-t border-neutral-800" />
 
@@ -360,6 +460,31 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                 </button>
               </div>
 
+              {/* Master Volume */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between text-xs font-semibold text-neutral-300">
+                  <span className="flex items-center gap-1.5">
+                    <Volume2 className="h-3.5 w-3.5 text-amber-400" />
+                    <span>Master Volume</span>
+                  </span>
+                  <span className="font-mono tabular-nums">{Math.round(settings.masterVolume * 100)}%</span>
+                </div>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.05"
+                  value={settings.masterVolume}
+                  onChange={(e) => {
+                    const val = parseFloat(e.target.value);
+                    const updated = { ...settings, masterVolume: val };
+                    onUpdateSettings(updated);
+                    soundEngine.setVolumes(val, settings.sfxVolume, settings.musicVolume);
+                  }}
+                  className="accent-amber-500 cursor-pointer"
+                />
+              </div>
+
               {/* SFX Volume */}
               <div className="flex flex-col gap-1.5">
                 <div className="flex justify-between text-xs font-semibold text-neutral-300">
@@ -367,7 +492,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                     <Volume2 className="h-3.5 w-3.5 text-neutral-400" />
                     <span>Sound Effects Volume</span>
                   </span>
-                  <span className="font-mono">{Math.round(settings.sfxVolume * 100)}%</span>
+                  <span className="font-mono tabular-nums">{Math.round(settings.sfxVolume * 100)}%</span>
                 </div>
                 <input
                   type="range"
@@ -481,6 +606,56 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                 </div>
               )}
 
+              {/* View Distance Chunks */}
+              <div className="flex flex-col gap-1.5">
+                <div className="flex justify-between text-xs font-semibold text-neutral-300">
+                  <span>Terrain Render View Distance</span>
+                  <span className="font-mono tabular-nums">
+                    {settings.viewDistanceChunks ?? 3} chunks (~{(settings.viewDistanceChunks ?? 3) * 64}m)
+                  </span>
+                </div>
+                <input
+                  type="range"
+                  min="1"
+                  max="5"
+                  step="1"
+                  value={settings.viewDistanceChunks ?? 3}
+                  onChange={(e) => {
+                    onUpdateSettings({
+                      ...settings,
+                      viewDistanceChunks: parseInt(e.target.value, 10),
+                    });
+                  }}
+                  className="accent-amber-500 cursor-pointer"
+                />
+              </div>
+
+              {/* HUD Coordinates Toggle */}
+              <div className="flex items-center justify-between pt-1 border-t border-neutral-800">
+                <div className="flex flex-col">
+                  <span className="text-xs font-semibold text-neutral-200">Show World Coordinates</span>
+                  <span className="text-[10px] text-neutral-400">Display X / Z coordinates on top-right HUD</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    onUpdateSettings({
+                      ...settings,
+                      showCoordinates: !settings.showCoordinates,
+                    });
+                  }}
+                  className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors cursor-pointer ${
+                    settings.showCoordinates ? 'bg-amber-500' : 'bg-neutral-800'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      settings.showCoordinates ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
               {/* Camera Shake Accessibility Toggle */}
               <div className="flex items-center justify-between pt-1 border-t border-neutral-800">
                 <div className="flex flex-col">
@@ -506,6 +681,80 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                   />
                 </button>
               </div>
+
+              {/* Weather & Live Sandbox Overrides */}
+              {(onForceWeather || (sandboxSettings && onUpdateSandboxSettings)) && (
+                <div className="flex flex-col gap-3 pt-2 border-t border-neutral-800">
+                  {onForceWeather && (
+                    <div>
+                      <div className="flex items-center justify-between text-xs font-semibold text-neutral-200 mb-1.5">
+                        <span>Weather Pattern Control</span>
+                        <span className="font-mono text-amber-400 capitalize">{currentWeather.replace('_', ' ')}</span>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        {(['auto', 'clear', 'rain', 'thunderstorm', 'blizzard', 'sandstorm', 'toxic_fog'] as const).map((w) => (
+                          <button
+                            key={w}
+                            type="button"
+                            onClick={() => onForceWeather(w)}
+                            className={`rounded-lg px-2.5 py-1 text-[11px] font-semibold capitalize cursor-pointer whitespace-nowrap ${
+                              w === currentWeather
+                                ? 'bg-amber-500 text-neutral-950 font-bold'
+                                : 'bg-neutral-900 border border-neutral-800 text-neutral-300 hover:bg-neutral-800'
+                            }`}
+                          >
+                            {w.replace('_', ' ')}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {sandboxSettings && onUpdateSandboxSettings && (
+                    <div className="flex flex-col gap-2 text-xs font-mono tabular-nums">
+                      <div>
+                        <div className="flex justify-between text-neutral-300 mb-1">
+                          <span>Loot Yield Multiplier</span>
+                          <span>{sandboxSettings.lootMultiplier.toFixed(1)}x</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0.5"
+                          max="3.0"
+                          step="0.25"
+                          value={sandboxSettings.lootMultiplier}
+                          onChange={(e) => onUpdateSandboxSettings({ lootMultiplier: parseFloat(e.target.value) })}
+                          className="w-full accent-amber-500 cursor-pointer"
+                        />
+                      </div>
+                      <div>
+                        <div className="flex justify-between text-neutral-300 mb-1">
+                          <span>Weather Intensity</span>
+                          <span>{sandboxSettings.weatherIntensity.toFixed(1)}x</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="2.0"
+                          step="0.25"
+                          value={sandboxSettings.weatherIntensity}
+                          onChange={(e) => onUpdateSandboxSettings({ weatherIntensity: parseFloat(e.target.value) })}
+                          className="w-full accent-amber-500 cursor-pointer"
+                        />
+                      </div>
+                      <label className="flex items-center gap-2 text-neutral-300 cursor-pointer font-sans">
+                        <input
+                          type="checkbox"
+                          checked={sandboxSettings.infinitePower}
+                          onChange={(e) => onUpdateSandboxSettings({ infinitePower: e.target.checked })}
+                          className="accent-amber-500"
+                        />
+                        <span>Infinite Base Solar &amp; Generator Power</span>
+                      </label>
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
 
@@ -566,36 +815,51 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                 </div>
               ) : (
                 <div className="flex flex-col gap-2 text-xs max-h-72 overflow-y-auto pr-1">
-                  {[
-                    { key: 'W / A / S / D', action: 'Move Survivor / Steer Buggy' },
-                    { key: 'Mouse Look / Touch', action: 'Rotate Camera View & Aim' },
-                    { key: 'Left Click', action: 'Attack / Harvest / Fire Crossbow / Build' },
-                    { key: 'Space', action: 'Jump / Buggy Handbrake / Swim Surface' },
-                    { key: 'Shift (Hold)', action: 'Sprint / Buggy Turbo Boost' },
-                    { key: 'C', action: 'Crouch & Sneak / Swim Dive' },
-                    { key: 'E', action: 'Interact (Mount Buggy, Gates, Stashes, Terminal)' },
-                    { key: 'O', action: 'Open Sanctuary Command Dashboard' },
-                    { key: 'B', action: 'Open Sanctuary Building Catalog' },
-                    { key: 'I', action: 'Open Backpack & Equipment' },
-                    { key: 'M', action: 'Topographical Radar & Coordinates' },
-                    { key: 'J', action: 'Mission Journal & Story Log' },
-                    { key: 'V', action: 'Toggle First / Third-Person Camera' },
-                    { key: 'F', action: 'Toggle Flashlight / Buggy Headlights' },
-                    { key: 'Z', action: 'Toggle Biological Ecosystem Scanner' },
-                    { key: 'R', action: 'Rotate Placement Ghost (in Build Mode)' },
-                    { key: '1 - 8', action: 'Equip Hotbar Slot' },
-                    { key: 'Esc', action: 'Pause Menu / Close Modals' },
-                  ].map((item, idx) => (
+                  <div className="flex items-center justify-between pb-1.5 border-b border-neutral-800">
+                    <span className="text-[11px] text-neutral-400">
+                      {rebindingAction
+                        ? `Press any key for "${KEYBIND_LABELS[rebindingAction]}" (Esc to cancel)...`
+                        : 'Click any binding button to remap it to a new key.'}
+                    </span>
+                    {onResetKeybinds && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          soundEngine.playUIClick();
+                          onResetKeybinds();
+                        }}
+                        className="rounded-lg border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 px-2.5 py-1 text-[11px] font-semibold text-neutral-300 cursor-pointer whitespace-nowrap"
+                      >
+                        Reset Defaults
+                      </button>
+                    )}
+                  </div>
+                  {(Object.keys(KEYBIND_LABELS) as KeybindAction[]).map((action) => (
                     <div
-                      key={idx}
+                      key={action}
                       className="flex items-center justify-between rounded-lg bg-neutral-900/60 px-3 py-2 border border-neutral-800/60"
                     >
-                      <span className="font-mono font-bold text-amber-400 bg-neutral-800 px-2 py-0.5 rounded">
-                        {item.key}
-                      </span>
-                      <span className="text-neutral-300 font-medium">{item.action}</span>
+                      <span className="text-neutral-300 font-medium">{KEYBIND_LABELS[action]}</span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          soundEngine.playUIClick();
+                          setRebindingAction(action);
+                        }}
+                        className={`font-mono font-bold px-2.5 py-1 rounded border text-[11px] cursor-pointer whitespace-nowrap ${
+                          rebindingAction === action
+                            ? 'bg-amber-500 text-neutral-950 border-amber-300'
+                            : 'bg-neutral-800 text-amber-400 border-neutral-700 hover:border-amber-500/60'
+                        }`}
+                      >
+                        {rebindingAction === action ? 'Press Key...' : formatKeyCode(keybinds[action])}
+                      </button>
                     </div>
                   ))}
+                  <div className="mt-1 flex items-center justify-between rounded-lg bg-neutral-900/40 px-3 py-2 border border-neutral-800/50 text-[11px] text-neutral-400">
+                    <span>Vehicle / Train Horn &amp; Headlights</span>
+                    <span className="font-mono text-neutral-300">H / L</span>
+                  </div>
                 </div>
               )}
             </div>
@@ -603,13 +867,49 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
 
           {activeTab === 'save_slots' && (
             <div className="flex flex-col gap-3">
-              <div className="flex items-center justify-between pb-1 border-b border-neutral-800">
-                <span className="text-xs uppercase font-bold text-neutral-400">
-                  Select Save Slot
-                </span>
-                <span className="text-[10px] font-mono text-neutral-500">
-                  Independent Story Checkpoints
-                </span>
+              <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-neutral-800">
+                <div>
+                  <span className="text-xs uppercase font-bold text-neutral-400">
+                    Select Save Slot
+                  </span>
+                  <span className="block text-[10px] font-mono text-neutral-500">
+                    Independent Story Checkpoints &amp; JSON Backups
+                  </span>
+                </div>
+
+                <div>
+                  <input
+                    ref={importInputRef}
+                    type="file"
+                    accept=".json,application/json"
+                    className="hidden"
+                    onChange={async (e) => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      try {
+                        const raw = await file.text();
+                        const imported = await validateAndImportSaveJson(raw);
+                        await loadSlots();
+                        soundEngine.playBuildSnap();
+                        setSaveError(null);
+                        setSaveMessage(`Imported "${imported.name}" into local saves.`);
+                        setTimeout(() => setSaveMessage(null), 3500);
+                      } catch (err: any) {
+                        setSaveError(err?.message || 'Failed to import save JSON.');
+                      } finally {
+                        e.target.value = '';
+                      }
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => importInputRef.current?.click()}
+                    className="flex items-center gap-1.5 rounded-lg border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 px-2.5 py-1.5 text-[11px] font-semibold text-neutral-200 cursor-pointer"
+                  >
+                    <Upload className="h-3.5 w-3.5 text-amber-400" />
+                    <span>Import JSON</span>
+                  </button>
+                </div>
               </div>
 
               {/* Slot List */}
@@ -626,7 +926,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                       key={slotDef.id}
                       className="flex flex-col rounded-xl border border-neutral-800 bg-neutral-900/60 p-3 hover:border-neutral-700 transition-all"
                     >
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between gap-2">
                         <div>
                           <div className="flex items-center gap-2">
                             <span className="text-xs font-bold text-neutral-100">{slotDef.label}</span>
@@ -655,22 +955,43 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                           )}
                         </div>
 
-                        <button
-                          onClick={() => {
-                            if (existing) {
-                              setConfirmOverwriteSlot({ id: slotDef.id, name: slotDef.label });
-                            } else {
-                              handleExecuteSave(slotDef.id, slotDef.label);
-                            }
-                          }}
-                          className={`rounded-lg px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer shadow ${
-                            existing
-                              ? 'bg-amber-600 hover:bg-amber-500 text-neutral-950'
-                              : 'bg-emerald-600 hover:bg-emerald-500 text-white'
-                          }`}
-                        >
-                          {existing ? 'Overwrite' : 'Save Slot'}
-                        </button>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {existing && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const ok = await downloadSaveSlotJson(slotDef.id);
+                                if (ok) {
+                                  setSaveError(null);
+                                  setSaveMessage(`Exported ${slotDef.label} as JSON backup.`);
+                                  setTimeout(() => setSaveMessage(null), 3000);
+                                } else {
+                                  setSaveError(`Could not export ${slotDef.label}.`);
+                                }
+                              }}
+                              className="rounded-lg border border-neutral-700 bg-neutral-900 hover:bg-neutral-800 p-1.5 text-neutral-300 hover:text-amber-300 cursor-pointer"
+                              title="Export Save JSON"
+                            >
+                              <Download className="h-3.5 w-3.5" />
+                            </button>
+                          )}
+                          <button
+                            onClick={() => {
+                              if (existing) {
+                                setConfirmOverwriteSlot({ id: slotDef.id, name: slotDef.label });
+                              } else {
+                                handleExecuteSave(slotDef.id, slotDef.label);
+                              }
+                            }}
+                            className={`rounded-lg px-3 py-1.5 text-xs font-bold uppercase tracking-wider transition-all cursor-pointer shadow ${
+                              existing
+                                ? 'bg-amber-600 hover:bg-amber-500 text-neutral-950'
+                                : 'bg-emerald-600 hover:bg-emerald-500 text-white'
+                            }`}
+                          >
+                            {existing ? 'Overwrite' : 'Save Slot'}
+                          </button>
+                        </div>
                       </div>
                     </div>
                   );

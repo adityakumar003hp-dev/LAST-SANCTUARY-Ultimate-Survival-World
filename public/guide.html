@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Survival Guide, Biomes &amp; Controls | LAST SANCTUARY: REBIRTH</title>
+  <meta name="description" content="Complete survival guide for LAST SANCTUARY: REBIRTH covering keyboard and gamepad controls, 37 procedural biomes, 40+ wildlife species, railway mega-station travel, base management, and story campaign FAQ.">
+  <meta name="robots" content="index, follow">
+  <link rel="canonical" href="https://last-sanctuary-ultimate-survival-world.ai.studio/guide.html">
+  <link rel="icon" href="/favicon.ico" sizes="any">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32x32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+  <meta property="og:type" content="article">
+  <meta property="og:title" content="Survival Guide, Biomes &amp; Controls | LAST SANCTUARY: REBIRTH">
+  <meta property="og:description" content="Master survival mechanics, 37 biomes, wildlife taming, central railway operations, and sanctuary fortification in LAST SANCTUARY: REBIRTH.">
+  <meta property="og:url" content="https://last-sanctuary-ultimate-survival-world.ai.studio/guide.html">
+  <meta property="og:image" content="https://last-sanctuary-ultimate-survival-world.ai.studio/og-image.jpg">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@type": "FAQPage",
+    "mainEntity": [
+      {
+        "@type": "Question",
+        "name": "What is LAST SANCTUARY: REBIRTH?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "LAST SANCTUARY: REBIRTH is a browser-based 3D open-world zombie survival RPG built with Three.js and React, featuring 37 procedural biomes, 40+ evolving wildlife species, a multi-level railway mega-station, base management, and a multi-chapter story campaign."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Can I play LAST SANCTUARY: REBIRTH offline or install it as an app?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. LAST SANCTUARY: REBIRTH is an installable Progressive Web App (PWA) with offline asset caching and local IndexedDB save slots, plus JSON save backup export and import."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "Does the game support touch screens and controllers?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Yes. It supports desktop keyboard and mouse, adaptive on-screen mobile touch joysticks in portrait and landscape orientations, and standard Web Gamepad API controllers."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How do the railway mega-station and train dispatch work?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Players can book railway tickets, fast travel across the regional network, board moving passenger trains, drive locomotives manually from the cab, or open the Central Railway Dispatch console with the T key."
+        }
+      },
+      {
+        "@type": "Question",
+        "name": "How do I manage power, water, security, and NPCs at my base?",
+        "acceptedAnswer": {
+          "@type": "Answer",
+          "text": "Press O or click Base in the HUD to open the Apex Sanctuary Central Terminal, where you can toggle backup generators, monitor solar batteries, purify water, manage survivor roles, unlock research blueprints, and lock perimeter gates."
+        }
+      }
+    ]
+  }
+  </script>
+  <style>
+    * { box-sizing: border-box; }
+    body { margin: 0; padding: 24px; background: #070912; color: #e8edff; font: 16px/1.7 Arial, sans-serif; }
+    main { max-width: 920px; margin: 28px auto; padding: 32px; background: #101526; border: 1px solid #253354; border-radius: 16px; }
+    header, footer { text-align: center; }
+    h1 { color: #f59e0b; margin-bottom: 6px; letter-spacing: 0.04em; }
+    h2 { color: #39d9ff; margin-top: 0; font-size: 1.25rem; }
+    h3 { color: #fbbf24; margin-bottom: 6px; font-size: 1rem; }
+    section { margin: 24px 0; padding: 20px; background: #151e32; border-left: 3px solid #f59e0b; border-radius: 8px; }
+    nav { display: flex; flex-wrap: wrap; justify-content: center; gap: 14px; margin-top: 14px; }
+    nav a { display: inline-block; padding: 8px 16px; border-radius: 8px; background: #1e293b; border: 1px solid #334155; color: #f8fafc; text-decoration: none; font-weight: bold; font-size: 14px; }
+    nav a:hover { border-color: #f59e0b; color: #fbbf24; }
+    a { color: #93c5fd; }
+    a:hover { color: #39d9ff; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 12px; margin-top: 12px; }
+    .card { background: #0d1322; border: 1px solid #26324d; border-radius: 8px; padding: 12px 14px; }
+    .kbd { display: inline-block; font-family: monospace; background: #090d16; border: 1px solid #475569; color: #fbbf24; padding: 1px 7px; border-radius: 5px; font-size: 13px; font-weight: bold; }
+    ul { padding-left: 20px; margin: 8px 0; }
+    li { margin: 6px 0; }
+    @media (max-width: 600px) { body { padding: 10px; } main { padding: 18px; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>LAST SANCTUARY: REBIRTH — Official Survival Guide</h1>
+    <p>Open-World 3D Zombie Survival RPG · Biome Field Manual · Railway &amp; Base Systems</p>
+    <nav aria-label="Primary site navigation">
+      <a href="https://last-sanctuary-ultimate-survival-world.ai.studio/">Play Now (Homepage)</a>
+      <a href="/sitemap.html">HTML Site Map</a>
+      <a href="/sitemap.xml">XML Sitemap</a>
+    </nav>
+  </header>
+
+  <section>
+    <h2>1. Game Modes &amp; Story Campaign</h2>
+    <ul>
+      <li><strong>Story Campaign ("The Beginning of the End"):</strong> Follow a 13-chapter origin narrative beginning before the outbreak, meeting companions Marcus, Chloe, and Maya inside the sanctuary district before the meteor impact and zombie siege.</li>
+      <li><strong>Open-World Survival Sandbox:</strong> Explore 37 interconnected procedural biomes, harvest timber, ore, and electronics, manage hunger, thirst, oxygen, and night Blood Moon hordes.</li>
+      <li><strong>Creative Builder Mode:</strong> Construct multi-tier fortifications, farm plots, watchtowers, and defensive walls freely without starvation or lethal pressure.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>2. Keyboard, Mouse, Touch &amp; Controller Bindings</h2>
+    <div class="grid">
+      <div class="card"><span class="kbd">W A S D</span><br>Move Survivor / Steer Vehicles</div>
+      <div class="card"><span class="kbd">Space</span> / <span class="kbd">Shift</span><br>Jump / Tactical Sprint</div>
+      <div class="card"><span class="kbd">Left Click</span> / <span class="kbd">E</span><br>Primary Attack, Harvest &amp; Interact</div>
+      <div class="card"><span class="kbd">1 - 8</span><br>Select Hotbar Tools &amp; Rations</div>
+      <div class="card"><span class="kbd">B</span> / <span class="kbd">I</span> / <span class="kbd">C</span><br>Build Catalog, Backpack &amp; RPG Stats</div>
+      <div class="card"><span class="kbd">M</span> / <span class="kbd">N</span><br>Radar Map &amp; Corner Minimap Toggle</div>
+      <div class="card"><span class="kbd">O</span> / <span class="kbd">T</span><br>Sanctuary Base Terminal &amp; Train Dispatch</div>
+      <div class="card"><span class="kbd">K</span> / <span class="kbd">P</span><br>Field Compendium &amp; Photo Mode Snap</div>
+      <div class="card"><span class="kbd">Z</span> / <span class="kbd">Q</span><br>Ecosystem Bio-Scanner &amp; Quick-Heal</div>
+      <div class="card"><span class="kbd">V</span> / <span class="kbd">F</span><br>Cycle Camera View &amp; Flashlight</div>
+    </div>
+    <p>Plug-and-play <strong>Gamepad Controllers</strong> are also supported automatically during gameplay using standard twin-stick mapping.</p>
+  </section>
+
+  <section>
+    <h2>3. 37 Biomes &amp; Evolving Ecosystem</h2>
+    <p>Travel across verdant meadowlands, conifer wildwoods, abandoned metropolis ruins, volcanic ashlands, frozen glacial ridges, bioluminescent caverns, savannahs, and prehistoric dinosaur valleys. Over 40+ wildlife species simulate hunger, thirst, herding, predator-prey hunting, natural-selection generations, and companion taming.</p>
+  </section>
+
+  <section>
+    <h2>4. Central Mega-Station &amp; Sanctuary Base Terminal</h2>
+    <ul>
+      <li><strong>Railway Network:</strong> Visit the multi-level Mega Railway Station to book tickets, track 6 automated regional train lines (F1–F3, B1–B3), board moving carriages, or manage live dispatch schedules with <span class="kbd">T</span>.</li>
+      <li><strong>Sanctuary Estate Terminal (<span class="kbd">O</span>):</strong> Monitor rooftop solar production and backup diesel generators, UV clean water filtration, cold-storage rations, perimeter CCTV security feeds, survivor NPC assignments, and research blueprints.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>5. Frequently Asked Questions</h2>
+    <h3>What is LAST SANCTUARY: REBIRTH?</h3>
+    <p>It is a browser-based 3D open-world zombie survival RPG built with Three.js and React, featuring 37 procedural biomes, 40+ evolving wildlife species, a multi-level railway mega-station, base management, and an episodic story campaign.</p>
+
+    <h3>Can I play offline or back up my saves?</h3>
+    <p>Yes. Install the app from the main menu or browser bar for offline PWA support. All world saves are stored locally in IndexedDB and can be exported or restored as portable JSON backup files.</p>
+
+    <h3>How does Photo Mode work?</h3>
+    <p>Press <span class="kbd">P</span> or tap the camera button in the HUD to toggle HUD-free framing and capture high-resolution PNG screenshots directly from the 3D WebGL viewport.</p>
+  </section>
+
+  <footer>
+    <p>&copy; LAST SANCTUARY: REBIRTH · Owner-Aditya, Made in India</p>
+    <p><a href="https://last-sanctuary-ultimate-survival-world.ai.studio/">Return to Game</a> · <a href="/sitemap.html">Site Map</a></p>
+  </footer>
+</main>
+</body>
+</html>

@@ -170,6 +170,34 @@ export class VehicleParkingManager {
         fuelType: 'pedal',
         batteryOrFuel: 100, // infinite pedal power
       },
+      // 6. Heavy Armored Hauler Truck (Driveway Outer Apron)
+      {
+        id: 'veh_truck_01',
+        name: 'Titan MK-IV Armored Utility Truck',
+        type: 'armored_truck',
+        defaultPos: [-44.5, 0.45, 48.0],
+        rotationY: 0.08,
+        maxSpeed: 21.0,     // ~75 km/h high ramming mass
+        accel: 9.5,
+        drag: 4.5,
+        steerSpeed: 1.35,
+        fuelType: 'gasoline',
+        batteryOrFuel: 94,
+      },
+      // 7. Tactical River Patrol Motorboat (Docked on River Bank East of Base)
+      {
+        id: 'veh_motorboat_01',
+        name: 'Mariner 240 River Patrol Skiff',
+        type: 'motorboat',
+        defaultPos: [48.0, 0.15, 36.0],
+        rotationY: Math.PI * 0.5,
+        maxSpeed: 23.0,
+        accel: 12.0,
+        drag: 2.6,
+        steerSpeed: 1.9,
+        fuelType: 'gasoline',
+        batteryOrFuel: 96,
+      },
     ];
 
     for (const def of definitions) {
@@ -246,6 +274,10 @@ export class VehicleParkingManager {
         return this.createMotorbikeMesh();
       case 'bicycle':
         return this.createBicycleMesh();
+      case 'armored_truck':
+        return this.createArmoredTruckMesh();
+      case 'motorboat':
+        return this.createMotorboatMesh();
       default:
         return this.createSedanMesh();
     }
@@ -617,6 +649,64 @@ export class VehicleParkingManager {
     return g;
   }
 
+  private createArmoredTruckMesh(): THREE.Group {
+    const g = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0x3f4d3b, roughness: 0.72, metalness: 0.45 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.85, metalness: 0.6 });
+    const tireMat = new THREE.MeshStandardMaterial({ color: 0x111315, roughness: 0.95 });
+
+    const chassis = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.7, 5.8), darkMat);
+    chassis.position.y = 0.75;
+    const cab = new THREE.Mesh(new THREE.BoxGeometry(2.35, 1.35, 2.0), bodyMat);
+    cab.position.set(0, 1.65, 1.5);
+    cab.castShadow = true;
+    const bed = new THREE.Mesh(new THREE.BoxGeometry(2.45, 1.45, 3.4), bodyMat);
+    bed.position.set(0, 1.7, -1.25);
+    bed.castShadow = true;
+    const plow = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.55, 0.35), darkMat);
+    plow.position.set(0, 0.65, 3.0);
+    g.add(chassis, cab, bed, plow);
+
+    const wGeo = new THREE.CylinderGeometry(0.48, 0.48, 0.36, 14);
+    wGeo.rotateZ(Math.PI / 2);
+    for (const [wx, wz] of [[-1.25, 1.85], [1.25, 1.85], [-1.25, -0.7], [1.25, -0.7], [-1.25, -2.1], [1.25, -2.1]]) {
+      const w = new THREE.Mesh(wGeo, tireMat);
+      w.name = `wheel_${wx}_${wz}`;
+      w.position.set(wx, 0.48, wz);
+      g.add(w);
+    }
+    const spotL = new THREE.SpotLight(0xfffbeb, 3.0, 38, Math.PI / 4, 0.4);
+    spotL.position.set(-0.85, 1.1, 2.55);
+    spotL.target.position.set(-0.85, 0, 18);
+    const spotR = new THREE.SpotLight(0xfffbeb, 3.0, 38, Math.PI / 4, 0.4);
+    spotR.position.set(0.85, 1.1, 2.55);
+    spotR.target.position.set(0.85, 0, 18);
+    g.add(spotL, spotL.target, spotR, spotR.target);
+    return g;
+  }
+
+  private createMotorboatMesh(): THREE.Group {
+    const g = new THREE.Group();
+    const hullMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.35, metalness: 0.25 });
+    const trimMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.55, metalness: 0.5 });
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.65, 4.4), hullMat);
+    hull.position.y = 0.25;
+    hull.castShadow = true;
+    const bow = new THREE.Mesh(new THREE.ConeGeometry(1.05, 1.35, 4), hullMat);
+    bow.rotation.x = Math.PI / 2;
+    bow.rotation.y = Math.PI / 4;
+    bow.position.set(0, 0.28, 2.75);
+    const consoleBox = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.9, 0.65), trimMat);
+    consoleBox.position.set(0, 0.85, 0.35);
+    const outboard = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.75, 0.45), trimMat);
+    outboard.position.set(0, 0.62, -2.35);
+    const spot = new THREE.SpotLight(0xfef9c3, 2.6, 36, Math.PI / 4, 0.45);
+    spot.position.set(0, 1.25, 0.7);
+    spot.target.position.set(0, 0, 16);
+    g.add(hull, bow, consoleBox, outboard, spot, spot.target);
+    return g;
+  }
+
   // ==========================================
   // SELECTION & INTERACTION
   // ==========================================
@@ -760,9 +850,13 @@ export class VehicleParkingManager {
     if (!v.state.odometerKm) v.state.odometerKm = 0;
     v.state.odometerKm += Math.abs(moveDist) / 1000;
 
-    // Follow terrain height smoothly
+    // Follow terrain or water surface smoothly (motorboat floats at water level y >= 0.1)
     const groundY = TerrainGenerator.getHeight(v.state.position[0], v.state.position[2], worldSeed);
-    v.state.position[1] = Math.max(0.35, groundY + 0.35);
+    if (v.def.type === 'motorboat') {
+      v.state.position[1] = Math.max(0.08, groundY + 0.18);
+    } else {
+      v.state.position[1] = Math.max(0.35, groundY + 0.35);
+    }
 
     // Update 3D mesh position & orientation
     v.mesh.position.set(v.state.position[0], v.state.position[1], v.state.position[2]);

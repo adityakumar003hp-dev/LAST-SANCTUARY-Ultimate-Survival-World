@@ -17,6 +17,7 @@ interface RailwayStationHUDProps {
   onNavigateToFacility: (facilityType: 'restaurant' | 'shops' | 'medical' | 'police' | 'toilets' | 'lifts' | 'escalators') => void;
   onOpenTickets: () => void;
   onOpenOperations: () => void;
+  onOpenDispatch?: () => void;
   onOpenMap: () => void;
   onOpenJourney: () => void;
   onOpenPause?: () => void;
@@ -31,6 +32,7 @@ export const RailwayStationHUD: React.FC<RailwayStationHUDProps> = ({
   onNavigateToFacility,
   onOpenTickets,
   onOpenOperations,
+  onOpenDispatch,
   onOpenMap,
   onOpenJourney,
   onOpenPause,
@@ -279,6 +281,17 @@ export const RailwayStationHUD: React.FC<RailwayStationHUDProps> = ({
               <span className="text-sm sm:text-lg">⚙️</span>
               <span className="text-[8px] sm:text-[10px] font-bold font-mono tracking-wide">Facilities</span>
             </button>
+
+            {onOpenDispatch && (
+              <button
+                onClick={() => { soundEngine.playUIClick(); onOpenDispatch(); }}
+                className="flex flex-col items-center justify-center w-11 h-11 sm:w-13 sm:h-13 md:w-14 md:h-14 rounded-xl bg-cyan-950/90 hover:bg-cyan-900 text-cyan-200 border border-cyan-600/50 hover:border-cyan-400 transition-all active:scale-95 shrink-0"
+                title="Central Train Control Dispatch [T]"
+              >
+                <span className="text-sm sm:text-lg">🚆</span>
+                <span className="text-[8px] sm:text-[10px] font-bold font-mono tracking-wide">Dispatch</span>
+              </button>
+            )}
           </div>
         </div>
       </div>

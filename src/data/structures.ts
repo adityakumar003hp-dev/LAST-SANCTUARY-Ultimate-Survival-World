@@ -401,5 +401,33 @@ export const STRUCTURES: Record<string, StructureDefinition> = {
     cost: [{ itemId: 'wood', count: 8 }, { itemId: 'cloth_fabric', count: 10 }],
     isBed: true, safeZoneContribution: 3,
   },
+  electric_fence: {
+    id: 'electric_fence', name: 'High-Voltage Shock Fence', category: 'defense',
+    description: 'Electrified perimeter barrier that arcs high-voltage bolts to stagger and fry infected.',
+    icon: 'Zap', width: 3.0, height: 2.4, depth: 0.35, maxHealth: 750,
+    cost: [{ itemId: 'metal_scrap', count: 10 }, { itemId: 'electronic_parts', count: 6 }, { itemId: 'nails_bolts', count: 6 }],
+    spikeDamage: 48, safeZoneContribution: 8,
+  },
+  landmine_trap: {
+    id: 'landmine_trap', name: 'Proximity Landmine Trap', category: 'defense',
+    description: 'Pressure-triggered perimeter mine that detonates in an explosive shockwave under zombie packs.',
+    icon: 'Bomb', width: 0.9, height: 0.3, depth: 0.9, maxHealth: 150,
+    cost: [{ itemId: 'metal_scrap', count: 4 }, { itemId: 'electronic_parts', count: 2 }, { itemId: 'nails_bolts', count: 4 }],
+    spikeDamage: 180, safeZoneContribution: 2,
+  },
+  salvage_bench: {
+    id: 'salvage_bench', name: 'Gear Salvage & Mod Bench', category: 'utility',
+    description: 'Dismantle excess gear into raw components, repair tools, and install weapon mods.',
+    icon: 'Wrench', width: 1.8, height: 1.2, depth: 1.0, maxHealth: 420,
+    cost: [{ itemId: 'wood', count: 8 }, { itemId: 'metal_scrap', count: 6 }, { itemId: 'electronic_parts', count: 2 }],
+    isCraftingStation: 'workbench', safeZoneContribution: 5,
+  },
+  evacuation_beacon: {
+    id: 'evacuation_beacon', name: 'Rebirth Evacuation Radio Beacon', category: 'utility',
+    description: 'Endgame extraction relay tower. Activate with an Alpha Bio-Core to trigger the final extraction holdout.',
+    icon: 'Radio', width: 2.0, height: 4.5, depth: 2.0, maxHealth: 2000,
+    cost: [{ itemId: 'metal_scrap', count: 20 }, { itemId: 'electronic_parts', count: 15 }, { itemId: 'boss_core', count: 1 }],
+    isLightSource: true, safeZoneContribution: 15,
+  },
 };
 

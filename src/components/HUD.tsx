@@ -20,9 +20,33 @@ import {
   Sunrise,
   Activity,
   Smartphone,
-  Pause
+  Pause,
+  BookMarked,
+  Train,
+  Camera,
+  Radar,
+  Gamepad2,
+  HeartPulse,
+  CloudRain,
+  CloudLightning,
+  Snowflake,
+  Wind,
+  AlertTriangle,
+  BatteryCharging,
+  Radio,
+  Wrench,
+  Skull
 } from 'lucide-react';
-import { PlayerStats, InventorySlot, Quest, GraphicsQualityMode } from '../types/game';
+import {
+  PlayerStats,
+  InventorySlot,
+  Quest,
+  GraphicsQualityMode,
+  WeatherType,
+  FloatingDamageNumber,
+  SupplyDropState,
+} from '../types/game';
+import { ExtractionState } from '../engine/world/WorldEventsManager';
 
 interface HUDProps {
   stats: PlayerStats;
@@ -65,6 +89,29 @@ interface HUDProps {
   onCycleQualityMode?: () => void;
   touchControlsMode?: 'auto' | 'always' | 'off';
   onToggleTouchControlsMode?: () => void;
+  showCoordinates?: boolean;
+  onOpenTrainControl?: () => void;
+  onOpenCompendium?: () => void;
+  onToggleMinimap?: () => void;
+  isMinimapOpen?: boolean;
+  onEnterPhotoMode?: () => void;
+  onQuickHeal?: () => void;
+  onQuickEat?: () => void;
+  onQuickDrink?: () => void;
+  quickCounts?: { med: number; food: number; water: number };
+  isGamepadConnected?: boolean;
+  biomeTempC?: number;
+  weather?: WeatherType;
+  damageNumbers?: FloatingDamageNumber[];
+  hitmarkerActive?: boolean;
+  bossStatus?: { name: string; health: number; maxHealth: number } | null;
+  supplyDrop?: SupplyDropState | null;
+  extraction?: ExtractionState | null;
+  isCrouching?: boolean;
+  isRadioOpen?: boolean;
+  onToggleRadio?: () => void;
+  onOpenBlueprints?: () => void;
+  onTriggerRebirth?: () => void;
 }
 
 export const HUD: React.FC<HUDProps> = ({
@@ -108,6 +155,29 @@ export const HUD: React.FC<HUDProps> = ({
   onToggleTouchControlsMode,
   onOpenPause,
   onInteract,
+  showCoordinates = true,
+  onOpenTrainControl,
+  onOpenCompendium,
+  onToggleMinimap,
+  isMinimapOpen = false,
+  onEnterPhotoMode,
+  onQuickHeal,
+  onQuickEat,
+  onQuickDrink,
+  quickCounts,
+  isGamepadConnected = false,
+  biomeTempC,
+  weather = 'clear',
+  damageNumbers = [],
+  hitmarkerActive = false,
+  bossStatus = null,
+  supplyDrop = null,
+  extraction = null,
+  isCrouching = false,
+  isRadioOpen = false,
+  onToggleRadio,
+  onOpenBlueprints,
+  onTriggerRebirth,
 }) => {
   const hours = Math.floor(timeMinutes / 60);
   const mins = Math.floor(timeMinutes % 60);
@@ -123,16 +193,40 @@ export const HUD: React.FC<HUDProps> = ({
       : 'PERF';
 
   const firstIncompleteObj = activeQuest?.objectives.find((o) => !o.completed);
+  const isCriticalHealth = stats.health < 30;
+  const isCriticalOxygen = (stats.oxygen ?? 100) < 25;
+  const isLowNeed = !isCriticalHealth && !isCriticalOxygen && (stats.hunger < 20 || stats.thirst < 20);
 
   return (
     <div className="pointer-events-none absolute inset-0 select-none overflow-hidden font-sans">
-      {/* --- Top Left: Survivor Vital Status Bars (Responsive, touchable to open Character Stats) --- */}
-      <button
-        type="button"
-        onClick={onOpenCharacter}
-        title="Tap to open Survivor Attributes & Skills [C]"
-        className="absolute top-[max(0.5rem,var(--sat))] left-[max(0.5rem,var(--sal))] flex flex-col gap-1 sm:gap-1.5 [@media(max-height:500px)]:gap-0.5 rounded-xl bg-neutral-950/85 p-2 sm:p-3 [@media(max-height:500px)]:p-1.5 shadow-2xl border border-neutral-800/80 w-36 sm:w-56 [@media(max-height:500px)]:w-36 z-20 pointer-events-auto cursor-pointer active:scale-95 transition-transform text-left hover:border-amber-500/50"
-      >
+      {/* --- Low-Vitality Edge Vignette --- */}
+      {isCriticalHealth && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-10 shadow-[inset_0_0_95px_rgba(225,29,72,0.58)] animate-pulse"
+        />
+      )}
+      {isCriticalOxygen && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-10 shadow-[inset_0_0_95px_rgba(6,182,212,0.52)] animate-pulse"
+        />
+      )}
+      {isLowNeed && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-10 shadow-[inset_0_0_75px_rgba(245,158,11,0.32)]"
+        />
+      )}
+
+      {/* --- Top Left: Survivor Vital Status Bars + Quick Consume Strip --- */}
+      <div className="absolute top-[max(0.5rem,var(--sat))] left-[max(0.5rem,var(--sal))] flex flex-col gap-1.5 z-20 pointer-events-auto w-36 sm:w-56 [@media(max-height:500px)]:w-36">
+        <button
+          type="button"
+          onClick={onOpenCharacter}
+          title="Tap to open Survivor Attributes & Skills [C]"
+          className="flex flex-col gap-1 sm:gap-1.5 [@media(max-height:500px)]:gap-0.5 rounded-xl bg-neutral-950/85 p-2 sm:p-3 [@media(max-height:500px)]:p-1.5 shadow-2xl border border-neutral-800/80 w-full cursor-pointer active:scale-95 transition-transform text-left hover:border-amber-500/50"
+        >
         {/* Health */}
         <div className="flex items-center gap-1.5 sm:gap-2">
           <Heart className="h-3.5 w-3.5 sm:h-4 sm:w-4 text-rose-500 fill-rose-500/30 shrink-0" />
@@ -204,8 +298,24 @@ export const HUD: React.FC<HUDProps> = ({
           </div>
         )}
 
+        {/* Environmental Telemetry: Battery, Temp, Radiation, Stealth */}
+        <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 pt-1 text-[9px] sm:text-[10px] font-mono text-neutral-300 border-t border-neutral-800 tabular-nums">
+          <span className="flex items-center gap-1" title="Flashlight Battery">
+            <BatteryCharging className="h-3 w-3 text-yellow-400" />
+            <span>{Math.round(stats.flashlightBattery ?? 100)}%</span>
+          </span>
+          <span>{Math.round(stats.temperature ?? 24)}°C</span>
+          {(stats.radiationExposure ?? 0) > 1 && (
+            <span className="text-lime-400 font-bold">RAD {Math.round(stats.radiationExposure ?? 0)}%</span>
+          )}
+          {(stats.infection ?? 0) > 1 && (
+            <span className="text-rose-400 font-bold">INF {Math.round(stats.infection ?? 0)}%</span>
+          )}
+          {isCrouching && <span className="text-sky-400 font-bold">STEALTH</span>}
+        </div>
+
         {/* Level & XP */}
-        <div className="flex items-center justify-between pt-1 text-[10px] sm:text-[11px] text-neutral-400 border-t border-neutral-800">
+        <div className="flex items-center justify-between pt-1 text-[10px] sm:text-[11px] text-neutral-400 border-t border-neutral-800 tabular-nums">
           <span className="font-semibold text-emerald-400">LVL {stats.level}</span>
           <span className="font-mono text-neutral-400">XP {stats.xp}/{stats.xpToNextLevel}</span>
         </div>
@@ -219,11 +329,72 @@ export const HUD: React.FC<HUDProps> = ({
           </span>
           <span className="truncate">OWNER-ADITYA, MADE IN INDIA</span>
         </div>
-      </button>
+        </button>
+
+        {/* Quick-Consume & Gamepad Status Bar */}
+        {(onQuickHeal || onQuickEat || onQuickDrink || isGamepadConnected) && (
+          <div className="flex flex-wrap items-center gap-1 [@media(max-height:460px)]:hidden">
+            {onQuickHeal && (quickCounts?.med ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={onQuickHeal}
+                title="Quick-Heal (Medkit/Bandage) [Q]"
+                className={`flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[9px] font-mono font-bold transition-all cursor-pointer active:scale-95 ${
+                  isCriticalHealth
+                    ? 'border-rose-400 bg-rose-600/90 text-white animate-pulse shadow'
+                    : 'border-neutral-800 bg-neutral-950/90 text-rose-300 hover:border-rose-500/60'
+                }`}
+              >
+                <HeartPulse className="h-2.5 w-2.5" />
+                <span>[Q] {quickCounts?.med}</span>
+              </button>
+            )}
+            {onQuickEat && (quickCounts?.food ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={onQuickEat}
+                title="Quick-Eat Ration from Inventory/Hotbar"
+                className={`flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[9px] font-mono font-bold transition-all cursor-pointer active:scale-95 ${
+                  stats.hunger < 30
+                    ? 'border-orange-400 bg-orange-600/90 text-white animate-pulse'
+                    : 'border-neutral-800 bg-neutral-950/90 text-orange-300 hover:border-orange-500/60'
+                }`}
+              >
+                <Apple className="h-2.5 w-2.5" />
+                <span>{quickCounts?.food}</span>
+              </button>
+            )}
+            {onQuickDrink && (quickCounts?.water ?? 0) > 0 && (
+              <button
+                type="button"
+                onClick={onQuickDrink}
+                title="Quick-Drink Water from Inventory/Hotbar"
+                className={`flex items-center gap-1 rounded-lg border px-1.5 py-0.5 text-[9px] font-mono font-bold transition-all cursor-pointer active:scale-95 ${
+                  stats.thirst < 30
+                    ? 'border-sky-400 bg-sky-600/90 text-white animate-pulse'
+                    : 'border-neutral-800 bg-neutral-950/90 text-sky-300 hover:border-sky-500/60'
+                }`}
+              >
+                <Droplet className="h-2.5 w-2.5" />
+                <span>{quickCounts?.water}</span>
+              </button>
+            )}
+            {isGamepadConnected && (
+              <span
+                title="Controller Connected"
+                className="flex items-center gap-1 rounded-lg border border-emerald-700/60 bg-emerald-950/85 px-1.5 py-0.5 text-[9px] font-mono font-bold text-emerald-300"
+              >
+                <Gamepad2 className="h-2.5 w-2.5" />
+                <span>PAD</span>
+              </span>
+            )}
+          </div>
+        )}
+      </div>
 
       {/* --- Tamed Companion Card (When player has a pet/mount) --- */}
       {companion && (
-        <div className="absolute top-[calc(max(0.5rem,var(--sat))+10.2rem)] sm:top-[calc(max(0.5rem,var(--sat))+11.8rem)] [@media(max-height:500px)]:top-[calc(max(0.35rem,var(--sat))+8.6rem)] left-[max(0.5rem,var(--sal))] flex items-center justify-between gap-2 sm:gap-3 rounded-xl bg-neutral-950/85 px-2.5 py-1.5 sm:px-3 sm:py-2 shadow-xl border border-amber-500/40 w-40 sm:w-60 z-20 pointer-events-auto">
+        <div className="absolute top-[calc(max(0.5rem,var(--sat))+11.8rem)] sm:top-[calc(max(0.5rem,var(--sat))+13.4rem)] [@media(max-height:500px)]:top-[calc(max(0.35rem,var(--sat))+8.6rem)] left-[max(0.5rem,var(--sal))] flex items-center justify-between gap-2 sm:gap-3 rounded-xl bg-neutral-950/85 px-2.5 py-1.5 sm:px-3 sm:py-2 shadow-xl border border-amber-500/40 w-40 sm:w-60 z-20 pointer-events-auto">
           <div className="flex flex-col">
             <div className="flex items-center gap-1.5">
               <Shield className="h-3.5 w-3.5 text-amber-400" />
@@ -311,23 +482,84 @@ export const HUD: React.FC<HUDProps> = ({
           </div>
         </div>
 
-        {/* Biome & Coordinates & Ecosystem Metrics */}
+        {/* Biome, Weather & Coordinates */}
         <div className="flex flex-col items-end text-[10px] sm:text-xs">
-          <span className="font-semibold text-amber-400 truncate max-w-[90px] sm:max-w-[120px]">{biomeName}</span>
-          <span className="font-mono text-[9px] sm:text-[10px] text-neutral-400">
-            {Math.round(playerPos[0])}, {Math.round(playerPos[2])}
+          <span className="font-semibold text-amber-400 truncate max-w-[115px] sm:max-w-[155px] flex items-center gap-1">
+            {weather === 'rain' && <CloudRain className="h-3 w-3 text-sky-400 shrink-0" />}
+            {weather === 'thunderstorm' && <CloudLightning className="h-3 w-3 text-amber-300 shrink-0" />}
+            {weather === 'blizzard' && <Snowflake className="h-3 w-3 text-cyan-200 shrink-0" />}
+            {weather === 'sandstorm' && <Wind className="h-3 w-3 text-orange-300 shrink-0" />}
+            {weather === 'toxic_fog' && <AlertTriangle className="h-3 w-3 text-lime-400 shrink-0" />}
+            <span className="truncate">{biomeName}</span>
+            {biomeTempC !== undefined ? ` · ${biomeTempC}°C` : ''}
           </span>
+          <span className="text-[9px] font-mono text-neutral-400 capitalize">
+            {weather.replace('_', ' ')}
+            {supplyDrop && !supplyDrop.looted ? ' · Drop Active' : ''}
+          </span>
+          {showCoordinates && (
+            <span className="font-mono text-[9px] sm:text-[10px] text-neutral-400 tabular-nums">
+              {Math.round(playerPos[0])}, {Math.round(playerPos[2])}
+            </span>
+          )}
           {ecosystemMetrics && (
-            <span className="text-[8px] font-mono text-emerald-400 font-semibold truncate max-w-[110px]">
+            <span className="text-[8px] font-mono text-emerald-400 font-semibold truncate max-w-[110px] tabular-nums">
               {ecosystemMetrics.totalOrganisms} Fauna · Gen {ecosystemMetrics.highestGeneration}
             </span>
           )}
         </div>
       </button>
 
+      {/* --- World Boss Health Bar & Evacuation Holdout Banner --- */}
+      {bossStatus && (
+        <div className="pointer-events-none absolute top-24 left-1/2 -translate-x-1/2 z-25 w-[min(22rem,88vw)] rounded-xl border border-rose-700/80 bg-neutral-950/90 px-4 py-2 shadow-2xl">
+          <div className="flex items-center justify-between text-xs font-bold text-rose-300">
+            <span className="flex items-center gap-1.5 truncate">
+              <Skull className="h-3.5 w-3.5 text-rose-400 shrink-0" />
+              <span className="truncate">{bossStatus.name}</span>
+            </span>
+            <span className="font-mono tabular-nums text-[11px]">
+              {Math.max(0, Math.round(bossStatus.health))} / {Math.round(bossStatus.maxHealth)}
+            </span>
+          </div>
+          <div className="mt-1.5 h-2 w-full overflow-hidden rounded-full bg-neutral-900 border border-rose-900/60">
+            <div
+              className="h-full bg-gradient-to-r from-rose-600 to-amber-500 transition-all duration-150"
+              style={{ width: `${Math.max(0, Math.min(100, (bossStatus.health / Math.max(1, bossStatus.maxHealth)) * 100))}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {extraction && (extraction.active || extraction.completed) && (
+        <div className="pointer-events-auto absolute top-36 left-1/2 -translate-x-1/2 z-25 flex items-center gap-3 rounded-xl border border-amber-500/60 bg-neutral-950/92 px-4 py-2 text-xs shadow-2xl">
+          {extraction.completed ? (
+            <>
+              <span className="font-bold text-emerald-300 whitespace-nowrap">
+                Evacuation Signal Complete — Helicopter Ready
+              </span>
+              {onTriggerRebirth && (
+                <button
+                  type="button"
+                  onClick={onTriggerRebirth}
+                  className="rounded-lg bg-amber-500 hover:bg-amber-400 px-3 py-1 text-[11px] font-bold text-neutral-950 cursor-pointer whitespace-nowrap"
+                >
+                  Trigger Rebirth NG+
+                </button>
+              )}
+            </>
+          ) : (
+            <div className="flex items-center gap-3 font-mono tabular-nums">
+              <span className="font-semibold text-amber-300 whitespace-nowrap">Evacuation Holdout</span>
+              <span className="text-neutral-100 font-bold">{Math.ceil(extraction.remainingSeconds)}s</span>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* --- Right: Autonomous Living Organism Biological Dossier --- */}
       {ecosystemDossier && (
-        <div className="absolute top-20 right-3 sm:right-4 z-30 flex flex-col gap-2 rounded-2xl bg-neutral-950/92 p-3 sm:p-4 border border-emerald-500/50 shadow-2xl w-64 sm:w-80 pointer-events-auto animate-in fade-in slide-in-from-right-4">
+        <div className={`absolute ${isMinimapOpen ? 'top-[13.8rem] sm:top-[15.2rem]' : 'top-20'} right-3 sm:right-4 z-30 flex flex-col gap-2 rounded-2xl bg-neutral-950/92 p-3 sm:p-4 border border-emerald-500/50 shadow-2xl w-64 sm:w-80 pointer-events-auto animate-in fade-in slide-in-from-right-4`}>
           <div className="flex items-start justify-between gap-2">
             <div>
               <div className="flex items-center gap-1.5 flex-wrap">
@@ -410,21 +642,37 @@ export const HUD: React.FC<HUDProps> = ({
         </button>
       )}
 
-      {/* --- Center: Reticle & Contextual Interaction Prompt (Tap to interact) --- */}
+      {/* --- Center: Reticle, Hitmarker & Floating Damage Numbers --- */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+        {damageNumbers.map((dn) => (
+          <div
+            key={dn.id}
+            className={`absolute -translate-x-1/2 -translate-y-1/2 font-mono font-black tabular-nums drop-shadow transition-transform duration-300 ${
+              dn.isHeadshot
+                ? 'text-base sm:text-lg text-amber-300'
+                : dn.isStealth
+                ? 'text-sm sm:text-base text-cyan-300'
+                : 'text-xs sm:text-sm text-white'
+            }`}
+            style={{ left: `${dn.x}%`, top: `${dn.y}%` }}
+          >
+            -{Math.round(dn.amount)}{dn.isHeadshot ? '!' : ''}
+          </div>
+        ))}
+
         <div className="relative flex items-center justify-center">
-          <div className="h-1.5 w-1.5 rounded-full bg-white/70" />
-          <div className="absolute -top-3 h-2 w-[1px] bg-white/40" />
-          <div className="absolute -bottom-3 h-2 w-[1px] bg-white/40" />
-          <div className="absolute -left-3 w-2 h-[1px] bg-white/40" />
-          <div className="absolute -right-3 w-2 h-[1px] bg-white/40" />
+          <div className={`h-1.5 w-1.5 rounded-full ${hitmarkerActive ? 'bg-amber-400 scale-125' : 'bg-white/70'}`} />
+          <div className={`absolute -top-3 h-2 w-[1px] ${hitmarkerActive ? 'bg-amber-400' : 'bg-white/40'}`} />
+          <div className={`absolute -bottom-3 h-2 w-[1px] ${hitmarkerActive ? 'bg-amber-400' : 'bg-white/40'}`} />
+          <div className={`absolute -left-3 w-2 h-[1px] ${hitmarkerActive ? 'bg-amber-400' : 'bg-white/40'}`} />
+          <div className={`absolute -right-3 w-2 h-[1px] ${hitmarkerActive ? 'bg-amber-400' : 'bg-white/40'}`} />
         </div>
 
         {interactionPrompt && (
           <button
             type="button"
             onClick={() => onInteract?.()}
-            className="pointer-events-auto absolute mt-16 sm:mt-18 rounded-2xl bg-amber-500 hover:bg-amber-400 active:bg-amber-300 text-neutral-950 px-3.5 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-black shadow-2xl border-2 border-amber-300 tracking-wide max-w-[90vw] text-center cursor-pointer active:scale-95 transition-all flex items-center gap-2 animate-bounce"
+            className="pointer-events-auto absolute mt-16 sm:mt-18 rounded-2xl bg-amber-500 hover:bg-amber-400 active:bg-amber-300 text-neutral-950 px-3.5 py-1.5 sm:px-4 sm:py-2 text-xs sm:text-sm font-black shadow-2xl border-2 border-amber-300 tracking-wide max-w-[90vw] text-center cursor-pointer active:scale-95 transition-all flex items-center gap-2"
             title="Tap to interact"
           >
             <span className="flex h-5 w-5 items-center justify-center rounded-full bg-neutral-950/20 text-[10px] font-black uppercase">
@@ -473,6 +721,25 @@ export const HUD: React.FC<HUDProps> = ({
             <BookOpen className="h-3 w-3" />
             <span>LOG</span>
           </button>
+          {onOpenCompendium && (
+            <button
+              onClick={onOpenCompendium}
+              className="flex items-center gap-0.5 px-2 py-0.5 rounded-lg bg-emerald-500/15 text-emerald-300 font-bold active:scale-95 cursor-pointer"
+              title="Field Compendium [X]"
+            >
+              <BookMarked className="h-3 w-3" />
+              <span>CODEX</span>
+            </button>
+          )}
+          {onEnterPhotoMode && (
+            <button
+              onClick={onEnterPhotoMode}
+              className="flex items-center gap-0.5 px-2 py-0.5 rounded-lg bg-white/10 text-neutral-200 font-bold active:scale-95 cursor-pointer"
+              title="Photo Mode [P]"
+            >
+              <Camera className="h-3 w-3" />
+            </button>
+          )}
           {onToggleTouchControlsMode && (
             <button
               onClick={onToggleTouchControlsMode}
@@ -590,6 +857,94 @@ export const HUD: React.FC<HUDProps> = ({
               >
                 <Terminal className="h-3.5 w-3.5" />
                 <span>Base [O]</span>
+              </button>
+            </>
+          )}
+
+          {onOpenTrainControl && (
+            <>
+              <div className="h-3 w-[1px] bg-neutral-800" />
+              <button
+                onClick={onOpenTrainControl}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer text-sky-400 font-medium"
+                title="Central Railway Dispatch Console [T]"
+              >
+                <Train className="h-3.5 w-3.5" />
+                <span>Train [T]</span>
+              </button>
+            </>
+          )}
+
+          {onOpenCompendium && (
+            <>
+              <div className="h-3 w-[1px] bg-neutral-800" />
+              <button
+                onClick={onOpenCompendium}
+                className="flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer text-emerald-400 font-medium"
+                title="Biomes & Wildlife Field Compendium [X]"
+              >
+                <BookMarked className="h-3.5 w-3.5" />
+                <span>Codex [X]</span>
+              </button>
+            </>
+          )}
+
+          {onToggleMinimap && (
+            <>
+              <div className="h-3 w-[1px] bg-neutral-800" />
+              <button
+                onClick={onToggleMinimap}
+                className={`flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer text-xs ${
+                  isMinimapOpen ? 'text-amber-300 bg-neutral-800/70' : 'text-neutral-400'
+                }`}
+                title="Toggle Corner Tactical Minimap [N]"
+              >
+                <Radar className="h-3.5 w-3.5" />
+                <span>[N]</span>
+              </button>
+            </>
+          )}
+
+          {onEnterPhotoMode && (
+            <>
+              <div className="h-3 w-[1px] bg-neutral-800" />
+              <button
+                onClick={onEnterPhotoMode}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer text-neutral-300 hover:text-amber-300 text-xs whitespace-nowrap shrink-0"
+                title="HUD-Free Photo Mode & Screenshot [P]"
+              >
+                <Camera className="h-3.5 w-3.5" />
+                <span>[P]</span>
+              </button>
+            </>
+          )}
+
+          {onToggleRadio && (
+            <>
+              <div className="h-3 w-[1px] bg-neutral-800" />
+              <button
+                onClick={onToggleRadio}
+                className={`flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer text-xs whitespace-nowrap shrink-0 ${
+                  isRadioOpen ? 'text-amber-300 bg-neutral-800/80' : 'text-neutral-300'
+                }`}
+                title="Emergency Ham Radio & Bounties"
+              >
+                <Radio className="h-3.5 w-3.5" />
+                <span>Radio</span>
+              </button>
+            </>
+          )}
+
+          {onOpenBlueprints && (
+            <>
+              <div className="h-3 w-[1px] bg-neutral-800" />
+              <button
+                onClick={onOpenBlueprints}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer text-neutral-300 hover:text-amber-300 text-xs whitespace-nowrap shrink-0"
+                title="Base Blueprints, Salvage & Weapon Mods"
+              >
+                <Wrench className="h-3.5 w-3.5" />
+                <span>Bench</span>
               </button>
             </>
           )}

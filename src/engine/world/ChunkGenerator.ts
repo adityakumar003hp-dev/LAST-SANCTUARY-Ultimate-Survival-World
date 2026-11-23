@@ -17,8 +17,12 @@ import { LODManager } from './LODManager';
 import {
   getGrassPBR,
   getGrassTuftAlphaTexture,
-  getWaterRippleNormalMap,
 } from '../rendering/ProceduralTextures';
+import {
+  enhanceTerrainMaterialWithRealism,
+  createRealisticWaterMaterial,
+  applyFoliageWindShader,
+} from '../shaders/RealismShaders';
 
 let sharedCrossGrassGeo: THREE.BufferGeometry | null = null;
 function getCrossGrassGeometry(): THREE.BufferGeometry {
@@ -141,42 +145,48 @@ export class ChunkGenerator {
 
     geometry.setAttribute('color', new THREE.BufferAttribute(colors, 3));
 
-    // Realistic PBR Grass & Soil
+    // Realistic PBR Grass & Soil with Anti-Tiling & Rain Puddle Wetness
     const grassPBR = getGrassPBR(biomeDef.groundColor);
-    grassPBR.albedo.repeat.set(12, 12);
-    grassPBR.normal.repeat.set(12, 12);
-    grassPBR.roughness.repeat.set(12, 12);
+    grassPBR.albedo.repeat.set(14, 14);
+    grassPBR.normal.repeat.set(14, 14);
+    grassPBR.roughness.repeat.set(14, 14);
 
-    const terrainMat = new THREE.MeshStandardMaterial({
-      map: grassPBR.albedo,
-      normalMap: grassPBR.normal,
-      roughnessMap: grassPBR.roughness,
-      normalScale: new THREE.Vector2(1.4, 1.4),
-      vertexColors: true,
-      roughness: biomeDef.roughness,
-      metalness: 0.05,
-      flatShading: lodLevel === 2,
-    });
+    const terrainMat = enhanceTerrainMaterialWithRealism(
+      new THREE.MeshStandardMaterial({
+        map: grassPBR.albedo,
+        normalMap: grassPBR.normal,
+        roughnessMap: grassPBR.roughness,
+        normalScale: new THREE.Vector2(1.4, 1.4),
+        vertexColors: true,
+        roughness: biomeDef.roughness,
+        metalness: 0.05,
+        flatShading: lodLevel === 2,
+      })
+    );
 
     const terrainMesh = new THREE.Mesh(geometry, terrainMat);
     terrainMesh.position.set(minX + CHUNK_SIZE * 0.5, 0, minZ + CHUNK_SIZE * 0.5);
     terrainMesh.receiveShadow = quality !== 'low';
     group.add(terrainMesh);
 
-    // 1b. Volumetric Alpha-Tested 3D Grass Blade Clumps for Near LOD (LOD 0)
+    // 1b. Volumetric Alpha-Tested Wind-Animated 3D Grass Blade Clumps for Near LOD (LOD 0)
     if (lodLevel === 0 && quality !== 'low') {
-      const tuftCount = 280;
+      const tuftCount = 920;
       const bladeGeo = getCrossGrassGeometry();
       const grassAlphaTex = getGrassTuftAlphaTexture();
 
-      const bladeMat = new THREE.MeshStandardMaterial({
-        map: grassAlphaTex,
-        color: new THREE.Color(biomeDef.groundColor).lerp(new THREE.Color(0xffffff), 0.35),
-        alphaTest: 0.42,
-        roughness: 0.84,
-        metalness: 0.02,
-        side: THREE.DoubleSide,
-      });
+      const bladeMat = applyFoliageWindShader(
+        new THREE.MeshStandardMaterial({
+          map: grassAlphaTex,
+          color: new THREE.Color(biomeDef.groundColor).lerp(new THREE.Color(0xffffff), 0.35),
+          alphaTest: 0.42,
+          roughness: 0.84,
+          metalness: 0.02,
+          side: THREE.DoubleSide,
+        }),
+        0.22,
+        true
+      );
 
       const instancedTufts = new THREE.InstancedMesh(bladeGeo, bladeMat, tuftCount);
       const dummy = new THREE.Object3D();
@@ -207,33 +217,25 @@ export class ChunkGenerator {
       }
       instancedTufts.count = placed;
       instancedTufts.instanceMatrix.needsUpdate = true;
+      instancedTufts.computeBoundingSphere();
       instancedTufts.receiveShadow = true;
       group.add(instancedTufts);
     }
 
-    // 2. Realistic Dynamic Clearcoat Water Plane
+    // 2. Realistic Dynamic Gerstner Water Plane
     let waterMesh: THREE.Mesh | null = null;
     const riverWave = Math.sin(centerZ * 0.004) * 45;
     const riverDist = Math.abs(centerX - 50 - riverWave);
 
     if (riverDist < 120 || biomeDef.waterColor) {
       const waterColor = biomeDef.waterColor || 0x165270;
-      const waterGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, 16, 16);
+      const waterGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, 24, 24);
       waterGeo.rotateX(-Math.PI / 2);
 
-      const waterNormal = getWaterRippleNormalMap(0);
-      waterNormal.repeat.set(16, 16);
-
-      const waterMat = new THREE.MeshStandardMaterial({
-        color: waterColor,
-        roughness: 0.08,
-        metalness: 0.18,
-        envMapIntensity: 1.5,
-        transparent: true,
-        opacity: 0.86,
-        normalMap: waterNormal,
-        normalScale: new THREE.Vector2(0.95, 0.95),
-      });
+      const waterMat = createRealisticWaterMaterial(waterColor, false);
+      if (waterMat.normalMap) {
+        waterMat.normalMap.repeat.set(16, 16);
+      }
 
       waterMesh = new THREE.Mesh(waterGeo, waterMat);
       waterMesh.position.set(minX + CHUNK_SIZE * 0.5, -0.55, minZ + CHUNK_SIZE * 0.5);

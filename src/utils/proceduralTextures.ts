@@ -171,7 +171,7 @@ function clampByte(v: number): number {
 // ============================================================================
 
 export function getTerrainPBR(): PBRTextureSet {
-  const key = 'terrain_pbr_v2';
+  const key = 'terrain_pbr_v3_512';
   if (textureCache[key + '_a']) {
     return {
       albedo: textureCache[key + '_a'],
@@ -179,7 +179,7 @@ export function getTerrainPBR(): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = 512;
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
 
@@ -194,21 +194,23 @@ export function getTerrainPBR(): PBRTextureSet {
         const v = y / w;
         for (let x = 0; x < w; x++) {
           const u = x / w;
-          const macro = tileFBM(u, v, 4, 4, 11);
-          const micro = tileFBM(u, v, 24, 3, 29);
+          const macro = tileFBM(u, v, 5, 4, 11);
+          const micro = tileFBM(u, v, 28, 3, 29);
+          const blade = tileNoise(u * 1.4, v * 0.6, 64, 41);
           const grit = hash2D(x, y, 53);
-          const hVal = macro * 0.55 + micro * 0.35 + grit * 0.1;
+          const hVal = macro * 0.46 + micro * 0.32 + blade * 0.14 + grit * 0.08;
           heights[y * w + x] = hVal;
 
-          // Rich organic forest floor palette: humus soil + moss + grass blades
-          const mossMix = Math.max(0, Math.min(1, (macro - 0.36) * 2.4));
-          const soilR = 64 + micro * 28 + grit * 10;
-          const soilG = 54 + micro * 22 + grit * 8;
-          const soilB = 36 + micro * 16 + grit * 6;
+          // Rich organic forest floor palette: humus soil + clover moss + blade micro-detail
+          const mossMix = Math.max(0, Math.min(1, (macro - 0.34) * 2.45));
+          const aoCrevice = 0.84 + hVal * 0.24;
+          const soilR = (58 + micro * 28 + grit * 11) * aoCrevice;
+          const soilG = (48 + micro * 22 + grit * 8) * aoCrevice;
+          const soilB = (32 + micro * 16 + grit * 6) * aoCrevice;
 
-          const grassR = 54 + micro * 36 + grit * 14;
-          const grassG = 86 + micro * 48 + grit * 16;
-          const grassB = 38 + micro * 24 + grit * 8;
+          const grassR = (48 + micro * 34 + blade * 16 + grit * 10) * aoCrevice;
+          const grassG = (82 + micro * 48 + blade * 20 + grit * 12) * aoCrevice;
+          const grassB = (34 + micro * 22 + blade * 10 + grit * 6) * aoCrevice;
 
           const idx = (y * w + x) * 4;
           d[idx] = clampByte(soilR + (grassR - soilR) * mossMix);
@@ -216,14 +218,14 @@ export function getTerrainPBR(): PBRTextureSet {
           d[idx + 2] = clampByte(soilB + (grassB - soilB) * mossMix);
           d[idx + 3] = 255;
 
-          roughs[y * w + x] = 0.78 + (1.0 - mossMix) * 0.16 - grit * 0.06;
+          roughs[y * w + x] = 0.74 + (1.0 - mossMix) * 0.18 - grit * 0.06;
         }
       }
     },
     true
   );
 
-  const normal = heightFieldToNormalTexture(heights, size, 2.4);
+  const normal = heightFieldToNormalTexture(heights, size, 2.8);
   const roughness = heightFieldToRoughnessTexture(roughs, size);
   textureCache[key + '_a'] = albedo;
   textureCache[key + '_n'] = normal;
@@ -236,7 +238,7 @@ export function getTerrainTexture(): THREE.CanvasTexture {
 }
 
 export function getGrassPBR(groundColor: number = 0x3d7036): PBRTextureSet {
-  const key = `grass_v2_${groundColor}`;
+  const key = `grass_v3_512_${groundColor}`;
   if (textureCache[key + '_a']) {
     return {
       albedo: textureCache[key + '_a'],
@@ -244,7 +246,7 @@ export function getGrassPBR(groundColor: number = 0x3d7036): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = 512;
   const [br, bg, bb] = hexToRgb(groundColor);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
@@ -260,15 +262,15 @@ export function getGrassPBR(groundColor: number = 0x3d7036): PBRTextureSet {
         const v = y / w;
         for (let x = 0; x < w; x++) {
           const u = x / w;
-          const macro = tileFBM(u, v, 4, 4, 71);
-          const fine = tileFBM(u, v, 28, 3, 97);
+          const macro = tileFBM(u, v, 5, 4, 71);
+          const fine = tileFBM(u, v, 32, 3, 97);
+          const blade = tileNoise(u * 1.5, v * 0.55, 64, 113);
           const speckle = hash2D(x, y, 131);
-          const hVal = macro * 0.45 + fine * 0.4 + speckle * 0.15;
+          const hVal = macro * 0.40 + fine * 0.34 + blade * 0.16 + speckle * 0.10;
           heights[y * w + x] = hVal;
 
-          const shade = 0.76 + hVal * 0.48;
+          const shade = 0.74 + hVal * 0.52;
           const idx = (y * w + x) * 4;
-          // Preserve vertex color multiplication neutrality while giving crisp micro-variation
           const mixR = br * 0.35 + 165 * 0.65;
           const mixG = bg * 0.35 + 165 * 0.65;
           const mixB = bb * 0.35 + 165 * 0.65;
@@ -277,14 +279,14 @@ export function getGrassPBR(groundColor: number = 0x3d7036): PBRTextureSet {
           d[idx + 2] = clampByte(mixB * shade);
           d[idx + 3] = 255;
 
-          roughs[y * w + x] = 0.76 + (1.0 - fine) * 0.2;
+          roughs[y * w + x] = 0.74 + (1.0 - fine) * 0.22;
         }
       }
     },
     true
   );
 
-  const normal = heightFieldToNormalTexture(heights, size, 2.6);
+  const normal = heightFieldToNormalTexture(heights, size, 3.0);
   const roughness = heightFieldToRoughnessTexture(roughs, size);
   textureCache[key + '_a'] = albedo;
   textureCache[key + '_n'] = normal;
@@ -293,25 +295,26 @@ export function getGrassPBR(groundColor: number = 0x3d7036): PBRTextureSet {
 }
 
 export function getGrassTuftAlphaTexture(): THREE.CanvasTexture {
-  const key = 'grass_tuft_alpha_v1';
+  const key = 'grass_tuft_alpha_v2';
   if (textureCache[key]) return textureCache[key];
-  const tex = makeCanvasTexture(128, 128, true, (ctx, w, h) => {
+  const tex = makeCanvasTexture(256, 256, true, (ctx, w, h) => {
     ctx.clearRect(0, 0, w, h);
-    // Draw 11 organic overlapping curved grass blades rising from base
-    for (let i = 0; i < 11; i++) {
-      const bx = (i / 10) * (w * 0.76) + w * 0.12 + (hash2D(i, 1, 7) - 0.5) * 6;
-      const bh = h * (0.55 + hash2D(i, 2, 7) * 0.42);
-      const lean = (hash2D(i, 3, 7) - 0.5) * 34;
-      const bw = 6 + hash2D(i, 4, 7) * 4;
+    // Draw 16 organic overlapping curved grass blades with warm sunlit tips & root shadow AO
+    for (let i = 0; i < 16; i++) {
+      const bx = (i / 15) * (w * 0.80) + w * 0.10 + (hash2D(i, 1, 7) - 0.5) * 12;
+      const bh = h * (0.48 + hash2D(i, 2, 7) * 0.48);
+      const lean = (hash2D(i, 3, 7) - 0.5) * 68;
+      const bw = 9 + hash2D(i, 4, 7) * 7;
       const grad = ctx.createLinearGradient(bx, h, bx + lean, h - bh);
-      grad.addColorStop(0, '#4f6e33');
-      grad.addColorStop(0.55, '#7ea84c');
-      grad.addColorStop(1, '#a9cf6b');
+      grad.addColorStop(0, '#364f21');
+      grad.addColorStop(0.35, '#598236');
+      grad.addColorStop(0.75, '#86b54f');
+      grad.addColorStop(1, '#b6dc75');
       ctx.fillStyle = grad;
       ctx.beginPath();
       ctx.moveTo(bx - bw * 0.5, h);
-      ctx.quadraticCurveTo(bx + lean * 0.35 - bw * 0.2, h - bh * 0.55, bx + lean, h - bh);
-      ctx.quadraticCurveTo(bx + lean * 0.4 + bw * 0.25, h - bh * 0.52, bx + bw * 0.5, h);
+      ctx.quadraticCurveTo(bx + lean * 0.35 - bw * 0.22, h - bh * 0.55, bx + lean, h - bh);
+      ctx.quadraticCurveTo(bx + lean * 0.4 + bw * 0.24, h - bh * 0.52, bx + bw * 0.5, h);
       ctx.closePath();
       ctx.fill();
     }
@@ -323,19 +326,19 @@ export function getGrassTuftAlphaTexture(): THREE.CanvasTexture {
 }
 
 export function getFoliageTexture(tintHex = 0x264d24): THREE.CanvasTexture {
-  const key = `foliage_leaf_${tintHex}`;
+  const key = `foliage_leaf_v2_${tintHex}`;
   if (textureCache[key]) return textureCache[key];
   const [r, g, b] = hexToRgb(tintHex);
   const tex = makeCanvasTexture(256, 256, true, (ctx, w, h) => {
-    ctx.fillStyle = `rgb(${Math.round(r * 0.68)}, ${Math.round(g * 0.68)}, ${Math.round(b * 0.68)})`;
+    ctx.fillStyle = `rgb(${Math.round(r * 0.58)}, ${Math.round(g * 0.58)}, ${Math.round(b * 0.58)})`;
     ctx.fillRect(0, 0, w, h);
-    for (let i = 0; i < 420; i++) {
+    for (let i = 0; i < 520; i++) {
       const lx = hash2D(i, 1, 91) * w;
       const ly = hash2D(i, 2, 91) * h;
       const ang = hash2D(i, 3, 91) * Math.PI * 2;
       const rx = 5 + hash2D(i, 4, 91) * 9;
-      const ry = 2.5 + hash2D(i, 5, 91) * 4.5;
-      const shade = 0.72 + hash2D(i, 6, 91) * 0.62;
+      const ry = 2.4 + hash2D(i, 5, 91) * 4.5;
+      const shade = 0.68 + hash2D(i, 6, 91) * 0.68;
       ctx.save();
       ctx.translate(lx, ly);
       ctx.rotate(ang);
@@ -355,7 +358,7 @@ export function getFoliageTexture(tintHex = 0x264d24): THREE.CanvasTexture {
 // ============================================================================
 
 export function getWoodPBR(): PBRTextureSet {
-  const key = 'wood_pbr_v2';
+  const key = 'wood_pbr_v3_512';
   if (textureCache[key + '_a']) {
     return {
       albedo: textureCache[key + '_a'],
@@ -363,7 +366,7 @@ export function getWoodPBR(): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = 512;
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
 
@@ -374,42 +377,42 @@ export function getWoodPBR(): PBRTextureSet {
     (_ctx, w, _h, img) => {
       if (!img) return;
       const d = img.data;
-      const planks = 4;
+      const planks = 6;
       const plankH = w / planks;
       for (let y = 0; y < w; y++) {
         const v = y / w;
         const plankIdx = Math.floor(y / plankH);
         const plankLocal = (y % plankH) / plankH;
         const seamDist = Math.min(plankLocal, 1 - plankLocal) * plankH;
-        const isSeam = seamDist < 2.0;
+        const isSeam = seamDist < 2.6;
 
         for (let x = 0; x < w; x++) {
           const u = x / w;
           const grain = Math.sin(
-            (v * 28 + tileFBM(u * 0.5, v * 4, 4, 3, 21 + plankIdx * 5) * 4.5) * Math.PI
+            (v * 34 + tileFBM(u * 0.5, v * 4, 4, 3, 21 + plankIdx * 5) * 4.8) * Math.PI
           ) * 0.5 + 0.5;
-          const fibers = tileNoise(u, v * 0.25, 32, 33 + plankIdx);
-          const plankTint = 0.88 + hash2D(plankIdx, 1, 7) * 0.22;
+          const fibers = tileNoise(u, v * 0.25, 48, 33 + plankIdx);
+          const plankTint = 0.86 + hash2D(plankIdx, 1, 7) * 0.24;
 
           let hVal = grain * 0.45 + fibers * 0.4 + 0.15;
-          if (isSeam) hVal *= 0.18;
+          if (isSeam) hVal *= 0.15;
           heights[y * w + x] = hVal;
 
-          const lum = isSeam ? 0.32 : (0.72 + grain * 0.24 + fibers * 0.12) * plankTint;
+          const lum = isSeam ? 0.28 : (0.72 + grain * 0.24 + fibers * 0.12) * plankTint;
           const idx = (y * w + x) * 4;
-          d[idx] = clampByte(116 * lum);
-          d[idx + 1] = clampByte(80 * lum);
-          d[idx + 2] = clampByte(48 * lum);
+          d[idx] = clampByte(118 * lum);
+          d[idx + 1] = clampByte(82 * lum);
+          d[idx + 2] = clampByte(49 * lum);
           d[idx + 3] = 255;
 
-          roughs[y * w + x] = isSeam ? 0.96 : 0.68 + (1 - grain) * 0.22;
+          roughs[y * w + x] = isSeam ? 0.96 : 0.65 + (1 - grain) * 0.24;
         }
       }
     },
     true
   );
 
-  const normal = heightFieldToNormalTexture(heights, size, 2.8);
+  const normal = heightFieldToNormalTexture(heights, size, 3.2);
   const roughness = heightFieldToRoughnessTexture(roughs, size);
   textureCache[key + '_a'] = albedo;
   textureCache[key + '_n'] = normal;
@@ -422,7 +425,7 @@ export function getWoodPlankTexture(): THREE.CanvasTexture {
 }
 
 export function getStonePBR(): PBRTextureSet {
-  const key = 'stone_pbr_v2';
+  const key = 'stone_pbr_v3_512';
   if (textureCache[key + '_a']) {
     return {
       albedo: textureCache[key + '_a'],
@@ -430,7 +433,7 @@ export function getStonePBR(): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = 512;
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
 
@@ -446,29 +449,29 @@ export function getStonePBR(): PBRTextureSet {
         for (let x = 0; x < w; x++) {
           const u = x / w;
           const broad = tileFBM(u, v, 6, 4, 101);
-          const fine = tileFBM(u, v, 24, 3, 109);
+          const fine = tileFBM(u, v, 28, 3, 109);
           const grain = hash2D(x, y, 113);
-          const crack = Math.abs(tileFBM(u, v, 4, 3, 127) - 0.5);
-          const isCrack = crack < 0.025;
+          const crack = Math.abs(tileFBM(u, v, 5, 3, 127) - 0.5);
+          const isCrack = crack < 0.022;
           let hVal = broad * 0.55 + fine * 0.35 + grain * 0.1;
-          if (isCrack) hVal *= 0.25;
+          if (isCrack) hVal *= 0.22;
           heights[y * w + x] = hVal;
 
-          const base = isCrack ? 52 : 95 + hVal * 62;
+          const base = isCrack ? 48 : 94 + hVal * 64;
           const idx = (y * w + x) * 4;
           d[idx] = clampByte(base * 1.01);
           d[idx + 1] = clampByte(base * 1.0);
           d[idx + 2] = clampByte(base * 1.03);
           d[idx + 3] = 255;
 
-          roughs[y * w + x] = isCrack ? 0.96 : 0.72 + (1 - hVal) * 0.22;
+          roughs[y * w + x] = isCrack ? 0.96 : 0.70 + (1 - hVal) * 0.24;
         }
       }
     },
     true
   );
 
-  const normal = heightFieldToNormalTexture(heights, size, 3.0);
+  const normal = heightFieldToNormalTexture(heights, size, 3.4);
   const roughness = heightFieldToRoughnessTexture(roughs, size);
   textureCache[key + '_a'] = albedo;
   textureCache[key + '_n'] = normal;
@@ -1340,3 +1343,95 @@ export function getFurPBR(
   textureCache[key + '_r'] = roughness;
   return { albedo, normal, roughness };
 }
+
+// ============================================================================
+// 5. VOLUMETRIC PARTICLE & WEATHER TEXTURES (100% Procedural Alpha Sprites)
+// ============================================================================
+
+export function getSoftParticleTexture(): THREE.CanvasTexture {
+  const key = 'particle_soft_glow_v1';
+  if (textureCache[key]) return textureCache[key];
+  const tex = makeCanvasTexture(64, 64, true, (ctx, w, h) => {
+    const cx = w / 2;
+    const cy = h / 2;
+    const grad = ctx.createRadialGradient(cx, cy, 1, cx, cy, cx);
+    grad.addColorStop(0.0, 'rgba(255,255,255,1.0)');
+    grad.addColorStop(0.32, 'rgba(255,255,255,0.72)');
+    grad.addColorStop(0.7, 'rgba(255,255,255,0.18)');
+    grad.addColorStop(1.0, 'rgba(255,255,255,0.0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+  });
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  textureCache[key] = tex;
+  return tex;
+}
+
+export function getSmokePuffTexture(): THREE.CanvasTexture {
+  const key = 'particle_smoke_puff_v1';
+  if (textureCache[key]) return textureCache[key];
+  const size = 128;
+  const tex = makeCanvasTexture(
+    size,
+    size,
+    true,
+    (_ctx, w, _h, img) => {
+      if (!img) return;
+      const d = img.data;
+      const half = w * 0.5;
+      for (let y = 0; y < w; y++) {
+        for (let x = 0; x < w; x++) {
+          const dx = (x - half) / half;
+          const dy = (y - half) / half;
+          const dist = Math.hypot(dx, dy);
+          const n = tileFBM(x / w, y / w, 4, 4, 1777);
+          const edge = Math.max(0, 1.0 - dist * (1.05 - n * 0.25));
+          const alpha = Math.pow(edge, 1.55);
+          const shade = 215 + n * 40;
+          const idx = (y * w + x) * 4;
+          d[idx] = clampByte(shade);
+          d[idx + 1] = clampByte(shade);
+          d[idx + 2] = clampByte(shade);
+          d[idx + 3] = clampByte(alpha * 255);
+        }
+      }
+    },
+    true
+  );
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  textureCache[key] = tex;
+  return tex;
+}
+
+export function getSnowflakeTexture(): THREE.CanvasTexture {
+  const key = 'particle_snowflake_v1';
+  if (textureCache[key]) return textureCache[key];
+  const tex = makeCanvasTexture(64, 64, true, (ctx, w, h) => {
+    const cx = w / 2;
+    const cy = h / 2;
+    const grad = ctx.createRadialGradient(cx, cy, 2, cx, cy, cx * 0.9);
+    grad.addColorStop(0.0, 'rgba(255,255,255,0.98)');
+    grad.addColorStop(0.45, 'rgba(235,245,255,0.68)');
+    grad.addColorStop(1.0, 'rgba(220,240,255,0.0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, w, h);
+
+    ctx.strokeStyle = 'rgba(255,255,255,0.75)';
+    ctx.lineWidth = 2;
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 6; i++) {
+      const ang = (i / 6) * Math.PI * 2;
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(ang) * 20, cy + Math.sin(ang) * 20);
+      ctx.stroke();
+    }
+  });
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  textureCache[key] = tex;
+  return tex;
+}
+

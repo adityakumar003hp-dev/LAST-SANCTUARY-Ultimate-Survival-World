@@ -91,7 +91,18 @@ export interface PlacedStructure {
   farmCrop?: string;
 }
 
-export type ZombieType = 'walker' | 'runner' | 'brute' | 'screamer' | 'crawler';
+export type WeatherType = 'clear' | 'rain' | 'thunderstorm' | 'blizzard' | 'sandstorm' | 'toxic_fog';
+
+export type ZombieType =
+  | 'walker'
+  | 'runner'
+  | 'brute'
+  | 'screamer'
+  | 'crawler'
+  | 'spitter'
+  | 'juggernaut'
+  | 'stalker'
+  | 'alpha_boss';
 
 export interface ZombieEntity {
   id: string;
@@ -107,6 +118,10 @@ export interface ZombieEntity {
   attackCooldown: number;
   detectionRadius: number;
   deathTimer?: number;
+  isBoss?: boolean;
+  bossTitle?: string;
+  variantSpeedMult?: number;
+  rangedCooldown?: number;
 }
 
 export interface HarvestableResource {
@@ -119,6 +134,15 @@ export interface HarvestableResource {
   yieldAmount: number;
   requiredTool?: 'axe' | 'pickaxe' | 'none';
   respawnTime?: number;
+}
+
+export type WeaponModId = 'suppressor_mod' | 'extended_mag_mod' | 'reflex_sight_mod';
+
+export interface KillStats {
+  total: number;
+  headshots: number;
+  bosses: number;
+  stealth: number;
 }
 
 export interface PlayerStats {
@@ -134,6 +158,14 @@ export interface PlayerStats {
   maxOxygen: number;
   isSwimming?: boolean;
   isSubmerged?: boolean;
+  flashlightBattery?: number; // 0-100
+  radiationExposure?: number; // 0-100
+  noiseLevel?: number; // 0-100
+  equippedArmorId?: string;
+  equippedMaskId?: string;
+  perkUnlocks?: string[];
+  killStats?: KillStats;
+  rebirthCount?: number;
   level: number;
   xp: number;
   xpToNextLevel: number;
@@ -144,6 +176,74 @@ export interface PlayerStats {
     engineering: number;   // Structure HP bonus, crafting speed
     survival: number;      // Hunger/thirst drain reduction
   };
+}
+
+export interface SandboxSettings {
+  lootMultiplier: number; // 0.5 - 3.0
+  zombieDensity: number; // 0.5 - 2.5
+  dayLengthMultiplier: number; // 0.5 - 2.0
+  weatherIntensity: number; // 0 - 2.0
+  friendlyFire: boolean;
+  permadeath: boolean;
+  infinitePower: boolean;
+}
+
+export type KeybindAction =
+  | 'moveForward'
+  | 'moveBackward'
+  | 'moveLeft'
+  | 'moveRight'
+  | 'sprint'
+  | 'jump'
+  | 'crouch'
+  | 'interact'
+  | 'flashlight'
+  | 'reload'
+  | 'quickSwap'
+  | 'throwable'
+  | 'buildMode'
+  | 'character'
+  | 'inventory'
+  | 'crafting'
+  | 'map'
+  | 'cameraToggle'
+  | 'radio'
+  | 'fish';
+
+export type KeybindConfig = Record<KeybindAction, string>;
+
+export interface RadiantBounty {
+  id: string;
+  title: string;
+  description: string;
+  category: 'combat' | 'boss' | 'salvage' | 'survival' | 'defense';
+  targetType: 'kill_any' | 'kill_brute' | 'kill_boss' | 'kill_headshot' | 'catch_fish' | 'craft_ammo' | 'survive_night';
+  current: number;
+  target: number;
+  rewardXp: number;
+  rewardItems: { itemId: string; count: number }[];
+  claimed: boolean;
+  completed: boolean;
+}
+
+export interface FloatingDamageNumber {
+  id: string;
+  x: number; // screen % 0..100
+  y: number; // screen % 0..100
+  amount: number;
+  isHeadshot?: boolean;
+  isStealth?: boolean;
+  isPlayerDamage?: boolean;
+  createdAt: number;
+}
+
+export interface SupplyDropState {
+  id: string;
+  position: [number, number, number];
+  altitude: number;
+  landed: boolean;
+  looted: boolean;
+  etaSeconds: number;
 }
 
 export interface CompanionState {
@@ -385,7 +485,7 @@ export interface ResearchTech {
   category: 'power' | 'defense' | 'farming' | 'medical' | 'vehicle';
 }
 
-export type VehicleType = 'atv' | 'enforce' | 'car' | 'bicycle' | 'motorbike' | 'buggy';
+export type VehicleType = 'atv' | 'enforce' | 'car' | 'bicycle' | 'motorbike' | 'buggy' | 'motorboat' | 'armored_truck';
 
 export interface VehicleState {
   id: string;
@@ -489,6 +589,15 @@ export interface FullGameSave {
   storyCheckpoint?: StoryCheckpointData;
   unlockedFacilities?: string[];
   weatherState?: string;
+  weatherType?: WeatherType;
+  bounties?: RadiantBounty[];
+  sandboxSettings?: SandboxSettings;
+  deathBag?: {
+    position: [number, number, number];
+    items: (InventorySlot | null)[];
+  } | null;
+  weaponMods?: Record<string, WeaponModId[]>;
+  rebirthCount?: number;
   ecosystemMetrics?: EcosystemMetrics;
   trainSaveState?: TrainSaveState;
   railwayNPCSaveState?: RailwayNPCSaveRecord[];
