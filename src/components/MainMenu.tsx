@@ -251,6 +251,13 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             <span>Three.js 3D Engine</span>
             <span aria-hidden="true">·</span>
             <a
+              href="/about.html"
+              className="text-neutral-400 hover:text-amber-400 underline underline-offset-4 transition-colors"
+            >
+              About the Game
+            </a>
+            <span aria-hidden="true">·</span>
+            <a
               href="/guide.html"
               className="text-neutral-400 hover:text-amber-400 underline underline-offset-4 transition-colors"
             >
