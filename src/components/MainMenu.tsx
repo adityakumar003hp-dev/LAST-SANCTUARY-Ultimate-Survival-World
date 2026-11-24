@@ -104,7 +104,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
             LAST SANCTUARY
           </h1>
           <h2 className="text-lg sm:text-2xl md:text-3xl [@media(max-height:500px)]:text-lg font-extrabold tracking-widest text-amber-500 mt-1 uppercase">
-            REBIRTH
+            ULTIMATE SURVIVAL WORLD
           </h2>
           <div className="mt-2.5 sm:mt-3 inline-flex items-center gap-2 rounded-lg border border-amber-500/35 bg-neutral-900/90 px-3 sm:px-3.5 py-1 text-[10px] sm:text-[11px] font-mono font-bold tracking-[0.18em] text-neutral-100 shadow-lg">
             <span className="inline-flex h-2.5 w-4 overflow-hidden rounded-[2px] border border-white/20 shrink-0 flex-col">
