@@ -188,8 +188,10 @@ export class PrologueManager {
 
     if (this.isCompleted) {
       this.shelterMgr.update(delta);
-      this.townMgr.update(delta, this.engine.isNight, false, this.engine.player.position, this.engine.camera.position);
+      this.townMgr.update(delta, this.engine.isNight, this.outbreakMgr.isOutbreakActive, this.engine.player.position, this.engine.camera.position);
       this.companionMgr.update(delta, this.engine.player.position, false, this.townMgr.apartmentBuilding);
+      // Keep the outbreak simulation alive after the campaign unlocks free roam.
+      if (this.outbreakMgr.isOutbreakActive) this.outbreakMgr.update(delta, this.engine.player.position);
       return;
     }
 
@@ -1108,6 +1110,7 @@ export class PrologueManager {
     // Restore full chunk streaming for open-world exploration
     this.engine.chunkManager.setStreamingRadius(null);
     this.engine.zombieMgr.isOutbreakActive = true;
+    this.outbreakMgr.isOutbreakActive = true;
 
     // Station companions permanently in Starter Base compound
     this.companionMgr.teleportTo('marcus', [954, 0, 33], Math.PI); // Guarding main gate
@@ -1471,6 +1474,7 @@ export class PrologueManager {
     // Spawn physical crater in world
     this.meteorMgr.spawnPhysicalCrater();
     this.engine.zombieMgr.isOutbreakActive = true;
+    this.outbreakMgr.isOutbreakActive = true;
 
     // Station companions permanently in Starter Base compound (954, 22) if not already positioned
     if (!saveData.companions?.['marcus']?.position) {
@@ -1484,13 +1488,209 @@ export class PrologueManager {
     }
   }
 
+  private syncObjectiveForCurrentEvent() {
+    switch (this.currentEventId) {
+      case 'D1_E01_NEW_MORNING':
+        this.callbacks.onObjectiveUpdate('Mission: WAKE UP — Get ready for the day and check your phone [E]');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d1_e01_wake',
+          title: 'A NEW MORNING',
+          instruction: 'Get out of bed and check your phone on the coffee table.',
+          destinationName: 'Living Room Table',
+          position: [-26, 0.4, 36.8],
+          arrivalRadius: 2.5,
+        });
+        break;
+      case 'D1_E02_HOME_SWEET_HOME':
+        this.callbacks.onObjectiveUpdate('Mission: EXPLORE HOME — Check your apartment rooms, phone, fridge, and front door [E]');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d1_e02_explore',
+          title: 'HOME SWEET HOME',
+          instruction: 'Inspect your living room table or step toward the front door.',
+          destinationName: 'Apartment Front Door',
+          position: [-26, 0.4, 31],
+          arrivalRadius: 2.8,
+        });
+        break;
+      case 'D1_E03_FRIEND_MESSAGE':
+        this.callbacks.onObjectiveUpdate('Mission: HEAD OUTSIDE — Meet Marcus, Chloe, and Maya at Corner Roast Café');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d1_e03_door',
+          title: 'MEETING THE CREW',
+          instruction: 'Leave the apartment and meet your three friends at Corner Roast Café.',
+          destinationName: 'Corner Roast Café',
+          position: [-14, 0.2, 22],
+          arrivalRadius: 5.5,
+        });
+        break;
+      case 'D1_E04_CITY_MORNING':
+        this.callbacks.onObjectiveUpdate('Mission: EXPLORE NEIGHBOURHOOD — Walk down Main Avenue to Corner Roast Café');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d1_e04_walk_cafe',
+          title: 'TO THE CAFÉ',
+          instruction: 'Walk down Main Avenue to Corner Roast Café.',
+          destinationName: 'Corner Roast Café',
+          position: [-14, 0.2, 22],
+          arrivalRadius: 4.5,
+        });
+        break;
+      case 'D1_E05_CAFE_MEETING':
+        this.callbacks.onObjectiveUpdate('Mission: CAFÉ REUNION — Talk to Marcus Cole at the café table');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d1_e05_talk',
+          title: 'TALK TO MARCUS',
+          instruction: 'Join your friends at the outdoor patio table.',
+          destinationName: 'Café Patio Table',
+          position: [-10, 0.2, 17],
+          arrivalRadius: 3.5,
+        });
+        break;
+      case 'D1_E06_FOUR_FRIENDS':
+        this.callbacks.onObjectiveUpdate('Mission: SPEND TIME TOGETHER — Chat with your three friends at the café');
+        break;
+      case 'D1_E07_PARK':
+        this.callbacks.onObjectiveUpdate('Mission: VISIT PARK — Walk with your friends to Town Square Park fountain');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d1_e07_fountain',
+          title: 'TOWN SQUARE PARK',
+          instruction: 'Visit the central park fountain with Marcus, Chloe, and Maya.',
+          destinationName: 'Park Fountain',
+          position: [20, 0.2, 18],
+          arrivalRadius: 4.5,
+        });
+        break;
+      case 'D1_E08_STRANGE_NEWS':
+        this.callbacks.onObjectiveUpdate('Mission: WATCH NEWS — Listen to the public broadcast report with your friends');
+        break;
+      case 'D1_E09_EVENING':
+        this.callbacks.onObjectiveUpdate('Mission: RETURN HOME — Head back to your apartment living room with your friends');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d1_e09_return',
+          title: 'RETURN TO APARTMENT',
+          instruction: 'Walk back to your apartment living room with your friends.',
+          destinationName: 'Apartment Living Room',
+          position: [-26, 0.2, 38],
+          arrivalRadius: 3.8,
+        });
+        break;
+      case 'D1_E10_LAST_NORMAL_NIGHT':
+        this.callbacks.onObjectiveUpdate('Mission: SLEEP IN BED — Interact with your bed [E] on Floor 1 to rest');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d1_e10_bed',
+          title: 'REST IN BED',
+          instruction: 'Sleep in your bed on Floor 1 to wake up for Day 2.',
+          destinationName: 'Bedroom Bed',
+          position: [-30, 0.4, 41],
+          arrivalRadius: 2.5,
+        });
+        break;
+      case 'D2_E11_SOMETHING_WRONG':
+        this.callbacks.onObjectiveUpdate('Mission: CHECK PHONE — Unusual emergency sirens heard outside. Check your phone or TV [E]');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d2_e11_tv',
+          title: 'CHECK LIVING ROOM TV',
+          instruction: 'Go to the living room and turn on the television [E].',
+          destinationName: 'Living Room TV',
+          position: [-31.5, 1.5, 38],
+          arrivalRadius: 2.8,
+        });
+        break;
+      case 'D2_E12_EMERGENCY_BROADCAST':
+        this.callbacks.onObjectiveUpdate('Mission: EMERGENCY BROADCAST — Watch the emergency alert on your TV');
+        break;
+      case 'D2_E13_FRIENDS_RETURN':
+        this.callbacks.onObjectiveUpdate('Mission: REGROUP — Meet Marcus, Chloe, and Maya at the apartment front door');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d2_e13_door',
+          title: 'MEET AT FRONT DOOR',
+          instruction: 'Open the front entrance door [E] to let your friends inside.',
+          destinationName: 'Apartment Front Door',
+          position: [-26, 0.2, 31],
+          arrivalRadius: 3.2,
+        });
+        break;
+      case 'D2_E14_SKY_CHANGES':
+        this.callbacks.onObjectiveUpdate('Mission: CLIMB TO ROOFTOP — Take the continuous staircase up to Floor 5 rooftop pool terrace');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d2_e14_rooftop',
+          title: 'FLOOR 5 ROOFTOP DECK',
+          instruction: 'Take the staircase to Floor 5 rooftop pool terrace with your friends.',
+          destinationName: 'Rooftop Pool Deck',
+          position: [-26, 13.2, 38],
+          arrivalRadius: 4.5,
+        });
+        break;
+      case 'D2_E15_METEORITE_IMPACT':
+        this.callbacks.onObjectiveUpdate('Mission: SURVIVE IMPACT — Watch Sector 4 Ground Zero from the rooftop');
+        break;
+      case 'D2_E16_FIRST_INFECTION':
+        this.callbacks.onObjectiveUpdate('Mission: DESCEND TO STREET — Go down the stairs to street level and investigate cautiously');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d2_e16_street',
+          title: 'STREET LEVEL',
+          instruction: 'Descend to the street level with your friends.',
+          destinationName: 'Sidewalk Intersection',
+          position: [0, 0.2, 20],
+          arrivalRadius: 5.5,
+        });
+        break;
+      case 'D2_E17_CITYWIDE_OUTBREAK':
+        this.callbacks.onObjectiveUpdate('Mission: AVOID BLOCKED AVENUES — Cut through the East Cross Street toward the highway');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d2_e17_bypass',
+          title: 'EAST CROSS STREET',
+          instruction: 'Cut through East Cross Street toward the highway corridor.',
+          destinationName: 'East Cross Street',
+          position: [16, 0.2, 0],
+          arrivalRadius: 5.5,
+        });
+        break;
+      case 'D2_E18_CITY_ESCAPE':
+        this.callbacks.onObjectiveUpdate('Mission: ESCAPE THE CITY — Escort your three friends along the eastern highway corridor');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d2_e18_highway',
+          title: 'EASTERN HIGHWAY',
+          instruction: 'Follow the highway east with your friends.',
+          destinationName: 'Highway Ridge',
+          position: [250, 0.2, 20],
+          arrivalRadius: 8.0,
+        });
+        break;
+      case 'D2_E19_FINAL_ROAD':
+        this.callbacks.onObjectiveUpdate('Mission: REACH OVERLOOK — Regroup with Marcus, Chloe, and Maya on the highway overlook');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d2_e19_overlook',
+          title: 'HIGHWAY OVERLOOK',
+          instruction: 'Regroup on the elevated highway overlook at (600, 22).',
+          destinationName: 'Highway Overlook',
+          position: [600, 0.2, 22],
+          arrivalRadius: 6.5,
+        });
+        break;
+      case 'D2_E20_STARTER_BASE':
+        this.callbacks.onObjectiveUpdate('Mission: ESTABLISH BASE — 1) Prime generator with Chloe [954, 18], 2) Medical corner [951.6, 19.4], 3) Storage chest, 4) Secure gate with Marcus');
+        this.engine.objectiveNavigator.setObjective({
+          id: 'story_d2_e20_generator',
+          title: 'PRIME GENERATOR',
+          instruction: 'Inspect and start the backup diesel generator with Chloe at (954, 18).',
+          destinationName: 'Backup Diesel Generator',
+          position: [954, 0.2, 18],
+          arrivalRadius: 3.5,
+        });
+        break;
+    }
+  }
+
   public restoreStoryState(saveData: PrologueSaveData) {
+    this.isCompleted = Boolean(saveData.isCompleted);
     this.currentDay = (saveData.day as StoryDay) || 1;
     this.day = saveData.day || 1;
     this.chapter = saveData.chapter || 1;
     this.currentEventId = saveData.currentEventId || 'D1_E01_NEW_MORNING';
     this.phase = saveData.phase || this.currentEventId;
+    this.lastSafeCheckpointId = this.currentEventId;
     this.completedEventIds = saveData.completedEventIds || [];
+    this.optionalObjectivesCompleted = saveData.optionalObjectivesCompleted || [];
     this.friendsMet = saveData.friendsMet || { marcus: false, chloe: false, maya: false };
     if (saveData.apartmentInspected) this.apartmentInspected = { ...this.apartmentInspected, ...saveData.apartmentInspected };
     if (saveData.cityTasks) this.cityTasks = { ...this.cityTasks, ...saveData.cityTasks };
@@ -1526,6 +1726,9 @@ export class PrologueManager {
     if (saveData.craterFormed || this.meteoriteImpactTriggered) {
       this.meteorMgr.spawnPhysicalCrater();
     }
+
+    this.callbacks.onPhaseChange(this.phase);
+    this.syncObjectiveForCurrentEvent();
   }
 
   public exportSaveData(): PrologueSaveData {

@@ -72,13 +72,15 @@ export class ChunkGenerator {
     lodLevel: number,
     quality: GraphicsQuality = 'medium',
     destroyedResourceIds: Set<string> = new Set(),
-    lootedPoiIds: Set<string> = new Set()
+    lootedPoiIds: Set<string> = new Set(),
+    apocalypticSeverity: number = 0
   ): GeneratedChunk {
     const key = WorldCoordinates.chunkKey(coord.cx, coord.cz);
     const [minX, minZ] = WorldCoordinates.chunkToWorldOrigin(coord.cx, coord.cz);
     const [centerX, centerZ] = WorldCoordinates.chunkToWorldCenter(coord.cx, coord.cz);
 
     const biomeDef = BiomeGenerator.getBiomeAt(centerX, centerZ, worldSeed);
+    const earthInfo = TerrainGenerator.getEarthInfo(centerX, centerZ);
     const group = new THREE.Group();
     group.name = `chunk_${key}`;
 
@@ -222,13 +224,20 @@ export class ChunkGenerator {
       group.add(instancedTufts);
     }
 
-    // 2. Realistic Dynamic Gerstner Water Plane
+    // 2. Realistic Dynamic Gerstner Water Plane (oceans, seas, major rivers, lakes, submerged coasts)
     let waterMesh: THREE.Mesh | null = null;
     const riverWave = Math.sin(centerZ * 0.004) * 45;
     const riverDist = Math.abs(centerX - 50 - riverWave);
 
-    if (riverDist < 120 || biomeDef.waterColor) {
-      const waterColor = biomeDef.waterColor || 0x165270;
+    if (
+      riverDist < 120 ||
+      biomeDef.waterColor ||
+      !earthInfo.isLand ||
+      earthInfo.isLake ||
+      earthInfo.riverProximity > 0.3 ||
+      minElevation < -0.58
+    ) {
+      const waterColor = biomeDef.waterColor || (!earthInfo.isLand ? 0x0e4f6e : 0x165270);
       const waterGeo = new THREE.PlaneGeometry(CHUNK_SIZE, CHUNK_SIZE, 24, 24);
       waterGeo.rotateX(-Math.PI / 2);
 
@@ -256,6 +265,46 @@ export class ChunkGenerator {
       POIGenerator.getPOIsForChunk(coord.cx, coord.cz, worldSeed)
     );
     group.add(railwayMesh);
+
+    // 3c. Persistent Apocalyptic Debris & Abandoned Highway Wrecks when outbreak severity > 0.2
+    if (apocalypticSeverity > 0.2 && lodLevel <= 1 && earthInfo.isLand && !isProtectedSpawnZone(centerX, centerZ)) {
+      const wreckCount = Math.min(3, Math.floor(apocalypticSeverity * 3.5));
+      const rustMat = new THREE.MeshStandardMaterial({ color: 0x4b382f, roughness: 0.88, metalness: 0.45 });
+      const rubbleMat = new THREE.MeshStandardMaterial({ color: 0x46484a, roughness: 0.94, metalness: 0.05 });
+      let s = ((coord.cx * 49157) ^ (coord.cz * 98317) ^ worldSeed) >>> 0;
+      const rand = () => {
+        s = (s * 1664525 + 1013904223) >>> 0;
+        return s / 4294967296;
+      };
+      for (let wIdx = 0; wIdx < wreckCount; wIdx++) {
+        const rx = minX + 24 + rand() * (CHUNK_SIZE - 48);
+        const rz = minZ + 24 + rand() * (CHUNK_SIZE - 48);
+        if (isProtectedSpawnZone(rx, rz) || RailwayNetworkGenerator.isProtectedRailwayZone(rx, rz)) continue;
+        const ry = TerrainGenerator.getHeight(rx, rz, worldSeed);
+        if (ry < -0.2) continue;
+
+        if (RoadGenerator.isRoad(rx, rz).isRoad || rand() > 0.45) {
+          // Abandoned rusted vehicle hull / road barricade
+          const wreckGroup = new THREE.Group();
+          const body = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.95, 4.1), rustMat);
+          body.position.y = 0.55;
+          const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.75, 0.72, 1.9), rustMat);
+          cabin.position.set(0, 1.32, -0.2);
+          wreckGroup.add(body, cabin);
+          wreckGroup.position.set(rx, ry, rz);
+          wreckGroup.rotation.y = rand() * Math.PI * 2;
+          wreckGroup.rotation.z = (rand() - 0.5) * 0.14;
+          group.add(wreckGroup);
+        } else {
+          // Concrete rubble pile / overgrown debris
+          const rubble = new THREE.Mesh(new THREE.DodecahedronGeometry(1.1 + rand() * 0.9, 0), rubbleMat);
+          rubble.scale.set(1.3, 0.55, 1.1);
+          rubble.position.set(rx, ry + 0.35, rz);
+          rubble.rotation.y = rand() * Math.PI;
+          group.add(rubble);
+        }
+      }
+    }
 
     // 4. Harvestable Resources (avoid destroyed)
     const rawResources = VegetationGenerator.generateResourcesForChunk(coord.cx, coord.cz, biomeDef.id, worldSeed);
@@ -288,7 +337,7 @@ export class ChunkGenerator {
       }
       pois.push(p);
 
-      const pMesh = POIGenerator.createPOIMesh(p);
+      const pMesh = POIGenerator.createPOIMesh(p, apocalypticSeverity);
       poiMeshes.set(p.id, pMesh);
       group.add(pMesh);
     }

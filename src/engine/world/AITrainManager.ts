@@ -41,6 +41,13 @@ import { stationPlacementValidator } from './StationPlacementValidator';
 export type RailwayTrackLine = 'F1' | 'F2' | 'F3' | 'B1' | 'B2' | 'B3';
 export type TrainCameraMode = 'interior_1st' | 'interior_3rd' | 'cab' | 'chase' | 'rear';
 
+export interface RouteStationStop {
+  index: number;
+  name: string;
+  shortName: string;
+  status: 'passed' | 'departed' | 'arrived' | 'arriving' | 'upcoming';
+}
+
 export interface RailwayServiceTelemetry {
   slot: number; // 1 to 6
   trainId: string;
@@ -63,13 +70,32 @@ export interface RailwayServiceTelemetry {
   speedMph: number;
   currentStation: string;
   nextStation: string;
+  arrivedStation: string;
+  departedStation: string;
+  arrivingStation: string;
+  departingStation: string;
+  isAtStation: boolean;
   distToNextMeters: number;
   distTravelledKm: number;
   distRemainingKm: number;
+  legDistanceCoveredM: number;
+  legDistanceLeftM: number;
+  legDistanceCoveredKm: number;
+  legDistanceLeftKm: number;
+  routeDistanceCoveredKm: number;
+  routeDistanceLeftKm: number;
+  routeTotalKm: number;
+  totalDistanceCoveredKm: number;
+  routeProgressPct: number;
+  routeStations: RouteStationStop[];
   distance: number;
   remaining: number;
   arrival: string;
   departure: string;
+  arrivalTime: string;
+  departureTime: string;
+  currentTimeText: string;
+  dayCount: number;
   scheduledArrival: string;
   estimatedArrival: string;
   departureCountdownSeconds: number; // strictly < 300
@@ -82,6 +108,7 @@ export interface RailwayServiceTelemetry {
   status: 'RUNNING' | 'DWELLING' | 'DOORS_OPEN' | 'HELD';
   dwellSeconds: number;
   condition: string;
+  conditionDetail: string;
   doorsOpen: boolean;
   holdOrdered: boolean;
   tractionMotorTempC: number;
@@ -122,6 +149,11 @@ export interface AITrain {
   departureCountdownSeconds: number; // strictly < 300
   arrivalCountdownSeconds: number; // strictly < 300
   currentStationIndex: number | null;
+  lastArrivedStationIndex: number;
+  lastDepartedStationIndex: number;
+  lastArrivedGameMinutes: number;
+  lastDepartedGameMinutes: number;
+  totalDistanceCoveredM: number;
   doors: THREE.Mesh[];
   doorsOpen: boolean;
   stationStatus: 'running' | 'doors_open' | 'doors_closing';
@@ -206,6 +238,36 @@ export const STATION_NAMES = [
   'Northern Apex Research Stop',
 ];
 
+const STATION_SHORT_NAMES = [
+  'Central',
+  'Pine Valley',
+  'Highland',
+  'Riverbend',
+  'Redwood',
+  'Canyon Pass',
+  'Sunset Coast',
+  'North Apex',
+];
+
+function posMod(n: number, m: number): number {
+  return ((n % m) + m) % m;
+}
+
+function formatGameClockHM(gameMinutes: number): string {
+  const wrapped = ((Math.floor(gameMinutes) % 1440) + 1440) % 1440;
+  const h = Math.floor(wrapped / 60);
+  const m = wrapped % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}`;
+}
+
+function formatGameClockHMS(gameMinutes: number): string {
+  const totalSec = ((Math.round(gameMinutes * 60) % 86400) + 86400) % 86400;
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${h.toString().padStart(2, '0')}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+}
+
 export type TrainLiveryStyle = 'rajdhani' | 'vandebharat' | 'mail' | 'intercity' | 'metro' | 'shield';
 
 const TRACK_CONFIG: Array<{
@@ -242,6 +304,8 @@ export class AITrainManager {
   private worldSeed: number;
   private stationLiveRowsCache: LiveStationScheduleRow[] = [];
   private stationFallbackPlayerPos = new THREE.Vector3(0, 0, 0);
+  private currentGameTimeMinutes = 480;
+  private currentDayCount = 1;
 
   public trains: AITrain[] = [];
   public activePassengerTrain: AITrain | null = null;
@@ -318,9 +382,16 @@ export class AITrainManager {
         this.createFiveCarriageTrainMesh(track.id, track.isRedLivery, track.trainNumber);
       this.scene.add(group);
 
-      // Initial randomized countdowns strictly under 300 seconds
-      const departureSec = Math.floor(Math.random() * 200) + 40; // 40s to 240s
-      const arrivalSec = Math.floor(Math.random() * 220) + 35; // 35s to 255s
+      // Initial station history & mileage seeded deterministically per track
+      const initPrevIdx = track.direction === 1
+        ? Math.floor(track.startX / STATION_SPACING)
+        : Math.ceil(track.startX / STATION_SPACING);
+      const initLegDone = track.direction === 1
+        ? Math.max(0, track.startX - initPrevIdx * STATION_SPACING)
+        : Math.max(0, initPrevIdx * STATION_SPACING - track.startX);
+      const initLegLeft = Math.max(0, STATION_SPACING - initLegDone);
+      const arrivalSec = Math.min(299, Math.max(5, Math.round(initLegLeft / AI_CRUISE_SPEED)));
+      const departureSec = 0;
 
       const train: AITrain = {
         id: `ai_train_${track.id.toLowerCase()}`,
@@ -342,6 +413,11 @@ export class AITrainManager {
         departureCountdownSeconds: departureSec,
         arrivalCountdownSeconds: arrivalSec,
         currentStationIndex: null,
+        lastArrivedStationIndex: initPrevIdx,
+        lastDepartedStationIndex: initPrevIdx,
+        lastArrivedGameMinutes: Math.max(0, 480 - 4 - track.slot),
+        lastDepartedGameMinutes: Math.max(0, 480 - 2 - track.slot),
+        totalDistanceCoveredM: 12000 + track.slot * 4250 + initLegDone,
         doors,
         doorsOpen: false,
         stationStatus: 'running',
@@ -363,10 +439,10 @@ export class AITrainManager {
         warningMessage: null,
         warningAcknowledged: false,
         telemetryTimer: 0,
-        tractionMotorTempC: 64 + Math.floor(Math.random() * 8),
+        tractionMotorTempC: 63 + track.slot * 2,
         brakePressureBar: 5.0,
         pantographVoltageKv: 25.0,
-        conditionPct: 98,
+        conditionPct: 99 - (track.slot % 3),
       };
 
       this.trains.push(train);
@@ -1254,7 +1330,13 @@ export class AITrainManager {
   }
 
   // --- Frame Loop: Pure AI Autonomous Navigation & Stopwatch Countdowns ---
-  public update(delta: number, playerPosition: THREE.Vector3): void {
+  public update(delta: number, playerPosition: THREE.Vector3, gameTimeMinutes?: number, dayCount?: number): void {
+    if (typeof gameTimeMinutes === 'number' && Number.isFinite(gameTimeMinutes)) {
+      this.currentGameTimeMinutes = gameTimeMinutes;
+    }
+    if (typeof dayCount === 'number' && Number.isFinite(dayCount)) {
+      this.currentDayCount = dayCount;
+    }
     const clampedDelta = Math.min(delta, 0.1);
     this.updateStationSystems(clampedDelta, playerPosition);
 
@@ -1301,11 +1383,15 @@ export class AITrainManager {
         if (train.dwellRemaining <= 0) {
           train.stationStatus = 'running';
           train.doorsOpen = false;
-          // Do not clear currentStationIndex here. Clearing it immediately caused
-          // distToStation === 0 to satisfy the arrival branch again, reopening the
-          // doors and restarting the departure countdown forever.
+          // Record exact departure station & clock time
+          if (train.currentStationIndex !== null) {
+            train.lastDepartedStationIndex = train.currentStationIndex;
+          } else {
+            train.lastDepartedStationIndex = nearestStation;
+          }
+          train.lastDepartedGameMinutes = this.currentGameTimeMinutes;
           train.targetSpeed = AI_CRUISE_SPEED;
-          train.arrivalCountdownSeconds = Math.floor(Math.random() * 180) + 60;
+          train.arrivalCountdownSeconds = Math.min(299, Math.round(STATION_SPACING / AI_CRUISE_SPEED));
         }
       } else if (train.holdOrdered) {
         // Dispatcher emergency hold
@@ -1315,18 +1401,20 @@ export class AITrainManager {
         train.targetSpeed = Math.max(0, (distToStation / 140) * AI_CRUISE_SPEED);
         train.speed = THREE.MathUtils.damp(train.speed, train.targetSpeed, 4.2, clampedDelta);
 
-        // Arrival countdown decreases rapidly as station approaches
+        // Arrival countdown decreases smoothly as station approaches
         const estSec = Math.max(1, Math.round(distToStation / Math.max(train.speed, 4.0)));
         train.arrivalCountdownSeconds = Math.min(299, estSec);
 
         if (distToStation < 1.8 && Math.abs(train.speed) < 0.8) {
-          // Arrived! Generate randomized dwell strictly < 300s (e.g. 45s to 220s)
-          const randomDwell = Math.floor(Math.random() * 175) + 45; // strictly < 299
+          // Arrived! Generate randomized dwell strictly < 300s (45s to 219s)
+          const randomDwell = Math.floor(Math.random() * 175) + 45;
           train.speed = 0;
           train.dwellRemaining = randomDwell;
           train.departureCountdownSeconds = randomDwell;
           train.arrivalCountdownSeconds = 0;
           train.currentStationIndex = nearestStation;
+          train.lastArrivedStationIndex = nearestStation;
+          train.lastArrivedGameMinutes = this.currentGameTimeMinutes;
           train.stationStatus = 'doors_open';
           train.doorsOpen = true;
           soundEngine.playStationChime();
@@ -1350,8 +1438,11 @@ export class AITrainManager {
         train.targetSpeed = AI_CRUISE_SPEED;
         train.speed = THREE.MathUtils.damp(train.speed, train.targetSpeed, 2.2, clampedDelta);
 
-        // Dynamic arrival countdown strictly < 300s
-        const nextStationIdx = nearestStation + train.direction;
+        // Next station in actual travel direction
+        const legOriginIdx = train.direction === 1
+          ? Math.floor(train.x / STATION_SPACING)
+          : Math.ceil(train.x / STATION_SPACING);
+        const nextStationIdx = legOriginIdx + train.direction;
         const distToNext = Math.abs(nextStationIdx * STATION_SPACING - train.x);
         const calcSec = Math.round(distToNext / Math.max(train.speed, 5));
         train.arrivalCountdownSeconds = Math.min(299, Math.max(1, calcSec));
@@ -1374,8 +1465,10 @@ export class AITrainManager {
         door.position.z = THREE.MathUtils.damp(door.position.z, side * targetDoorZ, 8, clampedDelta);
       }
 
-      // 3. Move Train Along Track + Align Consist Pitch to Rail Grade
-      train.x += train.direction * train.speed * clampedDelta;
+      // 3. Move Train Along Track + Track Cumulative Distance + Align Consist Pitch to Rail Grade
+      const stepDx = train.direction * train.speed * clampedDelta;
+      train.x += stepDx;
+      train.totalDistanceCoveredM += Math.abs(stepDx);
       const groundY = this.trackSurfaceY(train.x, train.z);
       const frontGradeY = this.trackSurfaceY(train.x + train.direction * 18, train.z);
       const rearGradeY = this.trackSurfaceY(train.x - train.direction * 130, train.z);
@@ -1709,13 +1802,18 @@ export class AITrainManager {
     const train = this.activePassengerTrain;
     if (!train) return null;
 
-    const nearestStationIdx = Math.round(train.x / STATION_SPACING);
-    const curStation = STATION_NAMES[Math.abs(nearestStationIdx) % STATION_NAMES.length];
-    const nextIdx = nearestStationIdx + train.direction;
-    const nextStation = STATION_NAMES[Math.abs(nextIdx) % STATION_NAMES.length];
+    const isAtStation = train.dwellRemaining > 0;
+    const legOriginIdx = train.direction === 1
+      ? Math.floor(train.x / STATION_SPACING)
+      : Math.ceil(train.x / STATION_SPACING);
+    const activeStationIdx = isAtStation ? Math.round(train.x / STATION_SPACING) : legOriginIdx;
+    const nextIdx = activeStationIdx + train.direction;
+
+    const curStation = STATION_NAMES[posMod(activeStationIdx, STATION_NAMES.length)];
+    const nextStation = STATION_NAMES[posMod(nextIdx, STATION_NAMES.length)];
     const upcomingStations = [
-      STATION_NAMES[Math.abs(nextIdx + train.direction) % STATION_NAMES.length],
-      STATION_NAMES[Math.abs(nextIdx + train.direction * 2) % STATION_NAMES.length],
+      STATION_NAMES[posMod(nextIdx + train.direction, STATION_NAMES.length)],
+      STATION_NAMES[posMod(nextIdx + train.direction * 2, STATION_NAMES.length)],
     ];
     const distToNextMeters = Math.round(Math.abs(nextIdx * STATION_SPACING - train.x));
 
@@ -1751,7 +1849,7 @@ export class AITrainManager {
       nextStation: nextStation,
       upcomingStations,
       distToNextMeters,
-      distTravelledKm: Math.round((Math.abs(train.x) / 1000) * 10) / 10,
+      distTravelledKm: Math.round((train.totalDistanceCoveredM / 1000) * 10) / 10,
       distRemainingKm: Math.round((distToNextMeters / 1000) * 10) / 10,
       doorsOpen: train.doorsOpen,
       announcement,
@@ -1781,12 +1879,81 @@ export class AITrainManager {
 
   // --- Underground Control Center Dispatch Telemetry ---
   public getDispatchTelemetry(): RailwayServiceTelemetry[] {
+    const stationCount = STATION_NAMES.length;
+    const routeTotalKm = Math.round(((stationCount * STATION_SPACING) / 1000) * 10) / 10; // 9.6 km cycle
+    const currentTimeText = formatGameClockHMS(this.currentGameTimeMinutes);
+
     return this.trains.map((train, idx) => {
-      const curIdx = Math.round(train.x / STATION_SPACING);
-      const nextIdx = curIdx + train.direction;
-      const curStation = STATION_NAMES[Math.abs(curIdx) % STATION_NAMES.length];
-      const nextStation = STATION_NAMES[Math.abs(nextIdx) % STATION_NAMES.length];
-      const distToNextMeters = Math.round(Math.abs(nextIdx * STATION_SPACING - train.x));
+      const isAtStation = train.dwellRemaining > 0;
+      const nearestIdx = Math.round(train.x / STATION_SPACING);
+      const legOriginRaw = train.direction === 1
+        ? Math.floor(train.x / STATION_SPACING)
+        : Math.ceil(train.x / STATION_SPACING);
+      const activeStationRaw = isAtStation ? nearestIdx : legOriginRaw;
+      const nextStationRaw = activeStationRaw + train.direction;
+
+      // Explicit Arrived / Departed / Arriving / Departing stations
+      const arrivedIdx = isAtStation ? activeStationRaw : train.lastArrivedStationIndex;
+      const departedIdx = train.lastDepartedStationIndex;
+      const departingIdx = activeStationRaw;
+      const arrivingIdx = nextStationRaw;
+
+      const arrivedStation = STATION_NAMES[posMod(arrivedIdx, stationCount)];
+      const departedStation = STATION_NAMES[posMod(departedIdx, stationCount)];
+      const departingStation = STATION_NAMES[posMod(departingIdx, stationCount)];
+      const arrivingStation = STATION_NAMES[posMod(arrivingIdx, stationCount)];
+
+      // Active leg covered & left (in meters and km)
+      const rawLegCoveredM = isAtStation
+        ? STATION_SPACING
+        : train.direction === 1
+        ? Math.max(0, train.x - legOriginRaw * STATION_SPACING)
+        : Math.max(0, legOriginRaw * STATION_SPACING - train.x);
+      const legDistanceCoveredM = Math.min(STATION_SPACING, Math.round(rawLegCoveredM));
+      const legDistanceLeftM = isAtStation
+        ? 0
+        : Math.max(0, Math.round(STATION_SPACING - legDistanceCoveredM));
+      const distToNextMeters = Math.round(Math.abs(arrivingIdx * STATION_SPACING - train.x));
+
+      const legDistanceCoveredKm = Math.round((legDistanceCoveredM / 1000) * 100) / 100;
+      const legDistanceLeftKm = Math.round((legDistanceLeftM / 1000) * 100) / 100;
+
+      // Full 8-station corridor route progress
+      const orderedIndices = train.direction === 1
+        ? [0, 1, 2, 3, 4, 5, 6, 7]
+        : [7, 6, 5, 4, 3, 2, 1, 0];
+      const departingMod = posMod(departingIdx, stationCount);
+      const arrivingMod = posMod(arrivingIdx, stationCount);
+      const departedOrderPos = orderedIndices.indexOf(departingMod);
+
+      const routeCoveredM = isAtStation
+        ? (departedOrderPos + 1) * STATION_SPACING
+        : departedOrderPos * STATION_SPACING + legDistanceCoveredM;
+      const routeTotalM = stationCount * STATION_SPACING;
+      const clampedRouteCoveredM = Math.max(0, Math.min(routeTotalM, routeCoveredM));
+      const routeDistanceCoveredKm = Math.round((clampedRouteCoveredM / 1000) * 100) / 100;
+      const routeDistanceLeftKm = Math.round(((routeTotalM - clampedRouteCoveredM) / 1000) * 100) / 100;
+      const routeProgressPct = Math.round((clampedRouteCoveredM / routeTotalM) * 100);
+      const totalDistanceCoveredKm = Math.round((train.totalDistanceCoveredM / 1000) * 10) / 10;
+
+      const routeStations: RouteStationStop[] = orderedIndices.map((sIdx, orderIdx) => {
+        let stopStatus: RouteStationStop['status'] = 'upcoming';
+        if (isAtStation && sIdx === departingMod) {
+          stopStatus = 'arrived';
+        } else if (!isAtStation && sIdx === departingMod) {
+          stopStatus = 'departed';
+        } else if (sIdx === arrivingMod) {
+          stopStatus = 'arriving';
+        } else if (orderIdx < departedOrderPos) {
+          stopStatus = 'passed';
+        }
+        return {
+          index: sIdx,
+          name: STATION_NAMES[sIdx],
+          shortName: STATION_SHORT_NAMES[sIdx],
+          status: stopStatus,
+        };
+      });
 
       const status: 'RUNNING' | 'DWELLING' | 'DOORS_OPEN' | 'HELD' = train.holdOrdered
         ? 'HELD'
@@ -1797,8 +1964,42 @@ export class AITrainManager {
         : 'RUNNING';
 
       const speedVal = Math.round(Math.abs(train.speed) * 3.6);
-      const distTravelled = Math.round((Math.abs(train.x) / 1000) * 10) / 10;
-      const distRemaining = Math.round((distToNextMeters / 1000) * 10) / 10;
+      const fromStation = STATION_NAMES[orderedIndices[0]];
+      const toStation = STATION_NAMES[orderedIndices[orderedIndices.length - 1]];
+
+      // Synchronized arrival & departure clock times (1 real min = 2 game mins)
+      const arrivalClockMinutes = isAtStation
+        ? train.lastArrivedGameMinutes
+        : this.currentGameTimeMinutes + (train.arrivalCountdownSeconds * 2) / 60;
+      const departureClockMinutes = isAtStation
+        ? this.currentGameTimeMinutes + (train.departureCountdownSeconds * 2) / 60
+        : train.lastDepartedGameMinutes;
+
+      const arrivalTime = formatGameClockHM(arrivalClockMinutes);
+      const departureTime = formatGameClockHM(departureClockMinutes);
+
+      // Dynamic condition assessment from live telemetry
+      let condition = 'OPTIMAL';
+      let conditionDetail = 'Traction & brakes nominal';
+      if (train.holdOrdered) {
+        condition = 'DISPATCH HOLD';
+        conditionDetail = 'Held on interlocking red block';
+      } else if (train.tractionMotorTempC >= 82 || train.conditionPct < 85) {
+        condition = 'THERMAL WATCH';
+        conditionDetail = `Motor ${train.tractionMotorTempC}°C elevated`;
+      } else if (train.brakePressureBar < 4.5 && !isAtStation) {
+        condition = 'BRAKE CHECK';
+        conditionDetail = `Pipe ${train.brakePressureBar.toFixed(1)} BAR`;
+      } else if (isAtStation) {
+        condition = train.doorsOpen ? 'BOARDING' : 'DOORS LOCKING';
+        conditionDetail = `Platform dwell ${Math.ceil(train.dwellRemaining)}s`;
+      } else if (train.conditionPct < 94) {
+        condition = 'GOOD';
+        conditionDetail = 'Scheduled inspection nominal';
+      }
+
+      const arrivalCountdownText = formatTime(train.arrivalCountdownSeconds);
+      const departureCountdownText = formatTime(train.departureCountdownSeconds);
 
       return {
         slot: idx + 1,
@@ -1809,10 +2010,10 @@ export class AITrainManager {
         serviceName: train.serviceName,
         name: train.serviceName,
         serviceType: train.serviceType,
-        from: 'Sanctuary Central Terminal',
-        to: 'Northern Apex Research Stop',
-        next: nextStation,
-        stop: curStation,
+        from: fromStation,
+        to: toStation,
+        next: arrivingStation,
+        stop: isAtStation ? arrivedStation : departingStation,
         directionLabel: train.directionLabel,
         direction: train.direction,
         x: Math.round(train.x),
@@ -1820,22 +2021,42 @@ export class AITrainManager {
         speed: speedVal,
         speedKmh: speedVal,
         speedMph: Math.round(Math.abs(train.speed) * 2.237),
-        currentStation: curStation,
-        nextStation: nextStation,
+        currentStation: isAtStation ? arrivedStation : departingStation,
+        nextStation: arrivingStation,
+        arrivedStation,
+        departedStation,
+        arrivingStation,
+        departingStation,
+        isAtStation,
         distToNextMeters,
-        distance: distTravelled,
-        remaining: distRemaining,
-        distTravelledKm: distTravelled,
-        distRemainingKm: distRemaining,
-        arrival: formatTime(train.arrivalCountdownSeconds),
-        departure: formatTime(train.departureCountdownSeconds),
-        scheduledArrival: '14:20',
-        estimatedArrival: formatTime(train.arrivalCountdownSeconds),
+        distance: routeDistanceCoveredKm,
+        remaining: routeDistanceLeftKm,
+        distTravelledKm: routeDistanceCoveredKm,
+        distRemainingKm: routeDistanceLeftKm,
+        legDistanceCoveredM,
+        legDistanceLeftM,
+        legDistanceCoveredKm,
+        legDistanceLeftKm,
+        routeDistanceCoveredKm,
+        routeDistanceLeftKm,
+        routeTotalKm,
+        totalDistanceCoveredKm,
+        routeProgressPct,
+        routeStations,
+        arrival: isAtStation ? `ARR ${arrivalTime}` : `${arrivalCountdownText}`,
+        departure: isAtStation ? `${departureCountdownText}` : `DEP ${departureTime}`,
+        arrivalTime,
+        departureTime,
+        currentTimeText,
+        dayCount: this.currentDayCount,
+        scheduledArrival: arrivalTime,
+        estimatedArrival: isAtStation ? `AT PLATFORM (${arrivalTime})` : `${arrivalTime} (${arrivalCountdownText})`,
         departureCountdownSeconds: train.departureCountdownSeconds,
         arrivalCountdownSeconds: train.arrivalCountdownSeconds,
-        departureCountdownText: formatTime(train.departureCountdownSeconds),
-        arrivalCountdownText: formatTime(train.arrivalCountdownSeconds),
-        condition: 'GOOD',
+        departureCountdownText,
+        arrivalCountdownText,
+        condition,
+        conditionDetail,
         status,
         dwellSeconds: Math.round(train.dwellRemaining),
         delaySeconds: train.holdOrdered ? 120 : 0,
@@ -1847,8 +2068,8 @@ export class AITrainManager {
         brakePressureBar: train.brakePressureBar,
         pantographVoltageKv: train.pantographVoltageKv,
         conditionPct: train.conditionPct,
-        blockId: `BLK-${train.line}-${Math.abs(curIdx)}`,
-        signalAspect: train.holdOrdered ? 'red' : 'green',
+        blockId: `BLK-${train.line}-S${posMod(departingIdx, stationCount) + 1}`,
+        signalAspect: train.holdOrdered ? 'red' : (distToNextMeters < 140 || isAtStation) ? 'yellow' : 'green',
         warningMessage: train.warningMessage,
         warningAcknowledged: train.warningAcknowledged,
       };

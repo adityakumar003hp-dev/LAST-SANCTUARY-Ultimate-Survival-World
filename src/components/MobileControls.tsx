@@ -584,7 +584,10 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
 
               {onCycleQualityMode && (
                 <button
-                  onClick={() => onCycleQualityMode()}
+                  onClick={() => {
+                    onCycleQualityMode();
+                    setShowDrawer(false);
+                  }}
                   className="flex flex-col items-center justify-center p-3 rounded-2xl bg-emerald-950/40 active:bg-emerald-600/40 active:scale-95 border border-emerald-500/30 text-emerald-300 font-mono"
                 >
                   <Zap className="w-5 h-5 text-emerald-400 mb-1" />

@@ -11,7 +11,8 @@ import { ZombieManager } from './ZombieManager';
 import { PlayerController } from './PlayerController';
 import { soundEngine } from '../utils/audio';
 import { getWaterRippleNormalMap } from '../utils/proceduralTextures';
-import { HarvestableResource, PlacedStructure, PlayerStats, Quest, SaveSlotMetadata, FullGameSave, GameMode, Difficulty, ItemDefinition, VehicleState, CompanionState, EcosystemDossier, EcosystemMetrics, InventorySlot, RailwayTicket, GraphicsQuality, GraphicsQualityMode, BaseLevel, BaseState, NPCRole } from '../types/game';
+import { HarvestableResource, PlacedStructure, PlayerStats, Quest, SaveSlotMetadata, FullGameSave, GameMode, Difficulty, ItemDefinition, VehicleState, CompanionState, EcosystemDossier, EcosystemMetrics, InventorySlot, RailwayTicket, GraphicsQuality, GraphicsQualityMode, GraphicsManagerConfig, GraphicsManagerSnapshot, BaseLevel, BaseState, NPCRole } from '../types/game';
+import { GraphicsManager, probeGraphicsHardware } from './graphics/GraphicsManager';
 import { ITEMS } from '../data/items';
 import { saveGameToSlot } from '../utils/storage';
 import { ChunkManager } from './world/ChunkManager';
@@ -40,7 +41,12 @@ import { StorylineCheckpointManager } from './campaign/StorylineCheckpointManage
 import { WeatherManager } from './weather/WeatherManager';
 import { TacticalCombatEffects } from './combat/TacticalCombatEffects';
 import { WorldEventsManager, ExtractionState } from './world/WorldEventsManager';
-import { WeatherType, SandboxSettings, WeaponModId, RadiantBounty, SupplyDropState, ZombieEntity } from '../types/game';
+import { WeatherType, SandboxSettings, WeaponModId, RadiantBounty, SupplyDropState, ZombieEntity, EarthOriginConfig } from '../types/game';
+import { WorldCoordinates } from './world/WorldCoordinates';
+import { GlobalOutbreakSimulator } from './world/GlobalOutbreakSimulator';
+import { DEFAULT_EARTH_ORIGIN, EarthProjection, METERS_PER_DEG_LAT, normalizeLon } from './geo/EarthProjection';
+import { RealEarthDataset } from './geo/RealEarthDataset';
+import { RealWorldCities } from './geo/RealWorldCities';
 
 export interface GameEngineCallbacks {
   onStatsChange: (stats: PlayerStats) => void;
@@ -90,7 +96,7 @@ export interface GameEngineCallbacks {
       | 'save_created';
     count?: number;
   }) => void;
-  onWeatherChange?: (weather: WeatherType) => void;
+  onWeatherChange?: (weather: WeatherType, intensity?: number) => void;
   onHitEvent?: (ev: { amount: number; isHeadshot?: boolean; isStealth?: boolean; screenX: number; screenY: number }) => void;
   onBossStatusChange?: (boss: { name: string; health: number; maxHealth: number } | null) => void;
   onWorldEventUpdate?: (ev: { supplyDrop: SupplyDropState | null; extraction: ExtractionState }) => void;
@@ -98,6 +104,8 @@ export interface GameEngineCallbacks {
   onExtractionVictory?: () => void;
   onOpenBlueprintModal?: () => void;
   onOpenFishingModal?: () => void;
+  onGetBounties?: () => RadiantBounty[];
+  onAutoSaved?: (info: { slotId: string; timestamp: number; dayCount: number; timeString: string }) => void;
 }
 
 export class GameEngine {
@@ -135,6 +143,8 @@ export class GameEngine {
   public weatherManager: WeatherManager;
   public combatEffects: TacticalCombatEffects;
   public worldEventsManager: WorldEventsManager;
+  public globalOutbreakSimulator: GlobalOutbreakSimulator;
+  public earthOrigin: EarthOriginConfig = { ...DEFAULT_EARTH_ORIGIN };
 
   // Environment, Lights & Post-Processing
   private dirLight: THREE.DirectionalLight;
@@ -169,7 +179,8 @@ export class GameEngine {
   public difficulty: Difficulty = 'standard';
   public activeRailwayTicket?: RailwayTicket;
 
-  // Quality, Atmosphere Scaling & Adaptive Watchdog
+  // Quality, Atmosphere Scaling & Graphics Manager
+  public graphicsManager: GraphicsManager;
   public activeQualityMode: GraphicsQualityMode = 'balanced';
   private baseFov: number = 70;
   private resizeObserver: ResizeObserver | null = null;
@@ -182,8 +193,8 @@ export class GameEngine {
   private maxTextureDim: number = 4096;
   private rollingFps: number = 60;
   private lastFramePerfTime: number = 0;
-  private lowFpsDuration: number = 0;
   private watchdogDprFactor: number = 1.0;
+  private activeLocalLightLimit: number = 4;
 
   // Game Loop Controls
   private isRunning: boolean = false;
@@ -194,7 +205,19 @@ export class GameEngine {
   private localLights: Array<THREE.PointLight | THREE.SpotLight> = [];
   private readonly maxActiveLocalLights: number = 4;
   public callbacks: GameEngineCallbacks;
+  public activeSaveSlotId: string = 'autosave';
+  public activeSaveSlotName: string = 'Autosave Slot';
+  public characterName: string = 'Survivor';
   private autoSaveTimer: number = 0;
+  private checkpointWriteQueue: Promise<void> = Promise.resolve();
+
+  private enqueueCheckpointSave(saveData: FullGameSave): Promise<void> {
+    const operation = this.checkpointWriteQueue.catch(() => undefined).then(() => saveGameToSlot(saveData));
+    this.checkpointWriteQueue = operation.catch((error: unknown) => {
+      console.error('Checkpoint save failed; the previous valid checkpoint was retained.', error);
+    });
+    return operation;
+  }
   private scannerTimer: number = 0;
   private securityScreenTimer: number = 0;
   private uiSyncTimer: number = 0;
@@ -219,6 +242,7 @@ export class GameEngine {
   private static readonly _tmpVecC = new THREE.Vector3();
   private static readonly _sunScreenVec = new THREE.Vector3();
   private static readonly _sunColor = new THREE.Color();
+  private _livingTargetsBuffer: Array<{ id: string; kind: 'citizen' | 'survivor' | 'settlement' | 'wildlife' | 'regional_npc'; position: [number, number, number] }> = [];
 
   // Input State (Supports both digital key flags and 360-degree analog touch)
   public inputState = {
@@ -266,34 +290,38 @@ export class GameEngine {
     container: HTMLDivElement,
     initialSave: FullGameSave | null,
     callbacks: GameEngineCallbacks,
-    customSeed: number = 42
+    customSeed: number = 42,
+    startingOrigin?: EarthOriginConfig,
+    launchOptions?: { gameMode?: GameMode; difficulty?: Difficulty; characterName?: string }
   ) {
     this.container = container;
     this.callbacks = callbacks;
     this.clock = new THREE.Timer();
+    this.gameMode = initialSave?.metadata?.gameMode ?? launchOptions?.gameMode ?? 'survival';
+    this.difficulty = initialSave?.metadata?.difficulty ?? launchOptions?.difficulty ?? 'standard';
+    this.characterName = initialSave?.metadata?.characterName ?? launchOptions?.characterName ?? 'Survivor';
+    this.activeSaveSlotId = initialSave?.metadata?.id || 'autosave';
+    this.activeSaveSlotName = initialSave?.metadata?.name || 'Autosave Slot';
+    this.earthOrigin = initialSave?.earthOrigin
+      ? { ...initialSave.earthOrigin }
+      : startingOrigin
+        ? { ...startingOrigin }
+        : { ...DEFAULT_EARTH_ORIGIN };
+    WorldCoordinates.setWorldOrigin(this.earthOrigin);
 
-    // 1. Detect mobile & probe software rendering BEFORE creating the main WebGLRenderer (so MSAA matches GPU hardware)
-    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || (window.innerWidth <= 840);
-    this.isSoftwareGl = (() => {
-      try {
-        const probeCanvas = document.createElement('canvas');
-        const gl = probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl');
-        if (!gl) return true;
-        const ext = gl.getExtension('WEBGL_debug_renderer_info');
-        const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-        const gpu = String(gl.getParameter(param) || '');
-        gl.getExtension('WEBGL_lose_context')?.loseContext();
-        return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
-      } catch {
-        return false;
-      }
-    })();
+    // 1. Probe GPU hardware & initialize GraphicsManager BEFORE creating WebGLRenderer
+    const hwCaps = probeGraphicsHardware();
+    this.graphicsManager = new GraphicsManager(hwCaps);
+    const isMobile = hwCaps.isMobile;
+    this.isSoftwareGl = hwCaps.isSoftwareGl;
+    this.maxRenderBufferDim = hwCaps.maxRenderBufferDim;
+    this.maxTextureDim = hwCaps.maxTextureDim;
 
     // Initialize Three.js WebGLRenderer safely with MSAA on hardware GPUs
     let glRenderer: THREE.WebGLRenderer;
     try {
       glRenderer = new THREE.WebGLRenderer({
-        antialias: !this.isSoftwareGl,
+        antialias: !this.isSoftwareGl && hwCaps.deviceMemoryGb > 2,
         powerPreference: 'high-performance',
         failIfMajorPerformanceCaveat: false,
         preserveDrawingBuffer: false,
@@ -319,22 +347,35 @@ export class GameEngine {
     this.renderer.domElement.addEventListener('pointerup', this.onPassengerPointerUp);
     this.renderer.domElement.addEventListener('pointercancel', this.onPassengerPointerUp);
 
-    // Listen for WebGL context loss and prevent default browser page block
+    // Listen for WebGL context loss & auto-step down to Safe Mode on recovery
     this.renderer.domElement.addEventListener('webglcontextlost', (e) => {
       e.preventDefault();
-      console.warn('WebGL context loss prevented from blocking application');
+      console.warn('WebGL context lost — activating GraphicsManager Safe Recovery Mode');
+      this.graphicsManager.handleContextLost();
+      this.usePostProcessing = false;
+      this.renderer.shadowMap.enabled = false;
+      if (this.dirLight) this.dirLight.castShadow = false;
     }, false);
     this.renderer.domElement.addEventListener('webglcontextrestored', () => {
-      console.info('WebGL context restored');
+      console.info('WebGL context restored — reinitializing safe render pipeline');
+      this.graphicsManager.handleContextRestored();
+      this.rebuildComposerSafely();
+      this.applyGraphicsConfiguration(false);
       this.onResize();
+      if (this.isRunning) {
+        this.startLoop();
+      }
     }, false);
 
-    // Query hardware WebGL buffer/texture ceilings so upscaled modes never trigger OOM or context loss
+    // Refine hardware WebGL buffer/texture ceilings directly from active context
     try {
       const glCtx = this.renderer.getContext();
       if (glCtx) {
-        this.maxRenderBufferDim = Math.min(8192, Number(glCtx.getParameter(glCtx.MAX_RENDERBUFFER_SIZE)) || 4096);
-        this.maxTextureDim = Math.min(8192, Number(glCtx.getParameter(glCtx.MAX_TEXTURE_SIZE)) || 4096);
+        this.maxRenderBufferDim = Math.min(8192, Number(glCtx.getParameter(glCtx.MAX_RENDERBUFFER_SIZE)) || this.maxRenderBufferDim);
+        this.maxTextureDim = Math.min(8192, Number(glCtx.getParameter(glCtx.MAX_TEXTURE_SIZE)) || this.maxTextureDim);
+        this.graphicsManager.caps.maxRenderBufferDim = this.maxRenderBufferDim;
+        this.graphicsManager.caps.maxTextureDim = this.maxTextureDim;
+        this.graphicsManager.caps.maxAnisotropy = Math.max(1, this.renderer.capabilities.getMaxAnisotropy());
       }
     } catch {}
 
@@ -406,35 +447,9 @@ export class GameEngine {
     this.atmosphericSky = new AtmosphericSky(this.scene, this.dirLight);
 
     // 5c. GPU HDR Post-Processing (EffectComposer + subtle high-threshold Bloom + ACES OutputPass)
-    // Prepared on hardware GPUs so Quality / Ultra 5x enable crisp HDR Bloom cleanly.
+    // Safely sized by GraphicsManager to avoid HalfFloat MSAA OOM on constrained GPUs.
     if (!this.isSoftwareGl) {
-      try {
-        const samples = this.renderer.capabilities.isWebGL2 && !isMobile ? 2 : 0;
-        const rt = new THREE.WebGLRenderTarget(width, height, {
-          type: THREE.HalfFloatType,
-          samples,
-        });
-        this.composer = new EffectComposer(this.renderer, rt);
-        this.composer.setPixelRatio(this.renderer.getPixelRatio());
-        this.composer.setSize(width, height);
-        this.composer.addPass(new RenderPass(this.scene, this.camera));
-        this.bloomPass = new UnrealBloomPass(
-          new THREE.Vector2(width, height),
-          0.16,
-          0.35,
-          0.94
-        );
-        this.composer.addPass(this.bloomPass);
-        this.cinematicPass = new ShaderPass(CinematicPostShader);
-        this.composer.addPass(this.cinematicPass);
-        this.composer.addPass(new OutputPass());
-        this.usePostProcessing = false; // Enabled cleanly per quality tier
-      } catch {
-        this.composer = null;
-        this.bloomPass = null;
-        this.cinematicPass = null;
-        this.usePostProcessing = false;
-      }
+      this.rebuildComposerSafely(width, height);
     }
 
     // 6. Subsystem Instantiation
@@ -464,6 +479,10 @@ export class GameEngine {
     this.weatherManager = new WeatherManager(this.scene);
     this.combatEffects = new TacticalCombatEffects(this.scene);
     this.worldEventsManager = new WorldEventsManager(this.scene, (x, z) => getTerrainHeight(x, z, seed));
+    this.globalOutbreakSimulator = new GlobalOutbreakSimulator(this.scene, seed);
+    if (initialSave?.globalOutbreakState) {
+      this.globalOutbreakSimulator.importSaveData(initialSave.globalOutbreakState);
+    }
     if (initialSave?.activeRailwayTicket) {
       this.activeRailwayTicket = initialSave.activeRailwayTicket;
     }
@@ -579,7 +598,11 @@ export class GameEngine {
         this.combatEffects.setDeathBag(initialSave.deathBag.position);
       }
       this.player.position.set(...initialSave.playerPosition);
+      this.player.avatarGroup.position.copy(this.player.position);
+      this.player.velocity.set(0, 0, 0);
+      this.player.isSleeping = false;
       this.player.yaw = initialSave.playerRotation;
+      this.chunkManager.updatePlayerPosition(this.player.position, true);
       if (initialSave.structures && initialSave.structures.length > 0) {
         this.buildingMgr.loadSavedStructures(initialSave.structures);
       } else {
@@ -590,10 +613,10 @@ export class GameEngine {
       this.difficulty = initialSave.metadata.difficulty;
 
       // Exact Storyline Restoration
-      if (initialSave.storyCheckpoint) {
+      if (initialSave.storyCheckpoint && this.gameMode === 'story') {
         this.storylineManager.restoreFromSave(initialSave.storyCheckpoint);
       } else {
-        this.quests = initialSave.quests;
+        this.quests = Array.isArray(initialSave.quests) ? [...initialSave.quests] : [];
       }
       if (initialSave.trainSaveState?.inTrain) {
         this.aiTrainManager.restoreFromSaveState(initialSave.trainSaveState);
@@ -636,6 +659,11 @@ export class GameEngine {
           engineering: 1,
           survival: 1,
         },
+        latitude: this.earthOrigin.lat,
+        longitude: this.earthOrigin.lon,
+        realElevationMeters: 120,
+        countryName: this.earthOrigin.country,
+        continentOrOcean: this.earthOrigin.continent,
       };
       this.quests = [];
     }
@@ -659,17 +687,8 @@ export class GameEngine {
       this.resizeObserver.observe(this.container);
     }
 
-    // Initialize graphics quality mode from stored preference (defaults cleanly by capability)
-    try {
-      const savedPreset = localStorage.getItem('last_sanctuary_quality_preset') as (GraphicsQualityMode | 'auto') | null;
-      if (savedPreset) {
-        this.setQualityMode(savedPreset);
-      } else {
-        this.setQualityMode(isMobile || this.isSoftwareGl ? 'performance' : 'balanced');
-      }
-    } catch {
-      this.setQualityMode(isMobile || this.isSoftwareGl ? 'performance' : 'balanced');
-    }
+    // Initialize GraphicsManager pipeline from stored preferences & hardware capabilities
+    this.applyGraphicsConfiguration(false);
 
     // Enforce light budget BEFORE pre-warming WebGL shaders so excess local lights never compile heavy shader variants
     this.updateLocalLightBudget(true);
@@ -752,12 +771,46 @@ export class GameEngine {
 
   private targetDesiredDpr: number = 1.0;
 
+  private rebuildComposerSafely(explicitW?: number, explicitH?: number) {
+    if (this.isSoftwareGl) return;
+    try {
+      (this.cinematicPass as any)?.dispose?.();
+      this.bloomPass?.dispose();
+      this.composer?.dispose();
+    } catch {}
+    this.composer = null;
+    this.bloomPass = null;
+    this.cinematicPass = null;
+
+    const w = explicitW ?? (this.lastWidth || Math.max(this.container?.clientWidth || window.innerWidth, 280));
+    const h = explicitH ?? (this.lastHeight || Math.max(this.container?.clientHeight || window.innerHeight, 240));
+    try {
+      const samples = this.graphicsManager.getSafeComposerSamples(w, h, this.renderer.capabilities.isWebGL2);
+      const rt = new THREE.WebGLRenderTarget(w, h, {
+        type: THREE.HalfFloatType,
+        samples,
+      });
+      this.composer = new EffectComposer(this.renderer, rt);
+      this.composer.setPixelRatio(this.renderer.getPixelRatio());
+      this.composer.setSize(w, h);
+      this.composer.addPass(new RenderPass(this.scene, this.camera));
+      this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.16, 0.35, 0.94);
+      this.composer.addPass(this.bloomPass);
+      this.cinematicPass = new ShaderPass(CinematicPostShader);
+      this.composer.addPass(this.cinematicPass);
+      this.composer.addPass(new OutputPass());
+    } catch {
+      this.composer = null;
+      this.bloomPass = null;
+      this.cinematicPass = null;
+      this.usePostProcessing = false;
+    }
+  }
+
   private applySafePixelRatio() {
     const w = Math.max(this.container?.clientWidth || window.innerWidth, 280);
     const h = Math.max(this.container?.clientHeight || window.innerHeight, 240);
-    const maxSafeDim = Math.min(this.maxRenderBufferDim, 4096);
-    const maxDprForCanvas = Math.min(maxSafeDim / w, maxSafeDim / h);
-    const safeDpr = Math.max(0.75, Math.min(this.targetDesiredDpr * this.watchdogDprFactor, maxDprForCanvas));
+    const safeDpr = this.graphicsManager.computeSafePixelRatio(this.targetDesiredDpr, w, h);
     this.renderer.setPixelRatio(safeDpr);
     if (this.composer) {
       this.composer.setPixelRatio(safeDpr);
@@ -769,6 +822,7 @@ export class GameEngine {
     const clamped = Math.max(1, Math.min(maxHw, targetAniso));
     if (this.activeMaxAnisotropy === clamped) return;
     this.activeMaxAnisotropy = clamped;
+    this.chunkManager?.setTextureAnisotropy(clamped);
 
     const texKeys = ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap', 'aoMap'] as const;
     const seen = new Set<THREE.Texture>();
@@ -811,105 +865,61 @@ export class GameEngine {
     this.activeShadowMapRes = safeSize;
   }
 
-  public setQualityMode(mode: GraphicsQualityMode | 'auto') {
-    const isMobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || (window.innerWidth <= 840);
-    const actual: GraphicsQualityMode =
-      mode === 'auto' ? (isMobile || this.isSoftwareGl ? 'performance' : 'balanced') : mode;
+  public applyGraphicsConfiguration(forceChunkSync = false) {
+    const effective = this.graphicsManager.getEffectiveTarget(window.devicePixelRatio || 1, Boolean(this.composer));
+    this.activeQualityMode = this.graphicsManager.config.preset;
+    this.targetDesiredDpr = effective.desiredDpr;
+    this.watchdogDprFactor = effective.watchdogDprFactor;
+    this.activeLocalLightLimit = effective.maxLocalLights;
 
-    this.activeQualityMode = actual;
-    this.watchdogDprFactor = 1.0;
-    this.lowFpsDuration = 0;
-    const rawDpr = window.devicePixelRatio || 1;
-    let chunkQuality: GraphicsQuality = 'medium';
-
-    if (actual === 'performance') {
-      this.targetDesiredDpr = 1.0;
-      this.renderer.shadowMap.enabled = false;
-      this.usePostProcessing = false;
-      if (this.bloomPass) this.bloomPass.enabled = false;
-      if (this.cinematicPass) this.cinematicPass.enabled = false;
-      this.envIntensityMultiplier = 0.88;
-      this.sunIntensityMultiplier = 0.96;
-      this.fogDensityMultiplier = 1.12;
-      this.renderer.toneMappingExposure = 1.05;
-      if (this.dirLight) this.dirLight.castShadow = false;
-      this.activeShadowMapRes = 0;
-      this.applyTextureAnisotropy(1);
-      chunkQuality = 'low';
-    } else if (actual === 'balanced') {
-      this.targetDesiredDpr = this.isSoftwareGl ? 1.0 : Math.min(rawDpr, isMobile ? 1.1 : 1.35);
-      this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-      this.renderer.shadowMap.type = THREE.PCFShadowMap;
-      // Enable lightweight cinematic grading + subtle sun shafts in Balanced on GPU
-      this.usePostProcessing = !this.isSoftwareGl && Boolean(this.composer);
-      if (this.bloomPass) this.bloomPass.enabled = false;
-      if (this.cinematicPass) {
-        this.cinematicPass.enabled = true;
-        this.cinematicPass.uniforms.uSunShaftIntensity.value = 0.10;
-      }
-      this.envIntensityMultiplier = 0.98;
-      this.sunIntensityMultiplier = 1.0;
-      this.fogDensityMultiplier = 1.0;
-      this.renderer.toneMappingExposure = 1.08;
-      if (this.dirLight) {
-        this.dirLight.castShadow = !this.isSoftwareGl;
-        const size = isMobile ? 1024 : 1536;
-        this.setShadowMapSize(size, 44, -0.00025, 0.03);
-      }
-      this.applyTextureAnisotropy(4);
-      chunkQuality = 'medium';
-    } else if (actual === 'quality') {
-      this.targetDesiredDpr = this.isSoftwareGl ? 1.0 : Math.min(Math.max(rawDpr, 1.25), isMobile ? 1.4 : 1.65);
-      this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-      this.renderer.shadowMap.type = THREE.PCFShadowMap;
-      this.usePostProcessing = !this.isSoftwareGl && Boolean(this.composer);
-      if (this.bloomPass) {
-        this.bloomPass.enabled = true;
-        this.bloomPass.strength = 0.17;
-        this.bloomPass.radius = 0.36;
-        this.bloomPass.threshold = 0.91;
-      }
-      if (this.cinematicPass) {
-        this.cinematicPass.enabled = true;
-        this.cinematicPass.uniforms.uSunShaftIntensity.value = 0.18;
-      }
-      this.envIntensityMultiplier = 1.05;
-      this.sunIntensityMultiplier = 1.04;
-      this.fogDensityMultiplier = 0.92;
-      this.renderer.toneMappingExposure = 1.10;
-      if (this.dirLight) {
-        this.dirLight.castShadow = !this.isSoftwareGl;
-        this.setShadowMapSize(isMobile ? 1536 : 2048, 48, -0.00022, 0.028);
-      }
-      this.applyTextureAnisotropy(8);
-      chunkQuality = 'high';
-    } else {
-      // Ultra Realistic 5x Mode: crisp GPU supersampling, up to 3072 shadows, 16x anisotropy, HDR bloom & volumetric shafts
-      this.targetDesiredDpr = this.isSoftwareGl ? 1.0 : Math.min(Math.max(rawDpr, 1.6), isMobile ? 1.75 : 2.0);
-      this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-      this.renderer.shadowMap.type = THREE.PCFShadowMap;
-      this.usePostProcessing = !this.isSoftwareGl && Boolean(this.composer);
-      if (this.bloomPass) {
-        this.bloomPass.enabled = true;
-        this.bloomPass.strength = 0.21;
-        this.bloomPass.radius = 0.42;
-        this.bloomPass.threshold = 0.88;
-      }
-      if (this.cinematicPass) {
-        this.cinematicPass.enabled = true;
-        this.cinematicPass.uniforms.uSunShaftIntensity.value = 0.24;
-      }
-      this.envIntensityMultiplier = 1.18;
-      this.sunIntensityMultiplier = 1.12;
-      this.fogDensityMultiplier = 0.82;
-      this.renderer.toneMappingExposure = 1.13;
-      if (this.dirLight) {
-        this.dirLight.castShadow = !this.isSoftwareGl;
-        this.setShadowMapSize(isMobile ? 2048 : 3072, 56, -0.00018, 0.024);
-      }
-      this.applyTextureAnisotropy(16);
-      chunkQuality = 'ultra';
+    if (this.envIntensityMultiplier !== effective.envIntensityMultiplier) {
+      this.lastEnvPhase = '';
     }
+    this.envIntensityMultiplier = effective.envIntensityMultiplier;
+    this.sunIntensityMultiplier = effective.sunIntensityMultiplier;
+    this.fogDensityMultiplier = effective.fogDensityMultiplier;
+    this.renderer.toneMappingExposure = effective.toneMappingExposure;
+
+    // Shadows
+    this.renderer.shadowMap.enabled = effective.shadowsEnabled;
+    if (effective.shadowsEnabled) {
+      this.renderer.shadowMap.type = THREE.PCFShadowMap;
+      if (this.dirLight) {
+        this.dirLight.castShadow = true;
+        this.setShadowMapSize(
+          effective.shadowResolution,
+          effective.shadowFrustumExtent,
+          effective.shadowBias,
+          effective.shadowNormalBias
+        );
+      }
+    } else {
+      if (this.dirLight) {
+        this.dirLight.castShadow = false;
+        if (this.dirLight.shadow.map) {
+          this.dirLight.shadow.map.dispose();
+          this.dirLight.shadow.map = null as any;
+        }
+      }
+      this.activeShadowMapRes = 0;
+    }
+
+    // Post-processing & Bloom
+    this.usePostProcessing = effective.postProcessingEnabled && Boolean(this.composer);
+    if (this.bloomPass) {
+      this.bloomPass.enabled = effective.bloomEnabled;
+      this.bloomPass.strength = effective.bloomStrength;
+      this.bloomPass.radius = effective.bloomRadius;
+      this.bloomPass.threshold = effective.bloomThreshold;
+    }
+    if (this.cinematicPass) {
+      this.cinematicPass.enabled = this.usePostProcessing;
+      this.cinematicPass.uniforms.uSunShaftIntensity.value = effective.sunShaftIntensity;
+    }
+
+    // Particles, Anisotropy & Chunk Streaming
+    this.weatherManager?.setParticleBudgetScale(effective.particleDensity);
+    this.applyTextureAnisotropy(effective.anisotropy);
 
     this.applySafePixelRatio();
     const w = this.lastWidth || Math.max(this.container?.clientWidth || window.innerWidth, 280);
@@ -920,37 +930,88 @@ export class GameEngine {
     if (this.bloomPass) {
       this.bloomPass.resolution.set(w, h);
     }
-    this.lastEnvPhase = '';
+
     if (this.chunkManager) {
-      this.chunkManager.setQuality(chunkQuality);
+      this.chunkManager.setQuality(effective.chunkQuality, false);
+      this.chunkManager.setStreamingRadius(effective.viewDistanceChunks);
+      if (forceChunkSync) {
+        this.chunkManager.updatePlayerPosition(this.player.position, true, true);
+      }
     }
+  }
+
+  public setQualityMode(mode: GraphicsQualityMode | 'auto') {
+    const isMobile = this.graphicsManager.caps.isMobile;
+    const actual: GraphicsQualityMode =
+      mode === 'auto' ? (isMobile || this.isSoftwareGl ? 'performance' : 'balanced') : mode;
+    this.graphicsManager.setPreset(actual, false);
+    this.applyGraphicsConfiguration(true);
   }
 
   public setViewDistanceChunks(chunks: number) {
-    const clamped = Math.max(1, Math.min(5, Math.round(chunks)));
-    if (this.chunkManager) {
-      this.chunkManager.setStreamingRadius(clamped);
-      this.chunkManager.updatePlayerPosition(this.player.position, true);
-    }
+    this.graphicsManager.updateConfig({ viewDistanceChunks: chunks });
+    this.applyGraphicsConfiguration(true);
+  }
+
+  public getGraphicsConfig(): GraphicsManagerConfig {
+    return { ...this.graphicsManager.config };
+  }
+
+  public updateGraphicsConfig(patch: Partial<GraphicsManagerConfig>): GraphicsManagerConfig {
+    const next = this.graphicsManager.updateConfig(patch);
+    this.applyGraphicsConfiguration(patch.viewDistanceChunks !== undefined);
+    return { ...next };
+  }
+
+  public resetGraphicsToSafeAuto(): GraphicsManagerConfig {
+    const next = this.graphicsManager.resetToSafeAuto();
+    this.applyGraphicsConfiguration(true);
+    return { ...next };
+  }
+
+  public optimizeGraphicsMemory(): { freedChunks: number; clearedGeometries: number; clearedTextures: number } {
+    const effective = this.graphicsManager.getEffectiveTarget(window.devicePixelRatio || 1, Boolean(this.composer));
+    const freedChunks = this.chunkManager
+      ? this.chunkManager.trimDistantChunks(effective.viewDistanceChunks, this.player.position)
+      : 0;
+    const memRes = this.graphicsManager.optimizeMemoryNow(this.renderer, this.dirLight);
+    this.applyGraphicsConfiguration(false);
+    return {
+      freedChunks,
+      clearedGeometries: memRes.clearedGeometries,
+      clearedTextures: memRes.clearedTextures,
+    };
+  }
+
+  public getGraphicsSnapshot(): GraphicsManagerSnapshot {
+    const w = this.lastWidth || this.container?.clientWidth || window.innerWidth;
+    const h = this.lastHeight || this.container?.clientHeight || window.innerHeight;
+    const effective = this.graphicsManager.getEffectiveTarget(window.devicePixelRatio || 1, Boolean(this.composer));
+    return this.graphicsManager.getSnapshot(this.renderer, w, h, effective);
   }
 
   public getDiagnosticInfo() {
-    const renderInfo = this.renderer.info.render;
-    const dpr = this.renderer.getPixelRatio();
-    const w = this.lastWidth || this.container?.clientWidth || window.innerWidth;
-    const h = this.lastHeight || this.container?.clientHeight || window.innerHeight;
+    const snap = this.getGraphicsSnapshot();
     return {
-      drawCalls: renderInfo.calls,
-      triangles: renderInfo.triangles,
+      drawCalls: snap.drawCalls,
+      triangles: snap.triangles,
       entities: (this.wildlifeManager?.metrics?.totalOrganisms || 0) + (this.zombieMgr?.zombies.length || 0),
-      dpr,
-      renderWidth: Math.round(w * dpr),
-      renderHeight: Math.round(h * dpr),
-      shadowMapRes: this.dirLight?.castShadow ? this.activeShadowMapRes : 0,
-      anisotropy: this.activeMaxAnisotropy,
-      qualityMode: this.activeQualityMode,
-      fps: Math.round(this.rollingFps),
+      dpr: snap.dpr,
+      renderWidth: snap.renderWidth,
+      renderHeight: snap.renderHeight,
+      shadowMapRes: snap.shadowMapRes,
+      anisotropy: snap.anisotropy,
+      qualityMode: snap.preset,
+      fps: snap.fps,
+      frameTimeMs: snap.frameTimeMs,
+      p95FrameTimeMs: snap.p95FrameTimeMs,
       activeLocalLights: this.localLights.filter((light) => light.visible).length,
+      governorState: snap.governorState,
+      governorLevel: snap.governorLevel,
+      governorActionLabel: snap.governorActionLabel,
+      contextHealth: snap.contextHealth,
+      geometries: snap.geometries,
+      textures: snap.textures,
     };
   }
 
@@ -959,65 +1020,50 @@ export class GameEngine {
     const tick = (timestamp?: number) => {
       if (!this.isRunning) return;
 
-      // When tab is hidden, yield CPU
+      // When tab is hidden, pause active rendering and yield CPU
       if (document.hidden) {
-        this.frameId = window.setTimeout(tick, 200);
+        this.graphicsManager.scheduleNextFrame(tick, this.renderer, true);
         return;
       }
 
       const now = timestamp ?? performance.now();
       const rawElapsed = Math.max(0.001, (now - this.lastFramePerfTime) / 1000);
       this.lastFramePerfTime = now;
-      if (rawElapsed < 0.25) {
-        const instFps = 1 / rawElapsed;
-        this.rollingFps = this.rollingFps * 0.92 + instFps * 0.08;
-      }
 
-      // Smooth frame-time watchdog on Quality / Ultra 5x so weak GPUs never freeze or crash
-      if (!this.isPaused && !this.isSoftwareGl && (this.activeQualityMode === 'ultra_5x' || this.activeQualityMode === 'quality')) {
-        if (this.rollingFps < 22) {
-          this.lowFpsDuration += rawElapsed;
-          if (this.lowFpsDuration > 2.2) {
-            this.lowFpsDuration = 0;
-            if (this.watchdogDprFactor > 0.7) {
-              this.watchdogDprFactor = Math.max(0.7, this.watchdogDprFactor - 0.15);
-              this.applySafePixelRatio();
-            } else if (this.usePostProcessing && this.rollingFps < 16) {
-              this.usePostProcessing = false;
-            }
-          }
-        } else {
-          this.lowFpsDuration = Math.max(0, this.lowFpsDuration - rawElapsed * 0.5);
-        }
-      }
+      const workStart = performance.now();
 
       if (!this.isPaused) {
         // Strict bounded timestep (max 0.05s = 50ms) prevents physics tunneling / simulation death
         this.clock.update(now);
         const delta = Math.min(0.05, this.clock.getDelta());
-        this.update(delta);
+        this.update(delta, rawElapsed);
       }
 
       this.updateLocalLightBudget();
+      this.chunkManager.updateFrustumCulling(this.camera, this.player.position);
       if (this.usePostProcessing && this.composer) {
         this.composer.render();
       } else {
         this.renderer.render(this.scene, this.camera);
       }
 
-      if (this.isSoftwareGl) {
-        // Pace loop on software WebGL to avoid starving main thread
-        this.frameId = window.setTimeout(tick, 80);
-      } else {
-        this.frameId = requestAnimationFrame(tick);
+      const frameWorkMs = performance.now() - workStart;
+      const gov = this.graphicsManager.recordFrameAndGovern(rawElapsed, frameWorkMs, this.isPaused);
+      this.rollingFps = this.graphicsManager.rollingFps;
+
+      if (gov.emergencyTrimRequested) {
+        const eff = this.graphicsManager.getEffectiveTarget(window.devicePixelRatio || 1, Boolean(this.composer));
+        this.chunkManager?.trimDistantChunks(eff.viewDistanceChunks, this.player.position);
+        this.renderer.renderLists.dispose();
       }
+      if (gov.changed) {
+        this.applyGraphicsConfiguration(false);
+      }
+
+      this.graphicsManager.scheduleNextFrame(tick, this.renderer, false);
     };
 
-    if (this.isSoftwareGl) {
-      this.frameId = window.setTimeout(tick, 80);
-    } else {
-      this.frameId = requestAnimationFrame(tick);
-    }
+    this.graphicsManager.scheduleNextFrame(tick, this.renderer, document.hidden);
   }
 
   /**
@@ -1054,9 +1100,7 @@ export class GameEngine {
       return da - db;
     });
 
-    const mobile = /Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || window.innerWidth <= 840;
-    const baseLimit = this.activeQualityMode === 'ultra_5x' ? 6 : this.maxActiveLocalLights;
-    const limit = mobile || this.isSoftwareGl ? 3 : baseLimit;
+    const limit = this.activeLocalLightLimit;
     const active = new Set(discovered.slice(0, limit));
     for (const light of discovered) {
       if (!active.has(light)) {
@@ -1071,7 +1115,7 @@ export class GameEngine {
   }
 
   // --- Core Game Update ---
-  private update(delta: number) {
+  private update(delta: number, realElapsedSec: number = delta) {
     // 1. Advance Game Time (1 real sec = 2 game mins scaled by sandbox dayLengthMultiplier)
     const dayScale = Math.max(0.25, this.sandboxSettings.dayLengthMultiplier || 1.0);
     this.gameTimeMinutes += (delta * 2.0) / dayScale;
@@ -1096,9 +1140,14 @@ export class GameEngine {
     // Dynamic Biome Weather update
     const wx = this.weatherManager.update(delta, this.player.position, currentBiomeId, this.player.isSubmerged);
     this.weatherFogMultiplier = wx.fogDensityMultiplier;
+    this.playerStats.weatherType = wx.weather;
+    this.playerStats.weatherIntensity = wx.intensity;
+    this.playerStats.visibilityPercent = wx.visibilityPercent;
     if (wx.weather !== this.lastReportedWeather) {
       this.lastReportedWeather = wx.weather;
-      this.callbacks.onWeatherChange?.(wx.weather);
+      this.callbacks.onWeatherChange?.(wx.weather, wx.intensity);
+    } else if (Math.random() < 0.08) {
+      this.callbacks.onWeatherChange?.(wx.weather, wx.intensity);
     }
     if (wx.rainCatchmentBonus > 0) {
       this.waterManager.state.storageLiters = Math.min(
@@ -1107,8 +1156,8 @@ export class GameEngine {
       );
     }
 
-    this.soundscapeManager.update(delta, this.gameTimeMinutes, this.player.position, this.player.yaw, currentBiomeId, wx.weather);
-    this.aiTrainManager.update(delta, this.player.position);
+    this.soundscapeManager.update(delta, this.gameTimeMinutes, this.player.position, this.player.yaw, currentBiomeId, wx.weather, wx.intensity);
+    this.aiTrainManager.update(delta, this.player.position, this.gameTimeMinutes, this.dayCount);
 
     // Dusk warning
     if (this.isDusk && !this.duskWarningFired) {
@@ -1396,10 +1445,34 @@ export class GameEngine {
     const distanceFromStarter = Math.hypot(this.player.position.x, this.player.position.z);
     this.terrain.mesh.visible = distanceFromStarter <= 138;
     this.terrain.waterMesh.visible = distanceFromStarter <= 138;
-    this.chunkManager.updatePlayerPosition(this.player.position);
+    this.chunkManager.updatePlayerPosition(this.player.position, false, this.graphicsManager.shouldAllowChunkBuild());
     const starterChunk = this.chunkManager.activeChunks.get('0_0');
     if (starterChunk) { starterChunk.terrainMesh.visible = false; if (starterChunk.waterMesh) starterChunk.waterMesh.visible = false; }
-    this.wildlifeManager.update(delta, this.player.position, (x, z) => this.chunkManager.getCurrentBiome(x, z).id, this.isNight, this.player.yaw, hour);
+    this.wildlifeManager.update(
+      delta,
+      this.player.position,
+      (x, z) => this.chunkManager.getCurrentBiome(x, z).id,
+      this.isNight,
+      this.player.yaw,
+      hour,
+      (convertedAgent) => {
+        if (!this.zombieMgr.isOutbreakActive) return;
+        const zType =
+          convertedAgent.species.scale >= 1.5
+            ? 'brute'
+            : convertedAgent.species.speed >= 5.2
+              ? 'runner'
+              : convertedAgent.species.kind === 'dinosaur'
+                ? 'stalker'
+                : 'walker';
+        const spawned = this.zombieMgr.spawnZombie(
+          zType,
+          [convertedAgent.group.position.x, convertedAgent.group.position.y, convertedAgent.group.position.z],
+          true
+        );
+        if (spawned) spawned.state = 'chase';
+      }
+    );
 
     // Dynamic Ecosystem Scanner & Real-Time Metrics Update (throttled every 0.12s)
     this.scannerTimer += delta;
@@ -1433,9 +1506,35 @@ export class GameEngine {
       }
     }
     this.securityManager.update(zombiesNearPerimeter, this.isNight, this.powerManager.state.isPowered);
-    this.npcSettlementManager.update(delta, this.isNight, this.powerManager.state.isPowered);
+    this.npcSettlementManager.update(delta, this.isNight, this.powerManager.state.isPowered, (convertedPos) => {
+      if (!this.zombieMgr.isOutbreakActive) return;
+      const spawned = this.zombieMgr.spawnZombie('walker', convertedPos, true);
+      if (spawned) spawned.state = 'chase';
+    });
+    this.globalOutbreakSimulator.update(
+      delta,
+      this.player.position,
+      this.zombieMgr.isOutbreakActive,
+      this.dayCount,
+      this.isNight,
+      this.zombieMgr
+    );
+    this.chunkManager.setApocalypticSeverity(this.globalOutbreakSimulator.apocalypticSeverity);
+    if (this.prologueManager?.townMgr) {
+      this.prologueManager.townMgr.gridPowerFactor = this.globalOutbreakSimulator.powerGridStability;
+    }
     this.prologueManager.update(delta);
-    const rescuedNow = this.rescueManager.update(delta, this.player.position, this.buildingMgr.safeZoneCenter, this.buildingMgr.safeZoneRadius);
+    const rescuedNow = this.rescueManager.update(
+      delta,
+      this.player.position,
+      this.buildingMgr.safeZoneCenter,
+      this.buildingMgr.safeZoneRadius,
+      (convertedPos) => {
+        if (!this.zombieMgr.isOutbreakActive) return;
+        const spawned = this.zombieMgr.spawnZombie('runner', convertedPos, true);
+        if (spawned) spawned.state = 'chase';
+      }
+    );
     if (rescuedNow.length > 0) {
       this.callbacks.onCareerEvent?.({ type: 'survivor_rescued', count: rescuedNow.length });
     }
@@ -1450,11 +1549,24 @@ export class GameEngine {
     const inApartmentSafe = isProtectedSpawnZone(this.player.position.x, this.player.position.z);
     const inSafeZone = inMilitarySafe || inApartmentSafe;
 
-    // Hunger & Thirst Drains (slower in safe zone; paused during early story prologue days 1-2)
+    // Hunger & Thirst Drains (weather-reactive: snow/blizzard drains hunger faster, sandstorm drains thirst faster)
     const isEarlyPrologue = !this.prologueManager.isCompleted && this.dayCount <= 2;
     const drainMultiplier = isEarlyPrologue ? 0 : inSafeZone ? 0.35 : 1.0;
-    this.playerStats.hunger = Math.max(0, this.playerStats.hunger - delta * 0.12 * drainMultiplier);
-    this.playerStats.thirst = Math.max(0, this.playerStats.thirst - delta * 0.18 * drainMultiplier);
+    const hasCoat = this.playerStats.equippedArmorId === 'thermal_coat';
+    const weatherHungerMult =
+      wx.weather === 'blizzard'
+        ? hasCoat ? 1.25 : 1.55
+        : wx.weather === 'thunderstorm' || wx.weather === 'rain'
+          ? 1.15
+          : this.playerStats.temperature < 8
+            ? 1.3
+            : 1.0;
+    const weatherThirstMult = wx.weather === 'sandstorm' ? 1.35 : wx.weather === 'rain' ? 0.85 : 1.0;
+    this.playerStats.hungerDrainModifier = Number(weatherHungerMult.toFixed(2));
+    this.playerStats.thirstDrainModifier = Number(weatherThirstMult.toFixed(2));
+
+    this.playerStats.hunger = Math.max(0, this.playerStats.hunger - delta * 0.12 * drainMultiplier * weatherHungerMult);
+    this.playerStats.thirst = Math.max(0, this.playerStats.thirst - delta * 0.18 * drainMultiplier * weatherThirstMult);
 
     // Starvation / Dehydration Health Damage (strictly disabled during early story prologue to prevent false defeats)
     if (!isEarlyPrologue && (this.playerStats.hunger <= 0 || this.playerStats.thirst <= 0)) {
@@ -1643,6 +1755,18 @@ export class GameEngine {
 
     if (shouldSyncHud) {
       this.uiSyncTimer = 0;
+      const geo = WorldCoordinates.worldToLatLon(this.player.position.x, this.player.position.z);
+      const earthSample = RealEarthDataset.sampleEarthGeography(geo.lat, geo.lon);
+      const nearCity = RealWorldCities.findNearestCity(geo.lat, geo.lon, 250);
+      const geoTile = WorldCoordinates.worldToGeoTile(this.player.position.x, this.player.position.z, 14);
+      this.playerStats.latitude = geo.lat;
+      this.playerStats.longitude = geo.lon;
+      this.playerStats.realElevationMeters = Math.round(earthSample.realElevationMeters);
+      this.playerStats.countryName = earthSample.country;
+      this.playerStats.continentOrOcean = earthSample.continent ?? earthSample.ocean ?? 'Earth';
+      this.playerStats.nearestCityName = nearCity?.city.name;
+      this.playerStats.geoTileKey = geoTile.key;
+
       this.callbacks.onStatsChange({ ...this.playerStats });
       this.callbacks.onTimeChange(this.gameTimeMinutes, this.dayCount, this.isNight, this.isDusk);
 
@@ -1671,9 +1795,41 @@ export class GameEngine {
       }
     }
 
-    // 5. Update Zombies (stealth-scaled detection & Spitter acid)
+    // 5. Update Zombies (attacking player, town citizens, field survivors, settlement NPCs & wildlife organisms)
     if (this.zombieMgr.zombies.length > 0) {
       const detectMult = this.player.isCrouching ? (hasGhostPerk ? 0.35 : 0.62) : 1.0;
+      const targets = this._livingTargetsBuffer;
+      targets.length = 0;
+
+      const citizens = this.prologueManager?.townMgr?.citizens;
+      if (citizens) {
+        for (let i = 0; i < citizens.length; i++) {
+          const citizen = citizens[i];
+          if (citizen.infectionStage !== 'stunned' && citizen.infectionStage !== 'zombie') {
+            targets.push({ id: citizen.id, kind: 'citizen', position: citizen.position });
+          }
+        }
+      }
+      const survivors = this.rescueManager.getLivingTargets();
+      for (let i = 0; i < survivors.length; i++) targets.push(survivors[i]);
+
+      const settlementTargets = this.npcSettlementManager.getLivingTargets();
+      for (let i = 0; i < settlementTargets.length; i++) targets.push(settlementTargets[i]);
+
+      const regionalNpcs = this.globalOutbreakSimulator.getLivingTargets();
+      for (let i = 0; i < regionalNpcs.length; i++) targets.push(regionalNpcs[i]);
+
+      const creatures = this.wildlifeManager.creatures;
+      for (let i = 0; i < creatures.length; i++) {
+        const c = creatures[i];
+        if (c.state === 'dead' || c.state === 'stunned' || c.infectionStage === 'stunned' || c.infectionStage === 'zombie' || c.isTamed) continue;
+        targets.push({
+          id: c.id,
+          kind: 'wildlife',
+          position: [c.group.position.x, c.group.position.y, c.group.position.z],
+        });
+      }
+
       this.zombieMgr.update(
         delta,
         this.player.position,
@@ -1684,6 +1840,21 @@ export class GameEngine {
         detectMult,
         (origin, target, acidDmg) => {
           this.combatEffects.spawnAcidSpit(origin, target, acidDmg);
+        },
+        targets as Array<{ id: string; kind?: 'citizen' | 'survivor' | 'settlement' | 'wildlife'; position: [number, number, number] }>,
+        (targetId, kind, zombieId) => {
+          const k = kind as string;
+          if (k === 'citizen') {
+            this.prologueManager?.outbreakMgr?.infectCitizen(targetId, zombieId);
+          } else if (k === 'survivor') {
+            this.rescueManager.infectSurvivor(targetId);
+          } else if (k === 'settlement') {
+            this.npcSettlementManager.infectNPC(targetId);
+          } else if (k === 'wildlife') {
+            this.wildlifeManager.infectCreature(targetId);
+          } else if (k === 'regional_npc') {
+            this.globalOutbreakSimulator.infectPedestrian(targetId);
+          }
         }
       );
     }
@@ -1691,8 +1862,8 @@ export class GameEngine {
     // 6. Raycast Interaction Prompt
     this.checkInteractionPrompt();
 
-    // 7. Auto-save every 60s
-    this.autoSaveTimer += delta;
+    // 7. Auto-save every 60s (1 minute real active time)
+    this.autoSaveTimer += Math.min(1.0, Math.max(delta, realElapsedSec));
     if (this.autoSaveTimer >= 60.0) {
       this.autoSaveTimer = 0;
       this.triggerAutoSave();
@@ -2060,6 +2231,7 @@ export class GameEngine {
     // Noise alert unless suppressed
     if (!hasSuppressor) {
       this.playerStats.noiseLevel = 92;
+      this.globalOutbreakSimulator.alertNearSound(this.player.position, 52);
     }
 
     // Check line-of-fire zombie alignment
@@ -3824,6 +3996,53 @@ export class GameEngine {
     }
   }
 
+  public teleportToGeoCoordinate(lat: number, lon: number, label?: string): void {
+    const targetLat = Math.max(-85, Math.min(85, lat));
+    const targetLon = normalizeLon(lon);
+    const sample = RealEarthDataset.sampleEarthGeography(targetLat, targetLon);
+
+    // Anchor earthOrigin slightly SW so local [420, 420] maps strictly to [targetLat, targetLon]
+    // cleanly outside Oakridge starter meshes (0,0) and Railway (z=134..226).
+    const landingX = 420;
+    const landingZ = 420;
+    const originLat = targetLat + landingZ / METERS_PER_DEG_LAT;
+    const cosLat = Math.max(0.12, Math.cos((targetLat * Math.PI) / 180));
+    const originLon = normalizeLon(targetLon - landingX / (METERS_PER_DEG_LAT * cosLat));
+
+    this.earthOrigin = {
+      id: `atlas_${targetLat.toFixed(2)}_${targetLon.toFixed(2)}`,
+      name: label || sample.regionLabel || 'Expedition Sector',
+      country: sample.country,
+      continent: sample.continent ?? sample.ocean ?? 'Earth',
+      lat: originLat,
+      lon: originLon,
+    };
+    WorldCoordinates.setWorldOrigin(this.earthOrigin);
+
+    this.chunkManager.clearLoadedChunks();
+    this.globalOutbreakSimulator.clearLocalPedestrians();
+    this.zombieMgr.clearAllZombies();
+
+    const groundY = Math.max(0.3, getTerrainHeight(landingX, landingZ, this.terrain.seed));
+    this.player.position.set(landingX, groundY, landingZ);
+    this.player.velocity.set(0, 0, 0);
+    this.player.avatarGroup.position.set(landingX, groundY, landingZ);
+    this.chunkManager.updatePlayerPosition(this.player.position, true);
+
+    const actualGeo = WorldCoordinates.worldToLatLon(landingX, landingZ);
+    this.playerStats.latitude = actualGeo.lat;
+    this.playerStats.longitude = actualGeo.lon;
+    this.playerStats.realElevationMeters = Math.round(sample.realElevationMeters);
+    this.playerStats.countryName = sample.country;
+    this.playerStats.continentOrOcean = sample.continent ?? sample.ocean ?? 'Earth';
+    this.playerStats.nearestCityName = RealWorldCities.findNearestCity(actualGeo.lat, actualGeo.lon, 250)?.city.name;
+    this.playerStats.geoTileKey = WorldCoordinates.worldToGeoTile(landingX, landingZ, 14).key;
+    this.callbacks.onStatsChange({ ...this.playerStats });
+    this.callbacks.onInteractionPrompt(
+      `Deployed to ${label || sample.country} (${EarthProjection.formatLatLon(actualGeo.lat, actualGeo.lon)})`
+    );
+  }
+
   public captureScreenshotDataUrl(): string | null {
     try {
       this.updateLocalLightBudget(true);
@@ -3839,71 +4058,105 @@ export class GameEngine {
     }
   }
 
-  public triggerAutoSave(slotId: string = 'autosave', slotName?: string) {
+  public triggerAutoSave(slotId?: string, slotName?: string) {
     const isStory = this.gameMode === 'story';
-    const storyData = this.storylineManager?.exportCheckpoint();
+    const storyData = isStory ? this.storylineManager?.exportCheckpoint() : undefined;
     const effectiveDay = isStory && storyData ? storyData.campaignDay : this.dayCount;
+    const formattedTime = `${Math.floor(this.gameTimeMinutes / 60).toString().padStart(2, '0')}:${Math.floor(this.gameTimeMinutes % 60).toString().padStart(2, '0')}`;
 
-    const meta: SaveSlotMetadata = {
-      id: slotId,
-      name: slotName || (slotId === 'autosave' ? 'Autosave Slot' : slotId.replace(/_/g, ' ').toUpperCase()),
-      characterName: 'Survivor',
-      dayCount: effectiveDay,
-      timeString: `${Math.floor(this.gameTimeMinutes / 60).toString().padStart(2, '0')}:${Math.floor(this.gameTimeMinutes % 60).toString().padStart(2, '0')}`,
-      timestamp: Date.now(),
-      difficulty: this.difficulty,
-      gameMode: this.gameMode,
-      campaignDay: isStory && storyData ? storyData.campaignDay : this.dayCount,
-      missionNumber: isStory && storyData ? storyData.missionNumber : undefined,
-      missionTitle: isStory && storyData ? storyData.missionTitle : undefined,
-      checkpointId: isStory && storyData ? storyData.checkpointId : undefined,
-      progressPercent: isStory && storyData ? storyData.progressPercent : undefined,
-      isFreeExploration: isStory && storyData ? storyData.isFreeExplorationUnlocked : false,
-    };
-
-    // Live inventory & hotbar from callbacks
     const liveInv = this.callbacks.onGetInventory?.() || [];
     const liveHotbar = this.callbacks.onGetHotbar?.() || [];
     const liveIndex = this.callbacks.onGetSelectedHotbarIndex?.() ?? 0;
+    const liveBounties = this.callbacks.onGetBounties?.() ?? [];
 
-    const saveData: FullGameSave = {
-      metadata: meta,
-      worldSeed: this.terrain.seed,
-      playerPosition: [this.player.position.x, this.player.position.y, this.player.position.z],
-      playerRotation: this.player.yaw,
-      playerStats: { ...this.playerStats },
-      inventory: [...liveInv],
-      hotbar: [...liveHotbar],
-      selectedHotbarIndex: liveIndex,
-      structures: [...this.buildingMgr.structures],
-      quests: [...this.quests],
-      gameTimeMinutes: this.gameTimeMinutes,
-      dayCount: effectiveDay,
-      lastSleptDay: this.lastSleptDay,
-      nightHordeCountDefeated: this.nightHordesDefeated,
-      ...this.worldPersistence.exportSaveData(),
-      rescuedSurvivorIds: this.rescueManager.exportRescued(),
-      baseState: this.getBaseState(),
-      tamedCompanion: this.wildlifeManager.companionState,
-      prologueState: this.prologueManager?.exportSaveData(),
-      storyCheckpoint: storyData,
-      unlockedFacilities: storyData?.unlockedFacilities,
-      weatherType: this.lastReportedWeather,
-      sandboxSettings: this.sandboxSettings,
-      deathBag: this.deathBagData,
-      weaponMods: this.weaponMods,
-      rebirthCount: this.playerStats.rebirthCount,
-      trainSaveState: this.aiTrainManager?.getTrainSaveState(),
-      railwayNPCSaveState: this.aiTrainManager?.npcManager.getSaveState(),
-      activeRailwayTicket: this.activeRailwayTicket,
+    const buildSaveForSlot = (targetId: string, targetName: string): FullGameSave => {
+      const meta: SaveSlotMetadata = {
+        id: targetId,
+        name: targetName,
+        characterName: this.characterName || 'Survivor',
+        dayCount: effectiveDay,
+        timeString: formattedTime,
+        timestamp: Date.now(),
+        difficulty: this.difficulty,
+        gameMode: this.gameMode,
+        campaignDay: isStory && storyData ? storyData.campaignDay : this.dayCount,
+        missionNumber: isStory && storyData ? storyData.missionNumber : undefined,
+        missionTitle: isStory && storyData ? storyData.missionTitle : undefined,
+        checkpointId: isStory && storyData ? storyData.checkpointId : undefined,
+        progressPercent: isStory && storyData ? storyData.progressPercent : undefined,
+        isFreeExploration: isStory && storyData ? storyData.isFreeExplorationUnlocked : false,
+      };
+
+      return {
+        saveVersion: 2,
+        earthOrigin: { ...this.earthOrigin },
+        globalOutbreakState: this.globalOutbreakSimulator.exportSaveData(),
+        metadata: meta,
+        worldSeed: this.terrain.seed,
+        playerPosition: [this.player.position.x, this.player.position.y, this.player.position.z],
+        playerRotation: this.player.yaw,
+        playerStats: { ...this.playerStats },
+        inventory: [...liveInv],
+        hotbar: [...liveHotbar],
+        selectedHotbarIndex: liveIndex,
+        structures: [...this.buildingMgr.structures],
+        quests: [...this.quests],
+        gameTimeMinutes: this.gameTimeMinutes,
+        dayCount: effectiveDay,
+        lastSleptDay: this.lastSleptDay,
+        nightHordeCountDefeated: this.nightHordesDefeated,
+        ...this.worldPersistence.exportSaveData(),
+        rescuedSurvivorIds: this.rescueManager.exportRescued(),
+        baseState: this.getBaseState(),
+        tamedCompanion: this.wildlifeManager.companionState,
+        prologueState: this.prologueManager?.exportSaveData(),
+        storyCheckpoint: storyData,
+        unlockedFacilities: storyData?.unlockedFacilities,
+        weatherType: this.lastReportedWeather,
+        bounties: liveBounties,
+        sandboxSettings: this.sandboxSettings,
+        deathBag: this.deathBagData,
+        weaponMods: this.weaponMods,
+        rebirthCount: this.playerStats.rebirthCount,
+        trainSaveState: this.aiTrainManager?.getTrainSaveState(),
+        railwayNPCSaveState: this.aiTrainManager?.npcManager.getSaveState(),
+        activeRailwayTicket: this.activeRailwayTicket,
+      };
     };
 
-    saveGameToSlot(saveData);
-    this.callbacks.onCareerEvent?.({ type: 'save_created', count: 1 });
+    if (slotId) {
+      const resolvedName =
+        slotName || (slotId === 'autosave' ? 'Autosave Slot' : slotId.replace(/_/g, ' ').toUpperCase());
+      if (slotId !== 'autosave') {
+        this.activeSaveSlotId = slotId;
+        this.activeSaveSlotName = resolvedName;
+      }
+      const saveData = buildSaveForSlot(slotId, resolvedName);
+      void this.enqueueCheckpointSave(saveData).then(() => {
+        this.callbacks.onCareerEvent?.({ type: 'save_created', count: 1 });
+        this.callbacks.onAutoSaved?.({ slotId, timestamp: saveData.metadata.timestamp, dayCount: effectiveDay, timeString: formattedTime });
+      }).catch((error: unknown) => console.error('Manual checkpoint failed:', error));
+      return;
+    }
+
+    // Automatic / Checkpoint Save: always update 'autosave' AND conserve progress in the active slot if loaded/saved
+    const autoSaveData = buildSaveForSlot('autosave', 'Autosave Slot');
+    void this.enqueueCheckpointSave(autoSaveData).then(() => {
+      this.callbacks.onCareerEvent?.({ type: 'save_created', count: 1 });
+      this.callbacks.onAutoSaved?.({ slotId: this.activeSaveSlotId || 'autosave', timestamp: autoSaveData.metadata.timestamp, dayCount: effectiveDay, timeString: formattedTime });
+    }).catch((error: unknown) => console.error('Autosave failed:', error));
+    if (this.activeSaveSlotId && this.activeSaveSlotId !== 'autosave') {
+      const activeSaveData = buildSaveForSlot(
+        this.activeSaveSlotId,
+        this.activeSaveSlotName || this.activeSaveSlotId.replace(/_/g, ' ').toUpperCase()
+      );
+      void this.enqueueCheckpointSave(activeSaveData).catch((error: unknown) => console.error('Active-slot checkpoint failed:', error));
+    }
   }
 
   public dispose() {
     this.isRunning = false;
+    this.graphicsManager?.cancelScheduledFrame();
     cancelAnimationFrame(this.frameId);
     clearTimeout(this.frameId);
 
@@ -3938,6 +4191,7 @@ export class GameEngine {
     this.combatEffects?.dispose();
     this.worldEventsManager?.dispose();
     this.aiTrainManager?.dispose();
+    this.globalOutbreakSimulator?.dispose();
     try {
       this.atmosphericSky?.dispose();
     } catch {}

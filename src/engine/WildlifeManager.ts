@@ -32,6 +32,7 @@ export type AnimalBehaviorState =
   | 'mating'
   | 'nursing'
   | 'protect_young'
+  | 'stunned'
   | 'dead'
   | 'companion_follow'
   | 'companion_stay'
@@ -94,6 +95,8 @@ export interface WildlifeAgent {
   offspringCount: number;
   isTamed?: boolean;
   deathTimer?: number;
+  infectionStage?: 'normal' | 'stunned' | 'zombie';
+  infectionTimer?: number;
 }
 
 // 40+ dynamic species categorized with realistic trophic links
@@ -753,7 +756,8 @@ export class WildlifeManager {
     biomeAt: (x: number, z: number) => string,
     isNight: boolean,
     playerYaw: number = 0,
-    hour: number = 12.0
+    hour: number = 12.0,
+    onOrganismConverted?: (agent: WildlifeAgent) => void
   ) {
     this.lastPlayerPos.copy(player);
     this.lastPlayerYaw = playerYaw;
@@ -839,12 +843,35 @@ export class WildlifeManager {
         continue;
       }
 
+      // Handle 60-second stunned infection conversion into zombie
+      if (a.state === 'stunned' || a.infectionStage === 'stunned') {
+        a.infectionTimer = Math.max(0, (a.infectionTimer ?? 60) - delta);
+        // Convulsing/trembling stunned pose while turning
+        const shiver = Math.sin(this.particleTimer * 24 + id.charCodeAt(0)) * 0.09;
+        a.group.rotation.z = THREE.MathUtils.damp(a.group.rotation.z, 0.22 + shiver, 8, delta);
+        a.group.rotation.x = THREE.MathUtils.damp(a.group.rotation.x, 0.16, 6, delta);
+        const head = a.group.getObjectByName('head');
+        if (head) {
+          head.rotation.x = THREE.MathUtils.damp(head.rotation.x, 0.42, 6, delta);
+          head.rotation.y = shiver * 1.6;
+        }
+        if (a.infectionTimer <= 0) {
+          a.infectionStage = 'zombie';
+          onOrganismConverted?.(a);
+          this.disposeAgent(id, a);
+        }
+        continue;
+      }
+
       // Decrement behavior timer
       a.stateTimer -= delta;
 
-      // 3. Autonomous Decision Making (Brain State Machine)
+      // 3. Autonomous Decision Making (Distance-tiered LOD: distant >65m tick simplified)
       const distToPlayer = Math.sqrt(distSqToPlayer);
-      this.evaluateAutonomousBrain(a, delta, player, distToPlayer, isNight);
+      const isDistantLod = distSqToPlayer > 4225;
+      if (!isDistantLod || (Math.floor(this.particleTimer * 10 + a.age * 3) % 3 === 0)) {
+        this.evaluateAutonomousBrain(a, delta, player, distToPlayer, isNight);
+      }
 
       // 4. Locomotion & Physics Integration
       this.applyAgentLocomotion(a, delta);
@@ -1518,6 +1545,7 @@ export class WildlifeManager {
     else if (bestAgent.state === 'protect_young') intentDesc = `Fiercely protecting juvenile offspring!`;
     else if (bestAgent.state === 'feed') intentDesc = `Feeding on fresh hunt kill.`;
     else if (bestAgent.state === 'flee') intentDesc = `Evasive flight from nearby predator threat!`;
+    else if (bestAgent.state === 'stunned') intentDesc = `Infected & stunned! Mutating into zombie in ${Math.ceil(bestAgent.infectionTimer ?? 60)}s!`;
 
     return {
       agentId: bestAgent.id,
@@ -1621,14 +1649,38 @@ export class WildlifeManager {
     agent.health -= amount;
     if (agent.health <= 0) {
       agent.health = 0;
-      agent.state = 'rest';
-      agent.deathTimer = 10.0;
+      agent.state = 'dead';
+      agent.deathTimer = 0;
       return true;
     } else {
       agent.state = 'flee';
       agent.stateTimer = 4.0;
       return false;
     }
+  }
+
+  public infectCreature(agentId: string): boolean {
+    const agent = this.agents.get(agentId);
+    if (!agent || agent.state === 'dead' || agent.state === 'stunned' || agent.infectionStage === 'stunned' || agent.isTamed) {
+      return false;
+    }
+    agent.infectionStage = 'stunned';
+    agent.state = 'stunned';
+    agent.infectionTimer = 60.0;
+    agent.velocity.set(0, 0, 0);
+
+    // Visual bio-infection marker ring above stunned organism
+    if (!agent.group.getObjectByName('infection_stun_ring')) {
+      const ringGeo = new THREE.TorusGeometry(0.45 * agent.species.scale, 0.045, 6, 16);
+      ringGeo.rotateX(Math.PI / 2);
+      const ringMat = new THREE.MeshBasicMaterial({ color: 0x84cc16, transparent: true, opacity: 0.85 });
+      const ring = new THREE.Mesh(ringGeo, ringMat);
+      ring.name = 'infection_stun_ring';
+      ring.position.set(0, 1.4 * agent.species.scale, 0);
+      agent.group.add(ring);
+    }
+    soundEngine.playSpatialCreatureCall(agent.group.position, this.lastPlayerPos, this.lastPlayerYaw, agent.species.kind === 'bird', agent.species.vocalPitch || 320, false);
+    return true;
   }
 
   // --- PROCEDURAL 3D MESH GENERATION ---

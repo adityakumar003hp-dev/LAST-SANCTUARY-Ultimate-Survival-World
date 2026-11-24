@@ -4,6 +4,9 @@
  */
 
 import { BiomeDefinition, BiomeType } from '../../types/game';
+import { WorldCoordinates } from './WorldCoordinates';
+import { RealEarthDataset } from '../geo/RealEarthDataset';
+import { RealWorldCities } from '../geo/RealWorldCities';
 
 export const BIOMES: Record<BiomeType, BiomeDefinition> = {
   dense_forest: {
@@ -304,61 +307,72 @@ export const BIOMES: Record<BiomeType, BiomeDefinition> = {
 
 export class BiomeGenerator {
   /**
-   * Deterministically samples temperature, moisture, and continental noise to select a biome at (x, z)
+   * Deterministically samples Real Earth WGS-84 geography, city footprints,
+   * and thematic micro-climate variation to select a biome at (x, z).
    */
   public static getBiomeAt(x: number, z: number, seed: number = 42): BiomeDefinition {
     const distFromOrigin = Math.hypot(x, z);
     if (distFromOrigin < 160) return BIOMES.green_plains;
 
+    const { lat, lon } = WorldCoordinates.worldToLatLon(x, z);
+
+    // 1. Check Real-World Cities / Airports / Seaports / Industrial Belts
+    const urban = RealWorldCities.getUrbanBiomeOverride(lat, lon);
+    if (urban && distFromOrigin > 185) {
+      return BIOMES[urban.biome] ?? BIOMES.abandoned_city;
+    }
+
+    // 2. Sample Authentic Earth Continent / Ocean / Mountain / River / Desert Geography
+    const earth = RealEarthDataset.sampleEarthGeography(lat, lon);
+
     const cX = x * 0.0008;
     const cZ = z * 0.0008;
     const tempNoise = Math.sin(cX + seed * 3.1) * Math.cos(cZ + seed * 1.7);
     const moistNoise = Math.cos(cX * 1.3 - seed * 2.3) * Math.sin(cZ * 1.1 + seed * 4.9);
-    const elevNoise = Math.sin(cX * 0.7 + cZ * 0.5 + seed);
-    const riverNoise = Math.abs(Math.sin(x * 0.003 + Math.cos(z * 0.002) * 2.5));
-    const biomeHash = Math.abs(Math.sin(Math.floor(x / 850) * 127.1 + Math.floor(z / 850) * 311.7 + seed * 19.19) * 43758.5453) % 1;
+    const biomeHash =
+      Math.abs(
+        Math.sin(Math.floor(x / 850) * 127.1 + Math.floor(z / 850) * 311.7 + seed * 19.19) * 43758.5453
+      ) % 1;
 
-    // Specific Landmark & Thematic Biomes based on regional hashes & coordinates
-    if (distFromOrigin > 350) {
-      if (biomeHash > 0.94) return BIOMES.dinosaur_valley;
-      if (biomeHash > 0.89 && tempNoise > 0.3) return BIOMES.rocky_canyon;
-      if (biomeHash > 0.85 && tempNoise > 0.35) return BIOMES.sand_dunes;
-      if (biomeHash > 0.80 && tempNoise < -0.4) return BIOMES.glacier_field;
-      if (biomeHash > 0.75 && moistNoise > 0.3) return BIOMES.waterfall_valley;
-      if (biomeHash > 0.71 && moistNoise > 0.35 && tempNoise > 0.1) return BIOMES.deep_swamp;
-      if (biomeHash > 0.67 && tempNoise > 0.4) return BIOMES.ashlands;
+    // Preserve rare discoverable thematic regions cleanly in appropriate Earth bands
+    if (distFromOrigin > 420 && earth.isLand && !earth.isLake) {
+      if (biomeHash > 0.965) return BIOMES.dinosaur_valley;
+      if (biomeHash > 0.93 && earth.realElevationMeters > 800) return BIOMES.crystal_cavern;
+      if (biomeHash > 0.90 && earth.riverProximity > 0.15) return BIOMES.waterfall_valley;
+      if (biomeHash > 0.87 && earth.realElevationMeters > 1200 && Math.abs(lat) < 40) return BIOMES.volcanic_wastes;
+      if (biomeHash > 0.84 && earth.suggestedBiome === 'dense_forest') return BIOMES.ancient_forest;
     }
 
-    if (riverNoise < 0.035 && distFromOrigin > 100) return BIOMES.river_basin;
-    if (elevNoise > 0.65) return tempNoise < -0.1 ? BIOMES.snow_peaks : BIOMES.mountain_range;
-    if (tempNoise > 0.45 && moistNoise < -0.2) return BIOMES.desert;
-    if (moistNoise > 0.4 && elevNoise < -0.3) return BIOMES.wetlands;
-    if (elevNoise < -0.65) return moistNoise > 0.2 ? BIOMES.island : BIOMES.coastline;
+    // Blend local Oakridge starter corridor rivers smoothly
+    const riverWave = Math.sin(z * 0.004) * 45;
+    const riverDist = Math.abs(x - 50 - riverWave);
+    if (riverDist < 22 && distFromOrigin < 2200) return BIOMES.river_basin;
 
-    // Expanded climate bands
-    if (tempNoise < -0.55) return biomeHash > 0.48 ? BIOMES.tundra : BIOMES.taiga;
-    if (tempNoise > 0.18 && moistNoise > 0.25) return biomeHash > 0.5 ? BIOMES.tropical_jungle : BIOMES.bamboo_forest;
-    if (tempNoise > 0.25 && moistNoise > -0.2 && moistNoise < 0.05) return biomeHash > 0.55 ? BIOMES.savannah : BIOMES.badlands;
-    if (moistNoise > 0.3 && tempNoise > 0.1) return BIOMES.mangrove_delta;
-    if (biomeHash > 0.93 && distFromOrigin > 600) return BIOMES.volcanic_wastes;
-    if (biomeHash > 0.86 && distFromOrigin > 500) return BIOMES.ancient_forest;
-    if (biomeHash > 0.80 && distFromOrigin > 700) return BIOMES.coral_coast;
-    if (biomeHash > 0.76 && distFromOrigin > 900) return BIOMES.crystal_cavern;
-    if (elevNoise > 0.45 && tempNoise < 0.15) return BIOMES.alpine_meadow;
-    if (tempNoise < -0.3) return moistNoise > 0 ? BIOMES.dense_forest : BIOMES.valley;
-
-    const poiGridX = Math.floor((x + 500) / 700);
-    const poiGridZ = Math.floor((z + 500) / 700);
+    // Local farmland/village corridors along highways between major cities
+    const poiGridX = Math.floor((x + 500) / 900);
+    const poiGridZ = Math.floor((z + 500) / 900);
     const poiHash = Math.abs(Math.sin(poiGridX * 37.1 + poiGridZ * 91.3 + seed) * 10000) % 1;
-    if (distFromOrigin > 300) {
-      if (poiHash > 0.88) return BIOMES.abandoned_city;
-      if (poiHash > 0.78) return BIOMES.research_facility;
-      if (poiHash > 0.68) return BIOMES.industrial_zone;
-      if (poiHash > 0.58) return BIOMES.small_village;
-      if (poiHash > 0.48) return BIOMES.farmland;
+    if (
+      distFromOrigin > 320 &&
+      earth.isLand &&
+      earth.realElevationMeters < 1800 &&
+      Math.abs(lat) < 60 &&
+      poiHash > 0.88
+    ) {
+      if (poiHash > 0.965) return BIOMES.research_facility;
+      if (poiHash > 0.93) return BIOMES.small_village;
+      return BIOMES.farmland;
     }
-    const lakeNoise = Math.sin(x * 0.005) * Math.cos(z * 0.005);
-    if (lakeNoise > 0.75 && distFromOrigin > 250) return BIOMES.lake_district;
-    return moistNoise > 0.0 ? BIOMES.dense_forest : BIOMES.green_plains;
+
+    // Subtle localized micro-variation within Earth macro climate
+    if (earth.suggestedBiome === 'dense_forest' && moistNoise < -0.35) {
+      return BIOMES.green_plains;
+    }
+    if (earth.suggestedBiome === 'green_plains' && tempNoise > 0.3 && moistNoise < -0.25) {
+      return BIOMES.farmland;
+    }
+
+    return BIOMES[earth.suggestedBiome] ?? BIOMES.green_plains;
   }
 }
+

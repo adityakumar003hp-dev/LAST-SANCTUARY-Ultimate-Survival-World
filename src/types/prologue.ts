@@ -92,7 +92,9 @@ export interface TownCitizen {
   patrolPoints?: [number, number][];
   dialogueLines: string[];
   isInfected?: boolean;
-  infectionStage?: 'normal' | 'exposed' | 'symptoms' | 'zombie';
+  infectionStage?: 'normal' | 'exposed' | 'symptoms' | 'stunned' | 'zombie';
+  infectionTimer?: number;
+  infectedBy?: string;
 }
 
 export interface PrologueSubtitle {

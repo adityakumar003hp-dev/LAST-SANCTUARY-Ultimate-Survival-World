@@ -65,6 +65,7 @@ interface PauseMenuProps {
   onUpdateSandboxSettings?: (patch: Partial<SandboxSettings>) => void;
   currentWeather?: WeatherType;
   onForceWeather?: (weather: WeatherType | 'auto') => void;
+  onOpenGraphicsManager?: () => void;
 }
 
 interface QualityModeOption {
@@ -90,7 +91,7 @@ const PICTURE_QUALITY_MODES: QualityModeOption[] = [
     id: 'balanced',
     title: 'Mode 2 · 4K Cinema Balanced',
     tierLabel: 'Balanced Clarity',
-    specs: 'Up to 1.5x HiDPI · 2048px Shadows · 4x Anisotropy',
+    specs: 'Up to 1.35x HiDPI · 2048px Shadows · 4x Anisotropy',
     description: 'Crisp HDR ACES lighting, soft PCF shadows, and 2-chunk terrain streaming tuned for smooth high-refresh play.',
     chunkQuality: 'medium',
   },
@@ -98,7 +99,7 @@ const PICTURE_QUALITY_MODES: QualityModeOption[] = [
     id: 'quality',
     title: 'Mode 3 · High Ultra 4K',
     tierLabel: 'Ultra 4K Detail',
-    specs: 'Up to 2.0x Retina · HDR Bloom · 8x Anisotropy · 3-Chunk Horizon',
+    specs: 'Up to 1.65x Scale · HDR Bloom · 8x Anisotropy · 3-Chunk Horizon',
     description: 'Full-pipeline HDR bloom, sharp textures at grazing angles, and long-range architectural detail.',
     chunkQuality: 'high',
   },
@@ -106,8 +107,8 @@ const PICTURE_QUALITY_MODES: QualityModeOption[] = [
     id: 'ultra_5x',
     title: 'Mode 4 · Ultra Realistic 5x Max',
     tierLabel: '5x Better Realism',
-    specs: '2.5x GPU Supersampling · 4096px Shadows · 16x AF · 4-Chunk Horizon',
-    description: 'Maximum engine realism: hardware-clamped supersampling, 4K shadow maps, 16x texture filtering, enriched sky IBL reflections, and adaptive stability protection.',
+    specs: 'Up to 2.0x Supersampling · 3072px Shadows · 16x AF · 4-Chunk Horizon',
+    description: 'Maximum engine realism: hardware-clamped supersampling, 3K shadow maps, 16x texture filtering, enriched sky IBL reflections, and Anti-Lag Governor protection.',
     chunkQuality: 'ultra',
     isFlagship: true,
   },
@@ -135,6 +136,7 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
   onUpdateSandboxSettings,
   currentWeather = 'clear',
   onForceWeather,
+  onOpenGraphicsManager,
 }) => {
   const [activeTab, setActiveTab] = useState<'main' | 'picture_quality' | 'settings' | 'controls' | 'save_slots'>('main');
   const [controlsCategory, setControlsCategory] = useState<'mobile' | 'desktop'>('desktop');
@@ -263,17 +265,21 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                 <span>Resume Game</span>
               </button>
 
-              {/* Dedicated Picture Quality Mode Section Trigger */}
+              {/* Dedicated Graphics & Stability Manager */}
               <button
                 onClick={() => {
                   soundEngine.playUIClick();
-                  setActiveTab('picture_quality');
+                  if (onOpenGraphicsManager) {
+                    onOpenGraphicsManager();
+                  } else {
+                    setActiveTab('picture_quality');
+                  }
                 }}
                 className="flex items-center justify-between gap-3 rounded-xl bg-gradient-to-r from-neutral-900 via-amber-950/25 to-neutral-900 hover:border-amber-500/60 border border-amber-500/35 px-4 py-3 text-sm font-semibold text-neutral-100 transition-all cursor-pointer"
               >
                 <span className="flex items-center gap-2.5">
                   <Sparkles className="h-4 w-4 text-amber-400 shrink-0" />
-                  <span>Picture Quality Modes</span>
+                  <span>Graphics &amp; Stability Manager</span>
                 </span>
                 <span className="text-[11px] font-mono font-bold text-amber-400 whitespace-nowrap">
                   {activeModeMeta.tierLabel} →
@@ -384,6 +390,20 @@ export const PauseMenu: React.FC<PauseMenuProps> = ({
                   </div>
                 )}
               </div>
+
+              {onOpenGraphicsManager && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    soundEngine.playUIClick();
+                    onOpenGraphicsManager();
+                  }}
+                  className="rounded-xl border border-cyan-500/40 bg-cyan-950/30 hover:bg-cyan-950/50 px-3.5 py-2 text-xs font-bold text-cyan-300 flex items-center justify-between cursor-pointer"
+                >
+                  <span>Advanced Anti-Lag Governor, Render Scale &amp; VRAM Cache</span>
+                  <span className="font-mono">Open Manager →</span>
+                </button>
+              )}
 
               {/* 4 Selectable Picture Quality Modes */}
               <div className="flex flex-col gap-2.5">

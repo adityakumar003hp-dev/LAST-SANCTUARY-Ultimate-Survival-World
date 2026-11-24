@@ -30,6 +30,11 @@ export class BasementControlRoom {
   private monitorMeshes: THREE.Mesh[] = [];
   private renderTimer = 0;
   private blinkTimer = 0;
+  private wallCanvas: HTMLCanvasElement;
+  private wallContext: CanvasRenderingContext2D | null;
+  private wallTexture: THREE.CanvasTexture;
+  private hologramMarkers: THREE.Mesh[] = [];
+  private hologramTrack: THREE.Line | null = null;
 
   // Materials for disposal
   private materials: THREE.Material[] = [];
@@ -76,13 +81,21 @@ export class BasementControlRoom {
     this.right2Texture = new THREE.CanvasTexture(this.right2Canvas);
     this.right2Texture.colorSpace = THREE.SRGBColorSpace;
 
+    this.wallCanvas = document.createElement('canvas');
+    this.wallCanvas.width = 1600;
+    this.wallCanvas.height = 900;
+    this.wallContext = this.wallCanvas.getContext('2d');
+    this.wallTexture = new THREE.CanvasTexture(this.wallCanvas);
+    this.wallTexture.colorSpace = THREE.SRGBColorSpace;
+
     // 2. Build Physical Basement Architecture
     this.buildBasementArchitecture();
 
     // 3. Build Staircase connecting Ground Floor to Basement
     this.buildBasementStaircase();
 
-    // 4. Build Control Desk and Mount Exactly 5 Monitors
+    // 4. Build the 15-panel live operations wall, holographic route table and six desk displays.
+    this.buildOperationsWallAndHologram();
     this.buildControlDeskAndMonitors();
 
     // 5. Initial render on all 5 canvases
@@ -441,6 +454,60 @@ export class BasementControlRoom {
   }
 
   // ==========================================
+  // 3. FIFTEEN-PANEL LIVE OPERATIONS WALL + 3D HOLOGRAM
+  // ==========================================
+  private buildOperationsWallAndHologram() {
+    const bezel = new THREE.MeshStandardMaterial({ color: 0x080d14, metalness: 0.82, roughness: 0.28 });
+    const screenMaterial = new THREE.MeshBasicMaterial({ map: this.wallTexture, toneMapped: false });
+    const cyan = new THREE.MeshBasicMaterial({ color: 0x39e6ff, transparent: true, opacity: 0.78, wireframe: true });
+    const holoBase = new THREE.MeshStandardMaterial({ color: 0x092b3b, metalness: 0.7, roughness: 0.22, transparent: true, opacity: 0.55 });
+    this.materials.push(bezel, screenMaterial, cyan, holoBase);
+
+    const wall = new THREE.Group();
+    wall.name = 'basement_fifteen_screen_live_railway_wall';
+    for (let row = 0; row < 3; row++) {
+      for (let col = 0; col < 5; col++) {
+        const panel = new THREE.Group();
+        panel.name = `live_railway_wall_screen_${row * 5 + col + 1}`;
+        const frame = new THREE.Mesh(new THREE.BoxGeometry(1.48, 0.78, 0.09), bezel);
+        const screen = new THREE.Mesh(new THREE.PlaneGeometry(1.40, 0.70), screenMaterial);
+        screen.position.z = 0.052;
+        panel.add(frame, screen);
+        panel.position.set(-3.8 + col * 1.9, -0.72 - row * 1.08, -6.48);
+        wall.add(panel);
+      }
+    }
+    this.group.add(wall);
+
+    const hologram = new THREE.Group();
+    hologram.name = 'interactive_three_dimensional_railway_hologram';
+    hologram.position.set(0, -2.65, -1.35);
+    const base = new THREE.Mesh(new THREE.CylinderGeometry(1.65, 1.78, 0.10, 48), holoBase);
+    const ring = new THREE.Mesh(new THREE.TorusGeometry(1.62, 0.025, 8, 64), cyan);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.y = 0.12;
+    const grid = new THREE.Mesh(new THREE.CylinderGeometry(1.52, 1.52, 0.012, 48, 1, true), cyan);
+    grid.position.y = 0.18;
+    hologram.add(base, ring, grid);
+    const points: THREE.Vector3[] = [];
+    for (let i = 0; i <= 48; i++) {
+      const a = (i / 48) * Math.PI * 2;
+      points.push(new THREE.Vector3(Math.cos(a) * 1.42, 0.22, Math.sin(a) * 1.42));
+    }
+    this.hologramTrack = new THREE.Line(new THREE.BufferGeometry().setFromPoints(points), cyan);
+    hologram.add(this.hologramTrack);
+    for (let i = 0; i < 6; i++) {
+      const marker = new THREE.Mesh(new THREE.SphereGeometry(0.075, 12, 8), new THREE.MeshBasicMaterial({ color: 0x6cf7ff }));
+      marker.name = `live_train_hologram_marker_${i + 1}`;
+      marker.visible = false;
+      hologram.add(marker);
+      this.hologramMarkers.push(marker);
+      this.materials.push(marker.material as THREE.Material);
+    }
+    this.group.add(hologram);
+  }
+
+  // ==========================================
   // 3. CONTROL DESK & EXACTLY FIVE MONITORS
   // ==========================================
   private buildControlDeskAndMonitors() {
@@ -636,6 +703,10 @@ export class BasementControlRoom {
       new THREE.Vector3(1.95, 0.88, 0.22),
       -0.32
     );
+    createMonitor(
+      'monitor_six_dispatch_alerts', 0.92, 0.48, this.left2Texture,
+      new THREE.Vector3(0, 0.88, 0.48), 0
+    );
 
     this.group.add(deskGroup);
   }
@@ -653,15 +724,62 @@ export class BasementControlRoom {
       const telemetry = aiTrainMgr ? aiTrainMgr.getOperationsTelemetry() : [];
       const stationOps = aiTrainMgr?.getStationOperationsSnapshot?.() ?? null;
       this.renderAllMonitors(telemetry, stationOps);
+      this.updateHologram(telemetry);
     }
   }
 
   private renderAllMonitors(telemetry: RailwayServiceTelemetry[], stationOps: any = null) {
+    this.renderOperationsWall(telemetry);
     this.renderCentreOperationsBoard(telemetry);
     this.renderLeft1NetworkMap(telemetry);
     this.renderLeft2SignalsAndStatus(telemetry);
     this.renderRight1Diagnostics(telemetry, stationOps);
     this.renderRight2Timetable(telemetry);
+  }
+
+  private renderOperationsWall(telemetry: RailwayServiceTelemetry[]) {
+    const ctx = this.wallContext;
+    if (!ctx) return;
+    const w = this.wallCanvas.width; const h = this.wallCanvas.height;
+    ctx.fillStyle = '#06101c'; ctx.fillRect(0, 0, w, h);
+    ctx.fillStyle = '#58e8ff'; ctx.font = 'bold 34px monospace';
+    ctx.fillText('SANCTUARY RAIL NETWORK // LIVE OPERATIONS', 42, 58);
+    ctx.fillStyle = '#8ba9bd'; ctx.font = '18px monospace';
+    ctx.fillText(`SIMULATION TELEMETRY · ${telemetry.length}/6 SERVICES REPORTING · ${new Date().toLocaleTimeString()}`, 44, 91);
+    const cols = 3; const cellW = 485; const cellH = 245;
+    for (let i = 0; i < 6; i++) {
+      const t = telemetry[i]; const x = 42 + (i % cols) * 510; const y = 130 + Math.floor(i / cols) * 365;
+      ctx.strokeStyle = t ? '#176b86' : '#344252'; ctx.lineWidth = 2; ctx.strokeRect(x, y, cellW, cellH);
+      ctx.fillStyle = t ? '#a7f3ff' : '#82909e'; ctx.font = 'bold 24px monospace';
+      ctx.fillText(t ? `${t.serviceId} · ${t.serviceName}` : `SERVICE ${String(i + 1).padStart(2, '0')} · UNSCHEDULED`, x + 18, y + 38);
+      ctx.font = '18px monospace'; ctx.fillStyle = '#d2e7f2';
+      const lines = t ? [
+        `STATE ${t.status}  LINE ${t.line}  ${t.directionLabel}`,
+        `SPEED ${t.speedKmh.toFixed(1)} km/h  CONDITION ${t.conditionPct}%`,
+        `FROM ${t.from}  TO ${t.to}`,
+        `NEXT ${t.nextStation || '—'}  STOP ${t.stop || '—'}`,
+        `DIST +${t.distTravelledKm.toFixed(2)} km  REM ${t.distRemainingKm.toFixed(2)} km`,
+        `ARR ${t.estimatedArrival || 'SIM ESTIMATE N/A'}  DEP ${t.departureTime || 'N/A'}`,
+      ] : ['No active AI service telemetry', 'No fabricated timetable values'];
+      lines.forEach((line, n) => ctx.fillText(line, x + 18, y + 78 + n * 27));
+    }
+    this.wallTexture.needsUpdate = true;
+  }
+
+  private updateHologram(telemetry: RailwayServiceTelemetry[]) {
+    if (!telemetry.length) { this.hologramMarkers.forEach(marker => { marker.visible = false; }); return; }
+    const xs = telemetry.map(t => t.x); const zs = telemetry.map(t => t.z);
+    const minX = Math.min(...xs); const maxX = Math.max(...xs); const minZ = Math.min(...zs); const maxZ = Math.max(...zs);
+    telemetry.slice(0, 6).forEach((train, index) => {
+      const marker = this.hologramMarkers[index]; if (!marker) return;
+      const nx = maxX - minX > 0.001 ? (train.x - minX) / (maxX - minX) : 0.5;
+      const nz = maxZ - minZ > 0.001 ? (train.z - minZ) / (maxZ - minZ) : 0.5;
+      marker.position.set((nx - 0.5) * 2.45, 0.25 + index * 0.035, (nz - 0.5) * 2.25);
+      marker.visible = true;
+      const material = marker.material as THREE.MeshBasicMaterial;
+      material.color.set(train.status === 'HELD' ? 0xffb84d : train.status === 'RUNNING' ? 0x55f0ff : 0x8df7a6);
+    });
+    for (let i = telemetry.length; i < this.hologramMarkers.length; i++) this.hologramMarkers[i].visible = false;
   }
 
   // Monitor 1: Centre - 6 Train Operations Slots
@@ -1149,6 +1267,7 @@ export class BasementControlRoom {
     this.left2Texture.dispose();
     this.right1Texture.dispose();
     this.right2Texture.dispose();
+    this.wallTexture.dispose();
     this.materials = [];
     this.monitorMeshes = [];
   }

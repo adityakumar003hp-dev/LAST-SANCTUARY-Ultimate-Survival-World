@@ -12,6 +12,7 @@ interface PerformanceDiagnosticProps {
   onClose: () => void;
   qualityMode: GraphicsQualityMode;
   onSelectQualityMode: (mode: GraphicsQualityMode) => void;
+  onOpenGraphicsManager?: () => void;
 }
 
 const MODE_LABELS: { id: GraphicsQualityMode; label: string }[] = [
@@ -27,10 +28,12 @@ export const PerformanceDiagnostic: React.FC<PerformanceDiagnosticProps> = ({
   onClose,
   qualityMode,
   onSelectQualityMode,
+  onOpenGraphicsManager,
 }) => {
   const [stats, setStats] = useState({
     fps: 60,
     frameTimeMs: 16.6,
+    p95FrameTimeMs: 16.6,
     drawCalls: 0,
     triangles: 0,
     geometries: 0,
@@ -42,6 +45,8 @@ export const PerformanceDiagnostic: React.FC<PerformanceDiagnosticProps> = ({
     anisotropy: 8,
     activeEntities: 0,
     longFrame: false,
+    governorActionLabel: 'Full Fidelity',
+    contextHealth: 'healthy' as 'healthy' | 'recovering' | 'safe_mode',
   });
 
   useEffect(() => {
@@ -82,6 +87,7 @@ export const PerformanceDiagnostic: React.FC<PerformanceDiagnosticProps> = ({
       setStats({
         fps: curFps,
         frameTimeMs: frameMs,
+        p95FrameTimeMs: diag.p95FrameTimeMs ?? frameMs,
         drawCalls: calls,
         triangles,
         geometries,
@@ -93,6 +99,8 @@ export const PerformanceDiagnostic: React.FC<PerformanceDiagnosticProps> = ({
         anisotropy: diag.anisotropy,
         activeEntities: totalEntities,
         longFrame: curFps < 25,
+        governorActionLabel: diag.governorActionLabel ?? 'Full Fidelity',
+        contextHealth: diag.contextHealth ?? 'healthy',
       });
     }, 500);
 
@@ -194,6 +202,32 @@ export const PerformanceDiagnostic: React.FC<PerformanceDiagnosticProps> = ({
               {mode.label}
             </button>
           ))}
+        </div>
+
+        <div className="mt-2 flex items-center justify-between gap-2 rounded-lg border border-neutral-800 bg-neutral-900/80 px-2.5 py-1.5 text-[10px]">
+          <span className="text-neutral-400 truncate">
+            Governor: <span className="text-cyan-300 font-bold">{stats.governorActionLabel}</span>
+          </span>
+          <span className="text-neutral-500 tabular-nums shrink-0">P95 {stats.p95FrameTimeMs}ms</span>
+        </div>
+
+        <div className="grid grid-cols-2 gap-1.5 mt-2">
+          {onOpenGraphicsManager && (
+            <button
+              type="button"
+              onClick={onOpenGraphicsManager}
+              className="py-1.5 px-2 bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 rounded-lg font-bold text-[10px] uppercase cursor-pointer"
+            >
+              Graphics Manager
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => engine?.optimizeGraphicsMemory()}
+            className="py-1.5 px-2 bg-emerald-950/60 hover:bg-emerald-900/60 text-emerald-300 border border-emerald-600/40 rounded-lg font-bold text-[10px] uppercase cursor-pointer"
+          >
+            Free GPU Memory
+          </button>
         </div>
       </div>
 

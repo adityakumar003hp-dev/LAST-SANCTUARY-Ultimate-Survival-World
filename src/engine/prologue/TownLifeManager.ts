@@ -21,6 +21,7 @@ export class TownLifeManager {
   public citizens: TownCitizen[] = [];
   public citizenMeshes: Map<string, THREE.Group> = new Map();
   public streetLights: THREE.PointLight[] = [];
+  public gridPowerFactor: number = 1.0;
   public apartmentBuilding: ApartmentBuilding;
   private fountainWaterMat: THREE.MeshStandardMaterial | null = null;
   private walkTime: number = 0;
@@ -1012,8 +1013,13 @@ export class TownLifeManager {
       }
     });
 
-    // 2. Update Streetlights: Turn on at night
-    const targetLightIntensity = isNight ? 1.6 : 0;
+    // 2. Update Streetlights: Turn on at night (attenuated by regional grid power stability during outbreak)
+    const powerFactor = Math.max(0.08, Math.min(1.0, this.gridPowerFactor ?? 1.0));
+    const flicker =
+      powerFactor < 0.72
+        ? 0.55 + 0.45 * Math.sin(this.walkTime * 19.0) * Math.cos(this.walkTime * 7.3)
+        : 1.0;
+    const targetLightIntensity = isNight ? 1.6 * powerFactor * flicker : 0;
     this.streetLights.forEach((light) => {
       light.intensity = THREE.MathUtils.damp(light.intensity, targetLightIntensity, 4, delta);
     });
@@ -1038,7 +1044,20 @@ export class TownLifeManager {
       const lArm = mesh.getObjectByName('lArm');
       const rArm = mesh.getObjectByName('rArm');
       const head = mesh.getObjectByName('head');
-      if (isPanic) {
+      if (c.infectionStage === 'stunned') {
+        // Visibly stunned/convulsing crouch while the 60-second conversion timer runs.
+        const shiver = Math.sin(this.walkTime * 22 + idx) * 0.08;
+        if (lArm && rArm) {
+          lArm.rotation.x = THREE.MathUtils.damp(lArm.rotation.x, -0.55 + shiver, 6, delta);
+          rArm.rotation.x = THREE.MathUtils.damp(rArm.rotation.x, -0.55 - shiver, 6, delta);
+        }
+        mesh.rotation.x = THREE.MathUtils.damp(mesh.rotation.x, 0.24, 3.5, delta);
+        mesh.rotation.z = THREE.MathUtils.damp(mesh.rotation.z, shiver * 1.1, 8, delta);
+        if (head) {
+          head.rotation.x = THREE.MathUtils.damp(head.rotation.x, 0.34, 3.5, delta);
+          head.rotation.y = shiver * 1.5;
+        }
+      } else if (isPanic) {
         if (lArm && rArm) {
           lArm.rotation.x = THREE.MathUtils.damp(lArm.rotation.x, -2.2, 8, delta);
           rArm.rotation.x = THREE.MathUtils.damp(rArm.rotation.x, -2.2, 8, delta);
@@ -1050,6 +1069,41 @@ export class TownLifeManager {
         if (head) head.rotation.y = Math.sin(ph * 0.45) * 0.14;
       }
     });
+  }
+
+  /** Replace a stunned resident with a standard outbreak zombie entity preserving victim clothing & identity. */
+  public convertCitizenToZombie(citizen: TownCitizen, zombieMgr: import('../ZombieManager').ZombieManager): boolean {
+    if (citizen.infectionStage === 'zombie') return false;
+    const spawned = zombieMgr.spawnZombie(
+      'walker',
+      [citizen.position[0], citizen.position[1], citizen.position[2]],
+      true,
+      {
+        name: citizen.name,
+        role: citizen.role,
+        clothHex: citizen.shirtColor,
+        pantsHex: citizen.pantColor,
+      }
+    );
+    if (!spawned) return false;
+    spawned.state = 'chase';
+    const mesh = this.citizenMeshes.get(citizen.id);
+    if (mesh) {
+      this.group.remove(mesh);
+      mesh.traverse((child) => {
+        if (child instanceof THREE.Mesh) {
+          child.geometry.dispose();
+          if (Array.isArray(child.material)) child.material.forEach((m) => m.dispose());
+          else child.material.dispose();
+        }
+      });
+      this.citizenMeshes.delete(citizen.id);
+    }
+    UnifiedPhysicsManager.getInstance()?.unregisterCollider(`citizen_${citizen.id}`);
+    citizen.infectionStage = 'zombie';
+    citizen.isInfected = true;
+    citizen.schedule = 'infected';
+    return true;
   }
 
   /** Check for interactive items inside or around the player's 5-floor apartment */

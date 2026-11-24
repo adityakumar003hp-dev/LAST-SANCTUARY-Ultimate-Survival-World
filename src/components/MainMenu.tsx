@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Play, FolderOpen, HelpCircle, Shield, Award, Sparkles, X, Trash2, AlertTriangle, Database, Download, Upload, BookMarked, Sliders, Trophy } from 'lucide-react';
-import { Difficulty, GameMode, SandboxSettings, SaveSlotMetadata } from '../types/game';
+import { Play, FolderOpen, HelpCircle, Shield, Award, Sparkles, X, Trash2, AlertTriangle, Database, Download, Upload, BookMarked, Sliders, Trophy, Globe } from 'lucide-react';
+import { Difficulty, EarthOriginConfig, GameMode, SandboxSettings, SaveSlotMetadata } from '../types/game';
+import { REAL_WORLD_START_REGIONS, EarthProjection } from '../engine/geo/EarthProjection';
 import { getAllSaveSlots, deleteSaveSlot, downloadSaveSlotJson, validateAndImportSaveJson } from '../utils/storage';
 import { getLeaderboardRuns, LeaderboardEntry } from '../utils/blueprintShare';
 import { soundEngine } from '../utils/audio';
@@ -14,6 +15,7 @@ interface MainMenuProps {
     gameMode: GameMode;
     seed: number;
     sandboxSettings: SandboxSettings;
+    earthOrigin?: EarthOriginConfig;
   }) => void;
   onContinueGame: () => void;
   onLoadSaveSlot: (slotId: string) => void;
@@ -53,6 +55,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
   const [difficulty, setDifficulty] = useState<Difficulty>('standard');
   const [gameMode, setGameMode] = useState<GameMode>('survival');
   const [seed, setSeed] = useState(42);
+  const [selectedOrigin, setSelectedOrigin] = useState<EarthOriginConfig>(REAL_WORLD_START_REGIONS[0]);
   const [sandboxSettings, setSandboxSettings] = useState<SandboxSettings>({
     lootMultiplier: 1.0,
     zombieDensity: 1.0,
@@ -83,6 +86,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
       gameMode,
       seed,
       sandboxSettings,
+      earthOrigin: selectedOrigin,
     });
   };
 
@@ -373,6 +377,36 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                   >
                     Randomize
                   </button>
+                </div>
+              </div>
+
+              {/* Real Earth Starting Sector */}
+              <div>
+                <label className="text-xs uppercase font-bold text-neutral-400 flex items-center gap-1.5 mb-1.5">
+                  <Globe className="h-3.5 w-3.5 text-sky-400" />
+                  <span>Real Earth Deployment Region (WGS-84)</span>
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 max-h-40 overflow-y-auto pr-1">
+                  {REAL_WORLD_START_REGIONS.map((region) => {
+                    const active = selectedOrigin.id === region.id;
+                    return (
+                      <button
+                        key={region.id}
+                        type="button"
+                        onClick={() => setSelectedOrigin(region)}
+                        className={`flex flex-col rounded-xl border px-2.5 py-2 text-left transition-all cursor-pointer ${
+                          active
+                            ? 'border-sky-400 bg-sky-500/15 text-neutral-100'
+                            : 'border-neutral-800 bg-neutral-900/60 text-neutral-300 hover:border-neutral-700'
+                        }`}
+                      >
+                        <span className="text-[11px] font-bold truncate">{region.name}</span>
+                        <span className="text-[9px] font-mono text-neutral-400 truncate">
+                          {region.country} · {EarthProjection.formatLatLon(region.lat, region.lon)}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
@@ -685,6 +719,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({
                       <button
                         onClick={() => {
                           soundEngine.playUIClick();
+                          setShowLoadModal(false);
                           onLoadSaveSlot(slot.id);
                         }}
                         className="rounded-lg bg-amber-500 hover:bg-amber-400 px-3.5 py-2 text-xs font-bold uppercase tracking-wider text-neutral-950 cursor-pointer shadow transition-transform active:scale-95"

@@ -24,6 +24,7 @@ import { VehicleHUD } from './components/VehicleHUD';
 import { TrainHUD } from './components/TrainHUD';
 import { CinematicOverlay } from './components/prologue/CinematicOverlay';
 import { PerformanceDiagnostic } from './components/PerformanceDiagnostic';
+import { GraphicsManagerModal } from './components/GraphicsManagerModal';
 import { SurvivalRadioPanel } from './components/SurvivalRadioPanel';
 import { FishingModal } from './components/FishingModal';
 import { ProloguePhase, PrologueSubtitle, StoryCompanion } from './types/prologue';
@@ -53,6 +54,7 @@ import {
   FloatingDamageNumber,
   SupplyDropState,
   WeaponModId,
+  EarthOriginConfig,
 } from './types/game';
 import { ExtractionState } from './engine/world/WorldEventsManager';
 import { ObjectiveNavigationState } from './types/physics';
@@ -255,12 +257,16 @@ export default function App() {
 
   // Dynamic Weather, Combat Feedback, Bounties, Sandbox & Keybinds
   const [weather, setWeather] = useState<WeatherType>('clear');
+  const [weatherIntensity, setWeatherIntensity] = useState<number>(0.35);
   const [damageNumbers, setDamageNumbers] = useState<FloatingDamageNumber[]>([]);
   const [hitmarkerActive, setHitmarkerActive] = useState(false);
   const [bossStatus, setBossStatus] = useState<{ name: string; health: number; maxHealth: number } | null>(null);
   const [worldEvent, setWorldEvent] = useState<{ supplyDrop: SupplyDropState | null; extraction: ExtractionState } | null>(null);
   const [bounties, setBounties] = useState<RadiantBounty[]>(() => generateDailyBounties(1));
+  const bountiesRef = useRef<RadiantBounty[]>(bounties);
+  bountiesRef.current = bounties;
   const lastBountyDayRef = useRef(1);
+  const [autoSaveToast, setAutoSaveToast] = useState<string | null>(null);
   const [sandboxSettings, setSandboxSettings] = useState<SandboxSettings>({
     lootMultiplier: 1.0,
     zombieDensity: 1.0,
@@ -283,8 +289,9 @@ export default function App() {
   const dayCountRef = useRef(dayCount);
   dayCountRef.current = dayCount;
 
-  // Performance Diagnostics Overlay State & Graphics Quality Preset (4 Modes)
+  // Performance Diagnostics Overlay & Graphics Manager Modal
   const [isPerfOpen, setIsPerfOpen] = useState(false);
+  const [isGraphicsManagerOpen, setIsGraphicsManagerOpen] = useState(false);
   const [qualityMode, setQualityMode] = useState<GraphicsQualityMode>(() => {
     try {
       const stored = localStorage.getItem('last_sanctuary_quality_preset');
@@ -326,12 +333,6 @@ export default function App() {
       localStorage.setItem('last_sanctuary_quality_preset', mode);
     } catch {}
   }, []);
-
-  const handleCycleQualityMode = useCallback(() => {
-    const modes: GraphicsQualityMode[] = ['performance', 'balanced', 'quality', 'ultra_5x'];
-    const nextIdx = (modes.indexOf(qualityMode) + 1) % modes.length;
-    handleSelectQualityMode(modes[nextIdx]);
-  }, [qualityMode, handleSelectQualityMode]);
 
   const [trainHUDData, setTrainHUDData] = useState<any | null>(null);
 
@@ -421,12 +422,25 @@ export default function App() {
     );
   }, [gameState, dayCount, stats.level, quests]);
 
-  // Check for existing save on mount
+  // Check for existing save on mount & auto-save synchronously if tab closes during active play
   useEffect(() => {
     getAllSaveSlots().then((slots) => {
       if (slots.length > 0) setHasContinue(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (gameState !== 'playing') return;
+    const handleBeforeUnload = () => {
+      engineRef.current?.triggerAutoSave();
+    };
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    window.addEventListener('pagehide', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+      window.removeEventListener('pagehide', handleBeforeUnload);
+    };
+  }, [gameState]);
 
   // Update Station HUD visibility, active train banner, floor elevation, and facility waypoint (dirty-checked)
   useEffect(() => {
@@ -547,7 +561,13 @@ export default function App() {
 
   // Initialize Game Simulation
   const launchEngine = useCallback(
-    (initialSave: FullGameSave | null, seed: number = 42, mode: GameMode = 'survival', diff: Difficulty = 'standard') => {
+    (
+      initialSave: FullGameSave | null,
+      seed: number = 42,
+      mode: GameMode = 'survival',
+      diff: Difficulty = 'standard',
+      startingOrigin?: EarthOriginConfig
+    ) => {
       if (!canvasMountRef.current) return;
 
       // Clean up any existing engine
@@ -623,7 +643,12 @@ export default function App() {
           });
           setGameState('gameover');
         },
-        onWeatherChange: (nextWeather: WeatherType) => setWeather(nextWeather),
+        onWeatherChange: (nextWeather: WeatherType, nextIntensity?: number) => {
+          setWeather(nextWeather);
+          if (typeof nextIntensity === 'number') {
+            setWeatherIntensity(nextIntensity);
+          }
+        },
         onHitEvent: (ev: { amount: number; isHeadshot?: boolean; isStealth?: boolean; screenX: number; screenY: number }) => {
           const id = `dn_${Date.now()}_${Math.random()}`;
           setDamageNumbers((prev) => [
@@ -674,6 +699,12 @@ export default function App() {
         },
         onOpenBlueprintModal: () => setIsBlueprintModalOpen(true),
         onOpenFishingModal: () => setIsFishingOpen(true),
+        onGetBounties: () => bountiesRef.current,
+        onAutoSaved: (info: { slotId: string; timestamp: number; dayCount: number; timeString: string }) => {
+          setHasContinue(true);
+          setAutoSaveToast(`Checkpoint Saved · Day ${info.dayCount} ${info.timeString}`);
+          setTimeout(() => setAutoSaveToast(null), 3200);
+        },
         onOpenDialogue: (dialogue: SurvivorDialogue) => setActiveDialogue(dialogue),
         onVehicleChange: (veh: VehicleState | null, speed: number) => {
           setActiveVehicle(veh);
@@ -757,22 +788,40 @@ export default function App() {
             if (!canvasMountRef.current) {
               throw new Error('3D viewport mount element was not ready.');
             }
-            const engine = new GameEngine(canvasMountRef.current, initialSave, callbacks, seed);
+            const engine = new GameEngine(
+              canvasMountRef.current,
+              initialSave,
+              callbacks,
+              seed,
+              startingOrigin,
+              {
+                gameMode: mode,
+                difficulty: diff,
+                characterName: initialSave?.metadata?.characterName || survivorNameRef.current,
+              }
+            );
             engine.gameMode = mode;
             engine.difficulty = diff;
             engine.setSandboxSettings(sandboxSettings);
             if (!initialSave) {
               engine.quests = [...INITIAL_QUESTS];
+              setQuests([...INITIAL_QUESTS]);
               setBounties(generateDailyBounties(1));
               lastBountyDayRef.current = 1;
               setWeaponMods({});
             }
 
-            // Restore inventory and hotbar faithfully if loading save
+            // Restore inventory, hotbar, time, stats, bounties, and checkpoint quests faithfully if loading save
             if (initialSave) {
               if (initialSave.metadata?.characterName) {
                 survivorNameRef.current = initialSave.metadata.characterName;
               }
+              setStats({ ...engine.playerStats });
+              setDayCount(engine.dayCount);
+              setTimeMinutes(engine.gameTimeMinutes);
+              lastBountyDayRef.current = engine.dayCount;
+              setPlayerCoords([engine.player.position.x, engine.player.position.y, engine.player.position.z]);
+
               if (initialSave.inventory && initialSave.inventory.length > 0) {
                 setInventory(initialSave.inventory);
                 inventoryRef.current = initialSave.inventory;
@@ -785,7 +834,9 @@ export default function App() {
                 setSelectedHotbarIndex(initialSave.selectedHotbarIndex);
                 selectedHotbarIndexRef.current = initialSave.selectedHotbarIndex;
               }
-              if (initialSave.quests && initialSave.quests.length > 0) {
+              if (engine.quests && engine.quests.length > 0) {
+                setQuests([...engine.quests]);
+              } else if (initialSave.quests && initialSave.quests.length > 0) {
                 setQuests(initialSave.quests);
               }
               if (initialSave.activeRailwayTicket) {
@@ -800,6 +851,8 @@ export default function App() {
               }
               if (initialSave.bounties && initialSave.bounties.length > 0) {
                 setBounties(initialSave.bounties);
+              } else {
+                setBounties(generateDailyBounties(engine.dayCount));
               }
               if (initialSave.weatherType) {
                 setWeather(initialSave.weatherType);
@@ -839,10 +892,11 @@ export default function App() {
     gameMode: GameMode;
     seed: number;
     sandboxSettings: SandboxSettings;
+    earthOrigin?: EarthOriginConfig;
   }) => {
     survivorNameRef.current = config.characterName || 'Survivor';
     setSandboxSettings(config.sandboxSettings);
-    launchEngine(null, config.seed, config.gameMode, config.difficulty);
+    launchEngine(null, config.seed, config.gameMode, config.difficulty, config.earthOrigin);
   };
 
   const continueGame = async () => {
@@ -1049,6 +1103,7 @@ export default function App() {
     isFishingOpen ||
     isBlueprintModalOpen ||
     isExtractionVictoryOpen ||
+    isGraphicsManagerOpen ||
     !!activeDialogue ||
     !!activeFriendModal ||
     !!openChestStructure;
@@ -1316,6 +1371,7 @@ export default function App() {
           isFishingOpen ||
           isBlueprintModalOpen ||
           isExtractionVictoryOpen ||
+          isGraphicsManagerOpen ||
           !!activeDialogue ||
           !!activeFriendModal ||
           openChestStructure
@@ -1343,6 +1399,7 @@ export default function App() {
           setIsFishingOpen(false);
           setIsBlueprintModalOpen(false);
           setIsExtractionVictoryOpen(false);
+          setIsGraphicsManagerOpen(false);
           setActiveDialogue(null);
           setActiveFriendModal(null);
           setOpenChestStructure(null);
@@ -1482,6 +1539,7 @@ export default function App() {
     isFishingOpen,
     isBlueprintModalOpen,
     isExtractionVictoryOpen,
+    isGraphicsManagerOpen,
     isPhotoMode,
     isAnyModalBlockingInput,
     activeDialogue,
@@ -1925,6 +1983,7 @@ export default function App() {
                 isNight={isNight}
                 isDusk={isDusk}
                 interactionPrompt={interactionPrompt}
+                autoSaveToast={autoSaveToast}
                 hotbar={hotbar}
                 selectedIndex={selectedHotbarIndex}
                 onSelectSlot={(idx) => {
@@ -2034,7 +2093,10 @@ export default function App() {
                 onTogglePerfDiagnostic={() => setIsPerfOpen((prev) => !prev)}
                 isPerfOpen={isPerfOpen}
                 qualityMode={qualityMode}
-                onCycleQualityMode={handleCycleQualityMode}
+                onCycleQualityMode={() => {
+                  soundEngine.playUIClick();
+                  setIsGraphicsManagerOpen(true);
+                }}
                 touchControlsMode={touchControlsMode}
                 onToggleTouchControlsMode={handleToggleTouchControlsMode}
                 showCoordinates={settings.showCoordinates}
@@ -2042,6 +2104,7 @@ export default function App() {
                   if (engineRef.current) engineRef.current.handleInteractKey();
                 }}
                 weather={weather}
+                weatherIntensity={weatherIntensity}
                 damageNumbers={damageNumbers}
                 hitmarkerActive={hitmarkerActive}
                 bossStatus={bossStatus}
@@ -2289,7 +2352,10 @@ export default function App() {
             onToggleBioScanner={() => setIsBioScannerActive((prev) => !prev)}
             isBioScannerActive={isBioScannerActive}
             qualityMode={qualityMode}
-            onCycleQualityMode={handleCycleQualityMode}
+            onCycleQualityMode={() => {
+              soundEngine.playUIClick();
+              setIsGraphicsManagerOpen(true);
+            }}
             touchControlsMode={touchControlsMode}
             onToggleTouchControlsMode={handleToggleTouchControlsMode}
             onCrouchToggle={(crouch) => {
@@ -2359,6 +2425,17 @@ export default function App() {
               waypoints={engineRef.current ? engineRef.current.worldPersistence.waypoints : []}
               onAddWaypoint={(wp) => engineRef.current?.worldPersistence.addWaypoint(wp)}
               onRemoveWaypoint={(id) => engineRef.current?.worldPersistence.removeWaypoint(id)}
+              earthLat={stats.latitude}
+              earthLon={stats.longitude}
+              realElevationMeters={stats.realElevationMeters}
+              countryName={stats.countryName}
+              continentOrOcean={stats.continentOrOcean}
+              nearestCityName={stats.nearestCityName}
+              globalCities={engineRef.current?.globalOutbreakSimulator.getCityStates()}
+              globalMetrics={engineRef.current?.globalOutbreakSimulator.getGlobalMetrics()}
+              onTravelToGeoCoordinate={(lat, lon, label) => {
+                engineRef.current?.teleportToGeoCoordinate(lat, lon, label);
+              }}
             />
           </Suspense>
 
@@ -2519,11 +2596,13 @@ export default function App() {
               onSave={handleManualSave}
               onQuitToMenu={() => {
                 if (engineRef.current) {
+                  engineRef.current.triggerAutoSave();
                   engineRef.current.dispose();
                   engineRef.current = null;
                 }
                 setIsPauseOpen(false);
                 setGameState('menu');
+                getAllSaveSlots().then((slots) => setHasContinue(slots.length > 0));
               }}
               settings={settings}
               onUpdateSettings={setSettings}
@@ -2568,7 +2647,13 @@ export default function App() {
                 } else {
                   engineRef.current.weatherManager.setWeather(w, true);
                   setWeather(w);
+                  setWeatherIntensity(w === 'clear' ? 0.35 : 0.9 * (sandboxSettings.weatherIntensity ?? 1));
                 }
+              }}
+              onOpenGraphicsManager={() => {
+                setIsPauseOpen(false);
+                if (engineRef.current) engineRef.current.setPaused(false);
+                setIsGraphicsManagerOpen(true);
               }}
             />
           )}
@@ -2924,6 +3009,22 @@ export default function App() {
             onClose={() => setIsPerfOpen(false)}
             qualityMode={qualityMode}
             onSelectQualityMode={handleSelectQualityMode}
+            onOpenGraphicsManager={() => setIsGraphicsManagerOpen(true)}
+          />
+
+          {/* Graphics & Stability Manager Modal */}
+          <GraphicsManagerModal
+            isOpen={isGraphicsManagerOpen}
+            onClose={() => setIsGraphicsManagerOpen(false)}
+            engine={engineRef.current}
+            qualityMode={qualityMode}
+            onSelectQualityMode={handleSelectQualityMode}
+            onSyncViewDistance={(chunks) =>
+              setSettings((prev) => ({
+                ...prev,
+                viewDistanceChunks: chunks,
+              }))
+            }
           />
         </>
       )}

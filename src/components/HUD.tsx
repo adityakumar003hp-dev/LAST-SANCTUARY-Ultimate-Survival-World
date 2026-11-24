@@ -47,6 +47,7 @@ import {
   SupplyDropState,
 } from '../types/game';
 import { ExtractionState } from '../engine/world/WorldEventsManager';
+import { EarthProjection } from '../engine/geo/EarthProjection';
 
 interface HUDProps {
   stats: PlayerStats;
@@ -55,6 +56,7 @@ interface HUDProps {
   isNight: boolean;
   isDusk: boolean;
   interactionPrompt: string | null;
+  autoSaveToast?: string | null;
   onInteract?: () => void;
   hotbar: (InventorySlot | null)[];
   selectedIndex: number;
@@ -102,6 +104,7 @@ interface HUDProps {
   isGamepadConnected?: boolean;
   biomeTempC?: number;
   weather?: WeatherType;
+  weatherIntensity?: number;
   damageNumbers?: FloatingDamageNumber[];
   hitmarkerActive?: boolean;
   bossStatus?: { name: string; health: number; maxHealth: number } | null;
@@ -114,6 +117,20 @@ interface HUDProps {
   onTriggerRebirth?: () => void;
 }
 
+const HUD_WEATHER_PARTICLES = Array.from({ length: 22 }, (_, idx) => {
+  const seed = (idx * 37 + 13) % 100;
+  const alt = (idx * 53 + 7) % 100;
+  return {
+    id: idx,
+    leftPct: (idx * 4.7 + (seed % 9)) % 98,
+    topPct: (alt * 0.93) % 95,
+    durationSec: 0.72 + (seed % 10) * 0.055,
+    snowDurationSec: 4.5 + (seed % 8) * 0.6,
+    delaySec: -((idx * 0.37) % 4.5),
+    sizePx: 3 + (alt % 4),
+  };
+});
+
 export const HUD: React.FC<HUDProps> = ({
   stats,
   timeMinutes,
@@ -121,6 +138,7 @@ export const HUD: React.FC<HUDProps> = ({
   isNight,
   isDusk,
   interactionPrompt,
+  autoSaveToast = null,
   hotbar,
   selectedIndex,
   onSelectSlot,
@@ -168,6 +186,7 @@ export const HUD: React.FC<HUDProps> = ({
   isGamepadConnected = false,
   biomeTempC,
   weather = 'clear',
+  weatherIntensity,
   damageNumbers = [],
   hitmarkerActive = false,
   bossStatus = null,
@@ -197,8 +216,107 @@ export const HUD: React.FC<HUDProps> = ({
   const isCriticalOxygen = (stats.oxygen ?? 100) < 25;
   const isLowNeed = !isCriticalHealth && !isCriticalOxygen && (stats.hunger < 20 || stats.thirst < 20);
 
+  const rawWeatherIntensity =
+    weatherIntensity ?? stats.weatherIntensity ?? (weather === 'clear' ? 0.35 : 0.85);
+  const normalizedWeatherIntensity = Math.max(0, Math.min(1, rawWeatherIntensity / 1.25));
+  const weatherIndicatorOpacity = Number(
+    Math.max(
+      0.32,
+      Math.min(
+        1,
+        weather === 'clear'
+          ? 0.4 + normalizedWeatherIntensity * 0.45
+          : 0.35 + normalizedWeatherIntensity * 0.65
+      )
+    ).toFixed(2)
+  );
+  const visibilityPct = Math.round(stats.visibilityPercent ?? 100);
+  const hungerDrainPct = Math.round(((stats.hungerDrainModifier ?? 1) - 1) * 100);
+  const thirstDrainPct = Math.round(((stats.thirstDrainModifier ?? 1) - 1) * 100);
+  const activeParticleCount = Math.max(8, Math.round(10 + normalizedWeatherIntensity * 12));
+
   return (
     <div className="pointer-events-none absolute inset-0 select-none overflow-hidden font-sans">
+      {/* --- Atmospheric HUD Weather Particle Overlay --- */}
+      {!stats.isSubmerged && weather !== 'clear' && normalizedWeatherIntensity > 0.05 && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-[5] overflow-hidden transition-opacity duration-500"
+          style={{ opacity: Number((0.25 + normalizedWeatherIntensity * 0.68).toFixed(2)) }}
+        >
+          {weather === 'blizzard' && (
+            <div className="absolute inset-0 shadow-[inset_0_0_95px_rgba(186,230,253,0.34)]" />
+          )}
+          {(weather === 'rain' || weather === 'thunderstorm') && (
+            <div className="absolute inset-0 shadow-[inset_0_0_80px_rgba(56,189,248,0.18)]" />
+          )}
+          {weather === 'sandstorm' && (
+            <div className="absolute inset-0 bg-amber-900/12 shadow-[inset_0_0_95px_rgba(217,119,6,0.28)]" />
+          )}
+          {weather === 'toxic_fog' && (
+            <div className="absolute inset-0 bg-lime-950/12 shadow-[inset_0_0_95px_rgba(132,204,22,0.25)]" />
+          )}
+
+          {HUD_WEATHER_PARTICLES.slice(0, activeParticleCount).map((p) => {
+            if (weather === 'rain' || weather === 'thunderstorm') {
+              return (
+                <span
+                  key={p.id}
+                  className="absolute -top-10 w-[1.5px] h-9 rounded-full bg-gradient-to-b from-transparent via-sky-200/75 to-sky-100/95 animate-hud-rain"
+                  style={{
+                    left: `${p.leftPct}%`,
+                    animationDuration: `${(weather === 'thunderstorm' ? p.durationSec * 0.78 : p.durationSec).toFixed(2)}s`,
+                    animationDelay: `${p.delaySec}s`,
+                  }}
+                />
+              );
+            }
+            if (weather === 'blizzard') {
+              return (
+                <span
+                  key={p.id}
+                  className="absolute -top-6 rounded-full bg-cyan-50/90 shadow-[0_0_6px_rgba(207,250,254,0.85)] animate-hud-snow"
+                  style={{
+                    left: `${p.leftPct}%`,
+                    width: `${p.sizePx}px`,
+                    height: `${p.sizePx}px`,
+                    animationDuration: `${p.snowDurationSec.toFixed(2)}s`,
+                    animationDelay: `${p.delaySec}s`,
+                  }}
+                />
+              );
+            }
+            if (weather === 'sandstorm') {
+              return (
+                <span
+                  key={p.id}
+                  className="absolute -left-24 h-[2px] w-16 rounded-full bg-gradient-to-r from-transparent via-amber-300/60 to-transparent animate-hud-sand"
+                  style={{
+                    top: `${p.topPct}%`,
+                    animationDuration: `${(p.durationSec * 1.4).toFixed(2)}s`,
+                    animationDelay: `${p.delaySec}s`,
+                  }}
+                />
+              );
+            }
+            return (
+              <span
+                key={p.id}
+                className="absolute rounded-full bg-lime-300/50 blur-[1px] animate-hud-spore"
+                style={{
+                  left: `${p.leftPct}%`,
+                  top: `${p.topPct}%`,
+                  width: `${p.sizePx + 2}px`,
+                  height: `${p.sizePx + 2}px`,
+                  animationDuration: `${(p.snowDurationSec * 0.85).toFixed(2)}s`,
+                  animationDelay: `${p.delaySec}s`,
+                }}
+              />
+            );
+          })}
+        </div>
+      )}
+
       {/* --- Low-Vitality Edge Vignette --- */}
       {isCriticalHealth && (
         <div
@@ -298,13 +416,29 @@ export const HUD: React.FC<HUDProps> = ({
           </div>
         )}
 
-        {/* Environmental Telemetry: Battery, Temp, Radiation, Stealth */}
+        {/* Environmental Telemetry: Battery, Temp, Visibility, Weather Drain, Radiation, Stealth */}
         <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-0.5 pt-1 text-[9px] sm:text-[10px] font-mono text-neutral-300 border-t border-neutral-800 tabular-nums">
           <span className="flex items-center gap-1" title="Flashlight Battery">
             <BatteryCharging className="h-3 w-3 text-yellow-400" />
             <span>{Math.round(stats.flashlightBattery ?? 100)}%</span>
           </span>
           <span>{Math.round(stats.temperature ?? 24)}°C</span>
+          {visibilityPct < 98 && (
+            <span className="flex items-center gap-0.5 text-sky-300 font-semibold" title="Atmospheric Visibility">
+              <Eye className="h-2.5 w-2.5" />
+              <span>{visibilityPct}%</span>
+            </span>
+          )}
+          {hungerDrainPct > 5 && (
+            <span className="text-orange-300 font-semibold" title="Cold/Weather Calorie Burn Rate">
+              HGR +{hungerDrainPct}%
+            </span>
+          )}
+          {thirstDrainPct > 5 && (
+            <span className="text-cyan-300 font-semibold" title="Weather Hydration Drain Rate">
+              THR +{thirstDrainPct}%
+            </span>
+          )}
           {(stats.radiationExposure ?? 0) > 1 && (
             <span className="text-lime-400 font-bold">RAD {Math.round(stats.radiationExposure ?? 0)}%</span>
           )}
@@ -482,25 +616,47 @@ export const HUD: React.FC<HUDProps> = ({
           </div>
         </div>
 
-        {/* Biome, Weather & Coordinates */}
+        {/* Biome, Dynamic Weather Indicator & Coordinates */}
         <div className="flex flex-col items-end text-[10px] sm:text-xs">
           <span className="font-semibold text-amber-400 truncate max-w-[115px] sm:max-w-[155px] flex items-center gap-1">
+            <span className="truncate">{biomeName}</span>
+            {biomeTempC !== undefined ? ` · ${biomeTempC}°C` : ''}
+          </span>
+          <span
+            className="flex items-center gap-1 text-[9px] font-mono font-semibold text-neutral-200 capitalize transition-opacity duration-300"
+            style={{ opacity: weatherIndicatorOpacity }}
+            title={`Weather: ${weather.replace('_', ' ')} (${Math.round(normalizedWeatherIntensity * 100)}% intensity)`}
+          >
+            {weather === 'clear' &&
+              (isNight ? (
+                <Moon className="h-3 w-3 text-indigo-300 shrink-0" />
+              ) : (
+                <Sun className="h-3 w-3 text-amber-300 shrink-0" />
+              ))}
             {weather === 'rain' && <CloudRain className="h-3 w-3 text-sky-400 shrink-0" />}
             {weather === 'thunderstorm' && <CloudLightning className="h-3 w-3 text-amber-300 shrink-0" />}
             {weather === 'blizzard' && <Snowflake className="h-3 w-3 text-cyan-200 shrink-0" />}
             {weather === 'sandstorm' && <Wind className="h-3 w-3 text-orange-300 shrink-0" />}
             {weather === 'toxic_fog' && <AlertTriangle className="h-3 w-3 text-lime-400 shrink-0" />}
-            <span className="truncate">{biomeName}</span>
-            {biomeTempC !== undefined ? ` · ${biomeTempC}°C` : ''}
-          </span>
-          <span className="text-[9px] font-mono text-neutral-400 capitalize">
-            {weather.replace('_', ' ')}
+            <span>{weather.replace('_', ' ')}</span>
+            {weather !== 'clear' && (
+              <span className="text-neutral-400 tabular-nums">· {Math.round(normalizedWeatherIntensity * 100)}%</span>
+            )}
             {supplyDrop && !supplyDrop.looted ? ' · Drop Active' : ''}
           </span>
           {showCoordinates && (
-            <span className="font-mono text-[9px] sm:text-[10px] text-neutral-400 tabular-nums">
-              {Math.round(playerPos[0])}, {Math.round(playerPos[2])}
-            </span>
+            <div className="flex flex-col items-end font-mono text-[9px] sm:text-[10px] text-neutral-400 tabular-nums">
+              <span>
+                {stats.latitude !== undefined && stats.longitude !== undefined
+                  ? EarthProjection.formatLatLon(stats.latitude, stats.longitude)
+                  : `${Math.round(playerPos[0])}, ${Math.round(playerPos[2])}`}
+              </span>
+              <span className="text-[8px] text-sky-300/90 truncate max-w-[140px]">
+                {stats.nearestCityName ? `${stats.nearestCityName} · ` : ''}
+                {stats.countryName || stats.continentOrOcean || 'Earth'}
+                {stats.realElevationMeters !== undefined ? ` · ${stats.realElevationMeters}m` : ''}
+              </span>
+            </div>
           )}
           {ecosystemMetrics && (
             <span className="text-[8px] font-mono text-emerald-400 font-semibold truncate max-w-[110px] tabular-nums">
@@ -509,6 +665,13 @@ export const HUD: React.FC<HUDProps> = ({
           )}
         </div>
       </button>
+
+      {/* --- 1-Minute Auto-Save Confirmation Badge --- */}
+      {autoSaveToast && (
+        <div className="pointer-events-none fixed top-3 right-4 z-40 rounded-lg border border-emerald-500/40 bg-neutral-950/90 px-3 py-1.5 text-[11px] font-mono font-semibold text-emerald-300 shadow-lg">
+          {autoSaveToast}
+        </div>
+      )}
 
       {/* --- World Boss Health Bar & Evacuation Holdout Banner --- */}
       {bossStatus && (
@@ -985,7 +1148,7 @@ export const HUD: React.FC<HUDProps> = ({
               <button
                 onClick={onCycleQualityMode}
                 className="flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer text-xs font-mono font-bold text-emerald-400"
-                title="Cycle Picture Quality Mode (Perf / 4K Balanced / Ultra 4K / Ultra 5x)"
+                title="Open Graphics & Stability Manager"
               >
                 <Zap className="h-3.5 w-3.5" />
                 <span className="uppercase">Gfx: {qualityBadgeLabel}</span>

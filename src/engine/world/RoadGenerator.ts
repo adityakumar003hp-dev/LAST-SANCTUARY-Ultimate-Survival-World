@@ -149,8 +149,8 @@ export class RoadGenerator {
         const lz = cz - nz * halfWidth;
         const rx = x + nx * halfWidth;
         const rz = cz + nz * halfWidth;
-        const ly = TerrainGenerator.getHeight(lx, lz, seed) + 0.07;
-        const ry = TerrainGenerator.getHeight(rx, rz, seed) + 0.07;
+        const ly = Math.max(TerrainGenerator.getHeight(lx, lz, seed) + 0.07, 1.35);
+        const ry = Math.max(TerrainGenerator.getHeight(rx, rz, seed) + 0.07, 1.35);
         pts.push({ lx, ly, lz, rx, ry, rz });
       }
       if (anyInside) emitStrip(pts);
@@ -174,8 +174,8 @@ export class RoadGenerator {
         const lz = z - nz * halfWidth;
         const rx = cx + nx * halfWidth;
         const rz = z + nz * halfWidth;
-        const ly = TerrainGenerator.getHeight(lx, lz, seed) + 0.075;
-        const ry = TerrainGenerator.getHeight(rx, rz, seed) + 0.075;
+        const ly = Math.max(TerrainGenerator.getHeight(lx, lz, seed) + 0.075, 1.35);
+        const ry = Math.max(TerrainGenerator.getHeight(rx, rz, seed) + 0.075, 1.35);
         pts.push({ lx, ly, lz, rx, ry, rz });
       }
       if (anyInside) emitStrip(pts);

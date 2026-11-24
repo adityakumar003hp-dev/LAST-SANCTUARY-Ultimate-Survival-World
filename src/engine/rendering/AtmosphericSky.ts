@@ -113,13 +113,20 @@ export class AtmosphericSky {
           float sunAzimuthGlow = pow(max(0.0, sunCos), 3.0) * exp(-abs(height) * 5.2) * (1.0 - weatherOvercast * 0.85);
           sky += horizonColor * sunAzimuthGlow * (1.0 - isNight) * 0.35;
 
-          // Subtle Milky Way star-dust band at night
+          // Subtle Milky Way star-dust band & polar Aurora Borealis curtains at night
           if (isNight > 0.05 && weatherOvercast < 0.7) {
             float mwCoord = dir.x * 0.68 + dir.y * 0.45 - dir.z * 0.58;
             float mwBand = exp(-mwCoord * mwCoord * 14.0) * clamp(height * 3.0, 0.0, 1.0);
             float mwNebula = fbm(dir.xz * 3.2 + dir.xy * 1.9);
             vec3 mwColor = mix(vec3(0.05, 0.08, 0.16), vec3(0.16, 0.04, 0.07), isBloodMoon);
             sky += mwColor * mwBand * (0.4 + mwNebula * 0.9) * isNight * (1.0 - weatherOvercast);
+
+            if (height > 0.12 && isBloodMoon < 0.5) {
+              float auroraWave = sin(dir.x * 7.5 + time * 0.18) * 0.35 + fbm(vec2(dir.x * 3.8 + time * 0.04, dir.z * 2.2));
+              float ribbonMask = smoothstep(0.56, 0.86, auroraWave) * exp(-pow((height - 0.36) * 3.8, 2.0));
+              vec3 auroraCol = mix(vec3(0.06, 0.48, 0.34), vec3(0.28, 0.14, 0.52), clamp((height - 0.25) * 3.2, 0.0, 1.0));
+              sky += auroraCol * ribbonMask * 0.32 * isNight * (1.0 - weatherOvercast * 0.85);
+            }
           }
 
           // 2. Solar & Lunar Discs + Mie Forward-Scattering Halo

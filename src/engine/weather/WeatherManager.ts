@@ -10,6 +10,8 @@ const BOX_HEIGHT = 25;
 
 export interface WeatherTelemetry {
   weather: WeatherType;
+  intensity: number; // 0.0 - 1.5 normalized intensity
+  visibilityPercent: number; // 25 - 100% atmospheric visibility
   temperatureDelta: number;
   fogDensityMultiplier: number;
   rainCatchmentBonus: number;
@@ -48,6 +50,7 @@ export class WeatherManager {
   private forcedWeather: WeatherType | null = null;
   private weatherTimer = 180;
   private intensityMultiplier = 1.0;
+  private particleBudgetScale = 1.0;
   private animPhase = 0;
 
   constructor(scene: THREE.Scene) {
@@ -155,6 +158,14 @@ export class WeatherManager {
 
   public setIntensityMultiplier(mult: number) {
     this.intensityMultiplier = Math.max(0, Math.min(2, mult));
+  }
+
+  public setParticleBudgetScale(scale: number) {
+    this.particleBudgetScale = Math.max(0.2, Math.min(1.0, scale));
+    const activeParticles = Math.max(80, Math.round(PARTICLE_COUNT * this.particleBudgetScale));
+    const activeRainVerts = Math.max(120, Math.round(RAIN_STREAK_COUNT * this.particleBudgetScale)) * 2;
+    this.particleGeom.setDrawRange(0, activeParticles);
+    this.rainGeom.setDrawRange(0, activeRainVerts);
   }
 
   private applyWeatherStyle() {
@@ -286,8 +297,9 @@ export class WeatherManager {
 
       const attr = this.rainGeom.getAttribute('position') as THREE.BufferAttribute;
       const arr = attr.array as Float32Array;
+      const activeRainCount = Math.max(60, Math.round(RAIN_STREAK_COUNT * this.particleBudgetScale));
 
-      for (let i = 0; i < RAIN_STREAK_COUNT; i++) {
+      for (let i = 0; i < activeRainCount; i++) {
         const si = i * 4;
         const fall = this.rainSeeds[si + 3] * speedMult;
         let x = this.rainSeeds[si] + windX * delta;
@@ -338,7 +350,8 @@ export class WeatherManager {
 
       const attr = this.particleGeom.getAttribute('position') as THREE.BufferAttribute;
       const arr = attr.array as Float32Array;
-      for (let i = 0; i < PARTICLE_COUNT; i++) {
+      const activeParticleCount = Math.max(80, Math.round(PARTICLE_COUNT * this.particleBudgetScale));
+      for (let i = 0; i < activeParticleCount; i++) {
         const idx = i * 3;
         const swirl = Math.sin(this.animPhase * 2.2 + i * 0.37) * 1.4;
         arr[idx] += (windX + this.velocities[idx] * 0.55 + swirl) * delta;
@@ -363,6 +376,7 @@ export class WeatherManager {
     let overcast = 0.0;
     let windStrength = 0.72;
     let rainIntensity = 0.0;
+    let baseIntensity = 0.25;
 
     switch (this.currentWeather) {
       case 'rain':
@@ -372,6 +386,7 @@ export class WeatherManager {
         overcast = 0.74;
         windStrength = 1.45;
         rainIntensity = 0.72;
+        baseIntensity = 0.72;
         break;
       case 'thunderstorm':
         temperatureDelta = -5.5;
@@ -380,37 +395,51 @@ export class WeatherManager {
         overcast = 0.96;
         windStrength = 2.35;
         rainIntensity = 1.0;
+        baseIntensity = 1.0;
         break;
       case 'blizzard':
         temperatureDelta = -14.0;
         fogDensityMultiplier = 2.15;
         overcast = 0.88;
         windStrength = 2.45;
+        baseIntensity = 0.95;
         break;
       case 'sandstorm':
         temperatureDelta = 7.0;
         fogDensityMultiplier = 2.25;
         overcast = 0.76;
         windStrength = 2.65;
+        baseIntensity = 0.9;
         break;
       case 'toxic_fog':
         temperatureDelta = -1.5;
         fogDensityMultiplier = 2.45;
         overcast = 0.82;
         windStrength = 0.92;
+        baseIntensity = 0.85;
         break;
     }
 
+    const effectiveFogMult = 1 + (fogDensityMultiplier - 1) * this.intensityMultiplier;
+    const effectiveIntensity = this.currentWeather === 'clear'
+      ? Math.max(0.25, Math.min(0.45, 0.25 + 0.1 * this.intensityMultiplier))
+      : Math.max(0.15, Math.min(1.5, baseIntensity * this.intensityMultiplier));
+    const visibilityPercent = Math.round(
+      THREE.MathUtils.clamp(100 / Math.pow(effectiveFogMult, 0.78), 32, 100)
+    );
+
     return {
       weather: this.currentWeather,
+      intensity: effectiveIntensity,
+      visibilityPercent,
       temperatureDelta: temperatureDelta * this.intensityMultiplier,
-      fogDensityMultiplier: 1 + (fogDensityMultiplier - 1) * this.intensityMultiplier,
+      fogDensityMultiplier: effectiveFogMult,
       rainCatchmentBonus,
       isHazardousToxic: this.currentWeather === 'toxic_fog',
       lightningFlash: this.lightningIntensity,
-      overcast: overcast * this.intensityMultiplier,
+      overcast: Math.min(1, overcast * this.intensityMultiplier),
       windStrength: 0.7 + (windStrength - 0.7) * this.intensityMultiplier,
-      rainIntensity: rainIntensity * this.intensityMultiplier,
+      rainIntensity: Math.min(1.5, rainIntensity * this.intensityMultiplier),
     };
   }
 

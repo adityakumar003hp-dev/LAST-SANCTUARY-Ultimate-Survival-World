@@ -122,6 +122,12 @@ export interface ZombieEntity {
   bossTitle?: string;
   variantSpeedMult?: number;
   rangedCooldown?: number;
+  victimName?: string;
+  victimRole?: string;
+  victimAppearance?: {
+    clothHex?: number;
+    pantsHex?: number;
+  };
 }
 
 export interface HarvestableResource {
@@ -161,6 +167,18 @@ export interface PlayerStats {
   flashlightBattery?: number; // 0-100
   radiationExposure?: number; // 0-100
   noiseLevel?: number; // 0-100
+  weatherType?: WeatherType;
+  weatherIntensity?: number; // 0.0 - 1.5
+  visibilityPercent?: number; // 0 - 100
+  hungerDrainModifier?: number; // 1.0 = baseline
+  thirstDrainModifier?: number; // 1.0 = baseline
+  latitude?: number;
+  longitude?: number;
+  realElevationMeters?: number;
+  countryName?: string;
+  continentOrOcean?: string;
+  nearestCityName?: string;
+  geoTileKey?: string;
   equippedArmorId?: string;
   equippedMaskId?: string;
   perkUnlocks?: string[];
@@ -303,6 +321,59 @@ export interface Quest {
 
 export type GraphicsQuality = 'low' | 'medium' | 'high' | 'ultra';
 export type GraphicsQualityMode = 'performance' | 'balanced' | 'quality' | 'ultra_5x';
+export type GraphicsTargetFps = 30 | 60;
+export type GraphicsGovernorState = 'optimal' | 'adapting_down' | 'stabilized' | 'recovering' | 'manual';
+
+export interface GraphicsManagerConfig {
+  preset: GraphicsQualityMode;
+  autoGovernor: boolean;
+  targetFps: GraphicsTargetFps;
+  renderScale: number | null; // null = auto from preset; otherwise 0.6..2.0
+  shadowsEnabled: boolean;
+  shadowResolution: 0 | 512 | 1024 | 2048 | 3072;
+  postProcessingEnabled: boolean;
+  bloomEnabled: boolean;
+  anisotropyLevel: 1 | 4 | 8 | 16;
+  viewDistanceChunks: number;
+  particleDensity: number; // 0.25..1.0
+  maxLocalLights: number; // 2..6
+}
+
+export interface GraphicsManagerSnapshot {
+  preset: GraphicsQualityMode;
+  autoGovernor: boolean;
+  targetFps: GraphicsTargetFps;
+  fps: number;
+  frameTimeMs: number;
+  p95FrameTimeMs: number;
+  dpr: number;
+  watchdogDprFactor: number;
+  renderWidth: number;
+  renderHeight: number;
+  shadowMapRes: number;
+  shadowsEnabled: boolean;
+  postProcessingEnabled: boolean;
+  bloomEnabled: boolean;
+  anisotropy: number;
+  viewDistanceChunks: number;
+  effectiveViewDistanceChunks: number;
+  particleDensity: number;
+  drawCalls: number;
+  triangles: number;
+  geometries: number;
+  textures: number;
+  isSoftwareGl: boolean;
+  isMobile: boolean;
+  gpuRendererName: string;
+  contextHealth: 'healthy' | 'recovering' | 'safe_mode';
+  contextLossCount: number;
+  governorState: GraphicsGovernorState;
+  governorLevel: number;
+  governorActionLabel: string;
+  frameSpikeCount: number;
+  maxRenderBufferDim: number;
+  maxTextureDim: number;
+}
 
 export interface GameSettings {
   masterVolume: number;
@@ -563,7 +634,37 @@ export interface SaveSlotMetadata {
   isFreeExploration?: boolean;
 }
 
+export interface EarthOriginConfig {
+  id: string;
+  name: string;
+  country: string;
+  continent: string;
+  lat: number;
+  lon: number;
+}
+
+export interface GlobalOutbreakCitySave {
+  cityId: string;
+  healthyCount: number;
+  transformingCount: number;
+  infectedCount: number;
+  evacuatedCount: number;
+  powerGridRatio: number;
+}
+
+export interface GlobalOutbreakSaveData {
+  apocalypticSeverity: number;
+  powerGridStability: number;
+  totalGlobalInfected: number;
+  totalGlobalTransforming: number;
+  totalGlobalEvacuated: number;
+  cityStates: GlobalOutbreakCitySave[];
+}
+
 export interface FullGameSave {
+  saveVersion?: number;
+  earthOrigin?: EarthOriginConfig;
+  globalOutbreakState?: GlobalOutbreakSaveData;
   metadata: SaveSlotMetadata;
   worldSeed: number;
   playerPosition: [number, number, number];

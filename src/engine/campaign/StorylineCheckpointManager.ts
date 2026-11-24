@@ -63,7 +63,9 @@ export class StorylineCheckpointManager {
   public unlockedFacilities: string[] = [];
 
   constructor(private readonly engine: any) {
-    this.initDefaultMission(1);
+    if (!this.engine || this.engine.gameMode === 'story') {
+      this.initDefaultMission(1);
+    }
   }
 
   /**
@@ -197,6 +199,7 @@ export class StorylineCheckpointManager {
    */
   public syncWithEngineQuest() {
     if (!this.engine) return;
+    if (this.engine.gameMode && this.engine.gameMode !== 'story') return;
 
     const questObj: Quest = {
       id: `ls_campaign_m${this.currentMissionNumber}`,
@@ -343,6 +346,9 @@ export class StorylineCheckpointManager {
     const pct = totalCount > 0 ? Math.round((completedCount / totalCount) * 100) : 0;
 
     const unfinished = this.objectives.find((o) => !o.completed);
+    const livePos: [number, number, number] = this.engine?.player?.position
+      ? [this.engine.player.position.x, this.engine.player.position.y, this.engine.player.position.z]
+      : [...this.checkpointPosition];
 
     return {
       campaignDay: this.campaignDay,
@@ -352,7 +358,7 @@ export class StorylineCheckpointManager {
       missionDescription: this.missionDescription,
       location: this.location,
       checkpointId: this.checkpointId,
-      checkpointPosition: [...this.checkpointPosition],
+      checkpointPosition: livePos,
       activeObjective: unfinished ? unfinished.description : (this.activeObjective || 'Continue mission'),
       objectives: this.objectives.map((o) => ({
         id: o.id,

@@ -6,6 +6,8 @@
 import * as THREE from 'three';
 import { POIStructure } from '../../types/game';
 import { TerrainGenerator } from './TerrainGenerator';
+import { WorldCoordinates } from './WorldCoordinates';
+import { RealWorldCities } from '../geo/RealWorldCities';
 import { isProtectedSpawnZone } from './ProtectedSpawnZones';
 import { RailwayNetworkGenerator } from './RailwayNetworkGenerator';
 import {
@@ -18,7 +20,9 @@ import {
 
 export class POIGenerator {
   /**
-   * Deterministically decides if a chunk has a POI structure
+   * Deterministically decides if a chunk has a POI structure,
+   * aligning urban districts, seaports, airports, hospitals, schools, and landmarks
+   * with RealWorldCities WGS-84 footprints.
    */
   public static getPOIsForChunk(
     cx: number,
@@ -31,14 +35,12 @@ export class POIGenerator {
       const n = Math.sin(x * 127.1 + z * 311.7 + worldSeed * 0.017 + salt * 74.7) * 43758.5453123;
       return n - Math.floor(n);
     };
-    const chance = hash(cx, cz, 1);
-    // Approximately 35% of chunks contain one deterministic destination.
-    if (chance > 0.65) return [];
-    const density = hash(cx, cz, 3);
+
     const offsetX = 34 + hash(cx, cz, 4) * 188;
     const offsetZ = 34 + hash(cx, cz, 5) * 188;
     const worldX = cx * 256 + offsetX;
     const worldZ = cz * 256 + offsetZ;
+
     // Story-authored apartment, military base, and railway station premises never receive random POIs.
     if (
       isProtectedSpawnZone(worldX, worldZ) ||
@@ -48,29 +50,77 @@ export class POIGenerator {
     ) {
       return [];
     }
+
+    const { lat, lon } = WorldCoordinates.worldToLatLon(worldX, worldZ);
+    const earth = TerrainGenerator.getEarthInfo(worldX, worldZ);
+    const nearestCity = RealWorldCities.findNearestCity(lat, lon, 32);
+    const inRealCity = nearestCity?.insideFootprint ?? false;
+
+    const chance = hash(cx, cz, 1);
+    // Dense urban footprints get much higher POI building coverage; open ocean gets none
+    if (!earth.isLand && !inRealCity) return [];
+    const spawnThreshold = inRealCity ? 0.88 : 0.65;
+    if (chance > spawnThreshold) return [];
+
+    const density = hash(cx, cz, 3);
     const y = TerrainGenerator.getHeight(worldX, worldZ, worldSeed);
     const roll = hash(cx, cz, 6);
     let type: POIStructure['type'] = 'cabin';
     let name = 'Abandoned Survivor Cabin';
-    if (density < 0.10) { type = 'city_district'; name = 'Greyhaven City District'; }
-    else if (density < 0.20) { type = 'town'; name = 'Riverside Township'; }
-    else if (density < 0.29) { type = 'village'; name = 'Pinewatch Village'; }
-    else if (roll < 0.08) { type = 'hospital'; name = 'St. Anselm General Hospital'; }
-    else if (roll < 0.15) { type = 'research_lab'; name = 'Apex Biomedical Research Complex — Containment Campus'; }
-    else if (roll < 0.22) { type = 'fire_station'; name = 'Emergency Fire & Rescue Station'; }
-    else if (roll < 0.29) { type = 'police_station'; name = 'County Police Headquarters'; }
-    else if (roll < 0.36) { type = 'industrial_complex'; name = 'Northstar Industrial Complex'; }
-    else if (roll < 0.43) { type = 'factory'; name = 'Greyhaven Manufacturing Works'; }
-    else if (roll < 0.49) { type = 'airport'; name = 'Regional Airfield'; }
-    else if (roll < 0.55) { type = 'power_station'; name = 'Gridline Power Substation'; }
-    else if (roll < 0.61) { type = 'water_treatment'; name = 'Municipal Water Treatment Plant'; }
-    else if (roll < 0.67) { type = 'university'; name = 'Westbridge University Campus'; }
-    else if (roll < 0.73) { type = 'shopping_centre'; name = 'Cedar Mall & Market'; }
-    else if (roll < 0.79) { type = 'freight_terminal'; name = 'Interstate Freight Terminal'; }
-    else if (roll < 0.85) { type = 'warehouse'; name = 'Overgrown Logistics Depot'; }
-    else if (roll < 0.90) { type = 'gas_station'; name = 'Route 9 Auto Service Station'; }
-    else if (roll < 0.95) { type = 'watchtower'; name = 'Forestry Fire Lookout'; }
-    else { type = 'radio_bunker'; name = 'Civil Defense Communications Bunker'; }
+
+    if (inRealCity && nearestCity) {
+      const c = nearestCity.city;
+      const distKm = nearestCity.distanceKm;
+      if (distKm < 1.2 && c.landmarkName) {
+        type = 'city_district';
+        name = `${c.name} — ${c.landmarkName}`;
+      } else if (c.hasAirport && roll > 0.86) {
+        type = 'airport';
+        name = `${c.name} International Airfield`;
+      } else if (c.isSeaport && roll > 0.72 && roll <= 0.86) {
+        type = 'freight_terminal';
+        name = `${c.name} Seaport Container Terminal`;
+      } else if (roll < 0.14) {
+        type = 'hospital';
+        name = `${c.name} Metropolitan Hospital`;
+      } else if (roll < 0.28) {
+        type = 'university';
+        name = `${c.name} Municipal School & Campus`;
+      } else if (roll < 0.42) {
+        type = 'shopping_centre';
+        name = `${c.name} Commercial Exchange`;
+      } else if (roll < 0.56) {
+        type = 'city_district';
+        name = `${c.name} Residential Block`;
+      } else if (roll < 0.66) {
+        type = 'police_station';
+        name = `${c.name} Civic Precinct`;
+      } else {
+        type = 'industrial_complex';
+        name = `${c.name} Logistics & Rail Yard`;
+      }
+    } else {
+      if (density < 0.10) { type = 'city_district'; name = 'Greyhaven City District'; }
+      else if (density < 0.20) { type = 'town'; name = 'Riverside Township'; }
+      else if (density < 0.29) { type = 'village'; name = 'Pinewatch Village'; }
+      else if (roll < 0.08) { type = 'hospital'; name = 'St. Anselm General Hospital'; }
+      else if (roll < 0.15) { type = 'research_lab'; name = 'Apex Biomedical Research Complex — Containment Campus'; }
+      else if (roll < 0.22) { type = 'fire_station'; name = 'Emergency Fire & Rescue Station'; }
+      else if (roll < 0.29) { type = 'police_station'; name = 'County Police Headquarters'; }
+      else if (roll < 0.36) { type = 'industrial_complex'; name = 'Northstar Industrial Complex'; }
+      else if (roll < 0.43) { type = 'factory'; name = 'Greyhaven Manufacturing Works'; }
+      else if (roll < 0.49) { type = 'airport'; name = 'Regional Airfield'; }
+      else if (roll < 0.55) { type = 'power_station'; name = 'Gridline Power Substation'; }
+      else if (roll < 0.61) { type = 'water_treatment'; name = 'Municipal Water Treatment Plant'; }
+      else if (roll < 0.67) { type = 'university'; name = 'Westbridge University & School'; }
+      else if (roll < 0.73) { type = 'shopping_centre'; name = 'Cedar Mall & Market'; }
+      else if (roll < 0.79) { type = 'freight_terminal'; name = 'Interstate Freight Terminal'; }
+      else if (roll < 0.85) { type = 'warehouse'; name = 'Overgrown Logistics Depot'; }
+      else if (roll < 0.90) { type = 'gas_station'; name = 'Route 9 Auto Service Station'; }
+      else if (roll < 0.95) { type = 'watchtower'; name = 'Forestry Fire Lookout'; }
+      else { type = 'radio_bunker'; name = 'Civil Defense Communications Bunker'; }
+    }
+
     return [{
       id: `poi_${cx}_${cz}_1`, type, name,
       position: [worldX, y, worldZ],
@@ -92,9 +142,9 @@ export class POIGenerator {
   }
 
   /**
-   * Builds high-fidelity composite 3D meshes (3-10 parts) for procedural POIs
+   * Builds high-fidelity composite 3D meshes for procedural POIs & real-Earth landmarks
    */
-  public static createPOIMesh(poi: POIStructure): THREE.Group {
+  public static createPOIMesh(poi: POIStructure, apocalypticSeverity: number = 0): THREE.Group {
     const group = new THREE.Group();
     group.name = poi.id;
 
@@ -332,7 +382,34 @@ export class POIGenerator {
           });
           const runway = new THREE.Mesh(new THREE.BoxGeometry(13, 0.12, 75), runwayMat);
           runway.position.set(0, 0.3, -48);
-          group.add(runway);
+          // Air Traffic Control Tower
+          const atcShaft = new THREE.Mesh(new THREE.CylinderGeometry(1.6, 2.2, 16, 8), concrete);
+          atcShaft.position.set(16, 8.0, -8);
+          const atcCab = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 2.4, 2.8, 8), glass);
+          atcCab.position.set(16, 17.2, -8);
+          group.add(runway, atcShaft, atcCab);
+        }
+        if (poi.type === 'freight_terminal' && poi.name.includes('Seaport')) {
+          const containerMatA = POIGenerator.getSharedMat('poi_cont_a', () => new THREE.MeshStandardMaterial({ color: 0xb9382c, roughness: 0.65, metalness: 0.4 }));
+          const containerMatB = POIGenerator.getSharedMat('poi_cont_b', () => new THREE.MeshStandardMaterial({ color: 0x265c85, roughness: 0.65, metalness: 0.4 }));
+          for (let c = 0; c < 4; c++) {
+            const box = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.6, 6.2), c % 2 === 0 ? containerMatA : containerMatB);
+            box.position.set(-14 + c * 3.4, 1.5 + (c % 2) * 2.6, 14);
+            group.add(box);
+          }
+          const craneMast = new THREE.Mesh(new THREE.BoxGeometry(1.6, 18, 1.6), accent);
+          craneMast.position.set(-14, 9, -6);
+          const craneBoom = new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.2, 22), accent);
+          craneBoom.position.set(-14, 17.8, 2);
+          group.add(craneMast, craneBoom);
+        }
+        if (poi.name.includes('—')) {
+          // Landmark silhouette spire / monument inside real landmark footprints
+          const spireBase = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 4.6, 4.0, 8), stoneMat);
+          spireBase.position.set(22, 2.0, 0);
+          const spireMast = new THREE.Mesh(new THREE.ConeGeometry(2.2, 28, 6), metalMat);
+          spireMast.position.set(22, 18.0, 0);
+          group.add(spireBase, spireMast);
         }
         if (poi.type === 'hospital' || poi.type === 'police_station' || poi.type === 'fire_station') {
           const sign = new THREE.Mesh(new THREE.BoxGeometry(5, 0.7, 0.25), accent);
@@ -357,6 +434,27 @@ export class POIGenerator {
         chimney.position.set(2.4, 2.4, -1.8);
 
         group.add(foundation, walls, roofPitched, chimney);
+      }
+    }
+
+    // Persistent Apocalyptic Decay: boarded entrances, broken dark glass, overgrown vines
+    if (apocalypticSeverity > 0.25) {
+      const plankA = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.26, 0.14), woodMat);
+      plankA.position.set(0, 1.9, 5.2);
+      plankA.rotation.z = 0.18;
+      const plankB = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.26, 0.14), woodMat);
+      plankB.position.set(0, 1.35, 5.2);
+      plankB.rotation.z = -0.14;
+      group.add(plankA, plankB);
+
+      if (apocalypticSeverity > 0.55) {
+        const vineMat = POIGenerator.getSharedMat(
+          'poi_overgrown_vine',
+          () => new THREE.MeshStandardMaterial({ color: 0x264223, roughness: 0.92 })
+        );
+        const vinePatch = new THREE.Mesh(new THREE.BoxGeometry(2.8, 3.6, 0.22), vineMat);
+        vinePatch.position.set(2.8, 2.1, 4.9);
+        group.add(vinePatch);
       }
     }
 

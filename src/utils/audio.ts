@@ -3,10 +3,13 @@
  * Zero external audio files, zero 404s, ultra-responsive audio cues.
  */
 
+import { WeatherType } from '../types/game';
+
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private masterGain: GainNode | null = null;
   private sfxGain: GainNode | null = null;
+  private weatherSfxFilter: BiquadFilterNode | null = null;
   private musicGain: GainNode | null = null;
   private ambientGain: GainNode | null = null;
   private isMuted: boolean = false;
@@ -30,7 +33,14 @@ class SoundEngine {
 
         this.sfxGain = this.ctx.createGain();
         this.sfxGain.gain.setValueAtTime(0.8, this.ctx.currentTime);
-        this.sfxGain.connect(this.masterGain);
+
+        this.weatherSfxFilter = this.ctx.createBiquadFilter();
+        this.weatherSfxFilter.type = 'lowpass';
+        this.weatherSfxFilter.frequency.setValueAtTime(18000, this.ctx.currentTime);
+        this.weatherSfxFilter.Q.setValueAtTime(0.65, this.ctx.currentTime);
+
+        this.sfxGain.connect(this.weatherSfxFilter);
+        this.weatherSfxFilter.connect(this.masterGain);
 
         this.ambientGain = this.ctx.createGain();
         this.ambientGain.gain.setValueAtTime(0.3, this.ctx.currentTime);
@@ -64,6 +74,26 @@ class SoundEngine {
     this.isMuted = !this.isMuted;
     this.setVolumes(0.7, 0.8, 0.4);
     return this.isMuted;
+  }
+
+  public setWeatherAudioMuffle(weather: WeatherType, intensity: number, isUnderground: boolean) {
+    if (!this.ctx || !this.weatherSfxFilter) return;
+    const clamped = Math.max(0, Math.min(1.5, intensity));
+    let targetCutoff = 18000;
+    if (isUnderground) {
+      targetCutoff = 1650;
+    } else if (weather === 'rain') {
+      targetCutoff = 6800 - Math.min(1, clamped) * 3200; // Muffled acoustic dampening during rain
+    } else if (weather === 'thunderstorm') {
+      targetCutoff = 5200 - Math.min(1, clamped) * 2800; // Heavy storm muffling
+    } else if (weather === 'blizzard') {
+      targetCutoff = 6200 - Math.min(1, clamped) * 2600; // Snowy acoustic absorption
+    } else if (weather === 'sandstorm') {
+      targetCutoff = 7200 - Math.min(1, clamped) * 2200;
+    } else if (weather === 'toxic_fog') {
+      targetCutoff = 9000 - Math.min(1, clamped) * 2500;
+    }
+    this.weatherSfxFilter.frequency.setTargetAtTime(targetCutoff, this.ctx.currentTime, 0.45);
   }
 
   // --- Sound Effects ---

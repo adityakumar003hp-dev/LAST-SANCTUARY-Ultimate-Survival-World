@@ -726,7 +726,8 @@ export function buildRealisticHumanoid(opts: HumanoidBuildOptions = {}): Realist
 
 export function buildRealisticZombie(
   type: 'walker' | 'runner' | 'brute' | 'screamer' | 'crawler' | 'spitter' | 'juggernaut' | 'stalker' | 'alpha_boss',
-  scale: number
+  scale: number,
+  appearance?: { clothHex?: number; pantsHex?: number }
 ): THREE.Group {
   const g = getSharedGeos();
   const isBrute = type === 'brute' || type === 'juggernaut' || type === 'alpha_boss';
@@ -743,7 +744,8 @@ export function buildRealisticZombie(
   });
 
   const clothHex =
-    type === 'brute'
+    appearance?.clothHex ??
+    (type === 'brute'
       ? 0x2c2e28
       : type === 'juggernaut'
         ? 0x1e293b
@@ -757,9 +759,9 @@ export function buildRealisticZombie(
                 ? 0x3b2826
                 : type === 'screamer'
                   ? 0x352b3b
-                  : 0x282b2e;
+                  : 0x282b2e);
   const clothMat = getPooledFabricMat(clothHex, 'tactical');
-  const pantsMat = getPooledFabricMat(0x1b1e22, 'denim');
+  const pantsMat = getPooledFabricMat(appearance?.pantsHex ?? 0x1b1e22, 'denim');
   const boneMat = getPooledSimpleMat('zombie_bone', { color: 0xd6ccb4, roughness: 0.55 });
   const bloodMat = getPooledSimpleMat('zombie_blood', { color: 0x5c0c10, roughness: 0.25, metalness: 0.1 });
   const eyeHex =

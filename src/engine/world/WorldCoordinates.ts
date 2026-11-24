@@ -4,10 +4,27 @@
  */
 
 import { ChunkCoord } from '../../types/game';
+import {
+  DEFAULT_EARTH_ORIGIN,
+  EarthOrigin,
+  EarthProjection,
+  GeoTileCoord,
+  LatLon,
+} from '../geo/EarthProjection';
 
-export const CHUNK_SIZE = 256; // 256 x 256 world units per chunk
+export const CHUNK_SIZE = 256; // 256 x 256 real-world meters per chunk
+
+let activeEarthOrigin: EarthOrigin = DEFAULT_EARTH_ORIGIN;
 
 export class WorldCoordinates {
+  public static setWorldOrigin(origin: EarthOrigin): void {
+    activeEarthOrigin = origin;
+  }
+
+  public static getWorldOrigin(): EarthOrigin {
+    return activeEarthOrigin;
+  }
+
   /**
    * Converts world coordinates (x, z) to chunk coordinate (cx, cz)
    */
@@ -16,6 +33,36 @@ export class WorldCoordinates {
       cx: Math.floor(x / CHUNK_SIZE),
       cz: Math.floor(z / CHUNK_SIZE),
     };
+  }
+
+  /**
+   * Converts world meters (x, z) to WGS-84 (lat, lon) using active Earth origin
+   */
+  public static worldToLatLon(x: number, z: number): LatLon {
+    return EarthProjection.worldToLatLon(x, z, activeEarthOrigin);
+  }
+
+  /**
+   * Converts WGS-84 (lat, lon) to world meters [x, z] using active Earth origin
+   */
+  public static latLonToWorld(lat: number, lon: number): [number, number] {
+    return EarthProjection.latLonToWorld(lat, lon, activeEarthOrigin);
+  }
+
+  /**
+   * Returns OSM/WMTS slippy-map tile coordinates for world (x, z)
+   */
+  public static worldToGeoTile(x: number, z: number, zoom: number = 14): GeoTileCoord {
+    const { lat, lon } = WorldCoordinates.worldToLatLon(x, z);
+    return EarthProjection.latLonToSlippyTile(lat, lon, zoom);
+  }
+
+  /**
+   * Returns SRTM 1x1 degree tile identifier for world (x, z)
+   */
+  public static worldToSrtmTile(x: number, z: number): string {
+    const { lat, lon } = WorldCoordinates.worldToLatLon(x, z);
+    return EarthProjection.getSrtmTileId(lat, lon);
   }
 
   /**

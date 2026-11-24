@@ -20,6 +20,8 @@ interface Survivor {
   rescued: boolean;
   following: boolean;
   walkPhase: number;
+  infectionStage?: 'normal' | 'stunned' | 'zombie';
+  infectionTimer?: number;
 }
 
 const PROFILES = [
@@ -166,14 +168,54 @@ export class SurvivorRescueManager {
     return true;
   }
 
-  update(delta: number, player: THREE.Vector3, safeCenter: THREE.Vector3, safeRadius: number) {
+  public infectSurvivor(id: string): boolean {
+    const s = this.survivors.find((x) => x.id === id);
+    if (!s || s.rescued || s.infectionStage === 'stunned' || s.infectionStage === 'zombie') return false;
+    s.infectionStage = 'stunned';
+    s.infectionTimer = 60.0;
+    s.following = false;
+    return true;
+  }
+
+  public getLivingTargets(): Array<{ id: string; kind: 'survivor'; position: [number, number, number] }> {
+    const out: Array<{ id: string; kind: 'survivor'; position: [number, number, number] }> = [];
+    for (const s of this.survivors) {
+      if (s.rescued || s.infectionStage === 'stunned' || s.infectionStage === 'zombie') continue;
+      out.push({ id: s.id, kind: 'survivor', position: [s.position.x, s.position.y, s.position.z] });
+    }
+    return out;
+  }
+
+  update(
+    delta: number,
+    player: THREE.Vector3,
+    safeCenter: THREE.Vector3,
+    safeRadius: number,
+    onConverted?: (pos: [number, number, number]) => void
+  ) {
     const completed: string[] = [];
     for (const s of this.survivors) {
-      if (s.rescued) continue;
+      if (s.rescued || s.infectionStage === 'zombie') continue;
       const lLeg = s.mesh.getObjectByName('leftLeg');
       const rLeg = s.mesh.getObjectByName('rightLeg');
       const lArm = s.mesh.getObjectByName('leftArm');
       const rArm = s.mesh.getObjectByName('rightArm');
+
+      if (s.infectionStage === 'stunned') {
+        s.walkPhase += delta * 22;
+        const shiver = Math.sin(s.walkPhase) * 0.08;
+        s.mesh.rotation.x = THREE.MathUtils.damp(s.mesh.rotation.x, 0.22, 4, delta);
+        s.mesh.rotation.z = shiver;
+        if (lArm) lArm.rotation.x = -0.6 + shiver;
+        if (rArm) rArm.rotation.x = -0.6 - shiver;
+        s.infectionTimer = Math.max(0, (s.infectionTimer ?? 60) - delta);
+        if (s.infectionTimer <= 0) {
+          s.infectionStage = 'zombie';
+          s.mesh.visible = false;
+          onConverted?.([s.position.x, s.position.y, s.position.z]);
+        }
+        continue;
+      }
 
       if (!s.following) {
         s.walkPhase += delta * 2.0;

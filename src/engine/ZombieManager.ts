@@ -67,7 +67,9 @@ export class ZombieManager {
 
   public spawnZombie(
     type: ZombieType,
-    position: [number, number, number]
+    position: [number, number, number],
+    bypassSafeZone: boolean = false,
+    victimMeta?: { name?: string; role?: string; clothHex?: number; pantsHex?: number }
   ): ZombieEntity | null {
     // Strict requirement: No zombies should appear before the meteorite impact.
     // Zombies begin spawning only after the impact and outbreak storyline.
@@ -76,8 +78,9 @@ export class ZombieManager {
     }
 
     // Authored encounters and random spawns must never instantiate a zombie inside
-    // any protected compound or railway station premises. Move unsafe points outside.
-    if (isProtectedSpawnZone(position[0], position[2]) || RailwayNetworkGenerator.isProtectedRailwayZone(position[0], position[2])) {
+    // any protected compound or railway station premises. Move unsafe points outside,
+    // unless converting an already-present infected NPC/organism in-world.
+    if (!bypassSafeZone && (isProtectedSpawnZone(position[0], position[2]) || RailwayNetworkGenerator.isProtectedRailwayZone(position[0], position[2]))) {
       const origin = { x: position[0], z: position[2] };
       const candidates: Array<{ x: number; z: number; distance: number }> = [];
       for (const zone of PROTECTED_SPAWN_ZONES) {
@@ -178,6 +181,12 @@ export class ZombieManager {
       detectionRadius,
       isBoss,
       bossTitle,
+      victimName: victimMeta?.name,
+      victimRole: victimMeta?.role,
+      victimAppearance:
+        victimMeta && (victimMeta.clothHex !== undefined || victimMeta.pantsHex !== undefined)
+          ? { clothHex: victimMeta.clothHex, pantsHex: victimMeta.pantsHex }
+          : undefined,
     };
 
     this.zombies.push(entity);
@@ -262,7 +271,9 @@ export class ZombieManager {
     buildingMgr: BuildingManager,
     onPlayerDamage: (dmg: number) => void,
     detectionMultiplier = 1.0,
-    onSpitterAcid?: (origin: THREE.Vector3, target: THREE.Vector3, dmg: number) => void
+    onSpitterAcid?: (origin: THREE.Vector3, target: THREE.Vector3, dmg: number) => void,
+    livingTargets: Array<{ id: string; kind?: 'citizen' | 'survivor' | 'settlement' | 'wildlife'; position: [number, number, number] }> = [],
+    onLivingTargetAttacked?: (targetId: string, kind: 'citizen' | 'survivor' | 'settlement' | 'wildlife', zombieId: string) => void
   ) {
     this.animClock += delta;
     const toRemove: string[] = [];
@@ -294,10 +305,32 @@ export class ZombieManager {
       if (stagger > 0) this.staggerMap.set(z.id, stagger);
       else this.staggerMap.delete(z.id);
 
-      // Distance to player (squared check first)
-      const dx = playerPos.x - z.position[0];
-      const dz = playerPos.z - z.position[2];
-      const distSqToPlayer = dx * dx + dz * dz;
+      // Zombies select the closest living simulation target: player, town citizens,
+      // rescued/field survivors, settlement staff, or wildlife organisms.
+      let targetX = playerPos.x;
+      let targetZ = playerPos.z;
+      let targetIsPlayer = true;
+      let chosenTargetId: string | null = null;
+      let chosenTargetKind: 'citizen' | 'survivor' | 'settlement' | 'wildlife' = 'citizen';
+      let distSqToTarget = (targetX - z.position[0]) ** 2 + (targetZ - z.position[2]) ** 2;
+      const npcDetectSq = (z.detectionRadius * 1.45) ** 2;
+      for (let tIdx = 0; tIdx < livingTargets.length; tIdx++) {
+        const lt = livingTargets[tIdx];
+        const ndx = lt.position[0] - z.position[0];
+        const ndz = lt.position[2] - z.position[2];
+        const ltDistSq = ndx * ndx + ndz * ndz;
+        if (ltDistSq < distSqToTarget && ltDistSq < npcDetectSq) {
+          targetX = lt.position[0];
+          targetZ = lt.position[2];
+          distSqToTarget = ltDistSq;
+          targetIsPlayer = false;
+          chosenTargetId = lt.id;
+          chosenTargetKind = lt.kind ?? 'citizen';
+        }
+      }
+      const distSqToPlayer = distSqToTarget;
+      const dx = targetX - z.position[0];
+      const dz = targetZ - z.position[2];
 
       // Multi-joint undead gait, stagger & attack lunge kinematics (within 75m)
       if (distSqToPlayer < 75 * 75) {
@@ -369,7 +402,7 @@ export class ZombieManager {
         if (z.type === 'spitter' && onSpitterAcid && distSqToPlayer > 36 && distSqToPlayer < 324 && (z.rangedCooldown || 0) <= 0) {
           z.rangedCooldown = 3.4;
           z.rotationY = Math.atan2(dx, dz);
-          onSpitterAcid(new THREE.Vector3(z.position[0], z.position[1], z.position[2]), playerPos.clone().add(new THREE.Vector3(0, 1.1, 0)), z.damage);
+          onSpitterAcid(new THREE.Vector3(z.position[0], z.position[1], z.position[2]), new THREE.Vector3(targetX, getTerrainHeight(targetX, targetZ) + 1.1, targetZ), z.damage);
         }
 
         // Check if an obstacle/structure is directly between zombie and player (squared check: 2.4^2 = 5.76)
@@ -397,16 +430,20 @@ export class ZombieManager {
             soundEngine.playZombieGrowl();
             buildingMgr.damageStructure(nearestStructure, z.damage);
           }
-        } else if (distSqToPlayer < 2.56) { // 1.6^2 = 2.56
-          // Attack player
+        } else if (distSqToPlayer < 4.84) { // 2.2^2 = 4.84 melee bite range
+          // Attack player or infect living target (starts 60s stunned conversion)
           z.state = 'attack_player';
           if (z.attackCooldown <= 0) {
             z.attackCooldown = 1.2;
             soundEngine.playZombieGrowl();
-            onPlayerDamage(z.damage);
+            if (targetIsPlayer) {
+              onPlayerDamage(z.damage);
+            } else if (chosenTargetId && onLivingTargetAttacked) {
+              onLivingTargetAttacked(chosenTargetId, chosenTargetKind, z.id);
+            }
           }
         } else {
-          // Move towards player
+          // Pursue the selected player/NPC target with collision-aware movement.
           const distToPlayer = Math.sqrt(distSqToPlayer);
           const dirX = dx / distToPlayer;
           const dirZ = dz / distToPlayer;
@@ -523,7 +560,7 @@ export class ZombieManager {
                 ? 0.75
                 : 1.05;
 
-    const group = buildRealisticZombie(z.type, scale);
+    const group = buildRealisticZombie(z.type, scale, z.victimAppearance);
     group.position.set(z.position[0], z.position[1], z.position[2]);
     group.rotation.y = z.rotationY;
 
