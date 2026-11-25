@@ -2,15 +2,22 @@ import * as THREE from 'three';
 import { UnifiedPhysicsManager } from '../physics/UnifiedPhysicsManager';
 import { soundEngine } from '../../utils/audio';
 import { ApartmentTurrets } from './ApartmentTurrets';
+import type { HostileFactionTurretTarget, TurretSaveRecord } from './ApartmentTurrets';
+import type { CompoundSecuritySaveData } from '../../types/game';
 import { BasementControlRoom } from './BasementControlRoom';
+import { CommandCenterScreens } from './CommandCenterScreens';
 import { getTerrainHeight } from '../Terrain';
 import { ZombieManager } from '../ZombieManager';
 import { WildlifeManager } from '../WildlifeManager';
+import { ApartmentObjectBinding } from './ApartmentObjectBinding';
+import { ApartmentObjectAnimator, type ApartmentInteractableOptions, type ApartmentObjectAction } from './ApartmentObjectAnimator';
 import {
   getBrickPBR,
   getBrushedMetalPBR,
   getConcretePBR,
   getMarbleTilePBR,
+  getSandstonePBR,
+  getStonePBR,
   getWaterRippleNormalMap,
   getWoodPBR,
 } from '../../utils/proceduralTextures';
@@ -29,9 +36,14 @@ export interface ApartmentState {
 
 export class ApartmentBuilding {
   public group: THREE.Group;
+  /** Runtime dependency bindings for movable roots across every apartment level. */
+  private readonly apartmentObjectBindings = new Map<string, ApartmentObjectBinding>();
+  /** Central animation/state owner for all explicitly registered apartment interactables. */
+  public readonly objectAnimator = new ApartmentObjectAnimator();
   public state: ApartmentState;
   public turrets: ApartmentTurrets;
   public basementRoom: BasementControlRoom;
+  public commandScreens!: CommandCenterScreens;
 
   // Floor groups for camera-aware cutaways
   public floor1Group: THREE.Group;
@@ -66,8 +78,16 @@ export class ApartmentBuilding {
   public backyardPoolWaterMesh!: THREE.Mesh;
   private floorLights: THREE.PointLight[] = [];
   public compoundGateOpen = false;
+  public vehicleGateOpen = false;
+  public vehicleGateGroup!: THREE.Group;
+  public vehicleGate2Open = false;
+  private vehicleGate2Group!: THREE.Group;
   public garageShutterOpen = true;
   private garageShutterGroup!: THREE.Group;
+  private commandElevatorPlatform: THREE.Mesh | null = null;
+  private commandElevatorFloor = 0;
+  private aptElevatorPlatform: THREE.Group | null = null;
+  private aptElevatorFloor = 0;
   public patioDoorOpen = true;
   private patioDoorMesh!: THREE.Group;
   private patioDoorLeftLeaf!: THREE.Mesh;
@@ -88,13 +108,13 @@ export class ApartmentBuilding {
     return this.compoundPedestrianDoorsOpen[0];
   }
   public get eastPedestrianDoorOpen(): boolean {
-    return false; // Former east pedestrian opening is sealed; only one pedestrian gate remains.
+    return this.compoundPedestrianDoorsOpen[1];
   }
   public toggleWestPedestrianDoor(): boolean {
     return this.toggleCompoundPedestrianDoor('left');
   }
   public toggleEastPedestrianDoor(): boolean {
-    return false; // Only the west pedestrian entrance is authorised.
+    return this.toggleCompoundPedestrianDoor('right');
   }
 
   // --- Complete Bathroom System State & Meshes ---
@@ -146,6 +166,12 @@ export class ApartmentBuilding {
   private glassMat: THREE.MeshStandardMaterial;
   private metalTrimMat: THREE.MeshStandardMaterial;
   private waterMat: THREE.MeshStandardMaterial;
+  private warmLimestoneMat!: THREE.MeshStandardMaterial;
+  private travertineStoneMat!: THREE.MeshStandardMaterial;
+  private charcoalBronzeMat!: THREE.MeshStandardMaterial;
+  private curtainGlassMat!: THREE.MeshStandardMaterial;
+  private walnutAccentMat!: THREE.MeshStandardMaterial;
+  private warmSconceMat!: THREE.MeshStandardMaterial;
 
   // Exterior wall sub-groups for directional camera cutaways
   private southWallMesh!: THREE.Group;
@@ -158,8 +184,8 @@ export class ApartmentBuilding {
 
   // Pool water volume bounding box in world coordinates
   public readonly backyardPoolBounds = {
-    minX: -5.0, maxX: 5.0, minY: 0.15, maxY: 1.5,
-    minZ: 17.5, maxZ: 25.5,
+    minX: 9999, maxX: 10000, minY: 0.15, maxY: 1.5,
+    minZ: 9999, maxZ: 10000,
   };
 
   public readonly poolWaterBounds = {
@@ -170,7 +196,7 @@ export class ApartmentBuilding {
 
   constructor(parent: THREE.Scene | THREE.Group) {
     this.group = new THREE.Group();
-    this.group.name = 'five_floor_apartment_compound_with_basement';
+    this.group.name = 'last_sanctuary_rebirth_player_compound';
     this.group.position.copy(this.origin);
     parent.add(this.group);
 
@@ -276,6 +302,59 @@ export class ApartmentBuilding {
       opacity: 0.78,
     });
 
+    const limestonePBR = getConcretePBR(0xe2ded5);
+    const travertinePBR = getSandstonePBR(0xb8ae9c);
+    const darkStonePBR = getStonePBR(0x2a2f36);
+    this.warmLimestoneMat = new THREE.MeshStandardMaterial({
+      color: 0xf4f1ea,
+      map: limestonePBR.albedo,
+      normalMap: limestonePBR.normal,
+      normalScale: new THREE.Vector2(0.45, 0.45),
+      roughnessMap: limestonePBR.roughness,
+      roughness: 0.72,
+      side: THREE.DoubleSide,
+    });
+    this.travertineStoneMat = new THREE.MeshStandardMaterial({
+      color: 0xd6cbb8,
+      map: travertinePBR.albedo,
+      normalMap: travertinePBR.normal,
+      normalScale: new THREE.Vector2(0.5, 0.5),
+      roughnessMap: travertinePBR.roughness,
+      roughness: 0.62,
+      side: THREE.DoubleSide,
+    });
+    this.charcoalBronzeMat = new THREE.MeshStandardMaterial({
+      color: 0x262930,
+      map: darkStonePBR.albedo,
+      normalMap: darkStonePBR.normal,
+      roughnessMap: darkStonePBR.roughness,
+      metalness: 0.78,
+      roughness: 0.34,
+    });
+    this.curtainGlassMat = new THREE.MeshStandardMaterial({
+      color: 0xaad8e6,
+      roughness: 0.06,
+      metalness: 0.16,
+      envMapIntensity: 1.65,
+      transparent: true,
+      opacity: 0.30,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    this.walnutAccentMat = new THREE.MeshStandardMaterial({
+      color: 0x70492e,
+      map: woodPBR.albedo,
+      normalMap: woodPBR.normal,
+      roughnessMap: woodPBR.roughness,
+      roughness: 0.58,
+    });
+    this.warmSconceMat = new THREE.MeshStandardMaterial({
+      color: 0xffe4b5,
+      emissive: 0xffb85c,
+      emissiveIntensity: 0.85,
+      roughness: 0.3,
+    });
+
     // Procedural TV screen canvas
     this.tvCanvas = document.createElement('canvas');
     this.tvCanvas.width = 512;
@@ -323,15 +402,15 @@ export class ApartmentBuilding {
     this.renderComputerScreenContent();
 
     this.floor1Group = new THREE.Group();
-    this.floor1Group.name = 'floor_1_white_living';
+    this.floor1Group.name = 'floor_0_luxury_living';
     this.floor2Group = new THREE.Group();
-    this.floor2Group.name = 'floor_2_full_medical_center';
+    this.floor2Group.name = 'floor_1_private_residence';
     this.floor3Group = new THREE.Group();
-    this.floor3Group.name = 'floor_3_armory_vault';
+    this.floor3Group.name = 'floor_2_medical_and_survival';
     this.floor4Group = new THREE.Group();
-    this.floor4Group.name = 'floor_4_survival_farm_utility';
+    this.floor4Group.name = 'floor_3_self_sufficiency';
     this.floor5Group = new THREE.Group();
-    this.floor5Group.name = 'floor_5_rooftop_pool_terrace';
+    this.floor5Group.name = 'floor_4_rooftop_infinity_recreation';
     this.basementGroup = new THREE.Group();
     this.basementGroup.name = 'retained_basement_operations_room';
     this.exteriorWalls = new THREE.Group();
@@ -360,6 +439,7 @@ export class ApartmentBuilding {
     this.buildContinuousStaircase();
     this.buildExteriorFacade();
     this.buildEnclosedProperty();
+    this.buildIndependentCompoundBuildings();
     // Security defaults: all compound entrances begin closed.
     // Access is granted only through the two explicit gate interactions.
 
@@ -368,34 +448,710 @@ export class ApartmentBuilding {
     // Keep the existing security and basement operations systems connected to the expanded building.
     this.turrets = new ApartmentTurrets(this.group, this.origin);
     this.basementRoom = new BasementControlRoom(this.group, this.origin);
+    this.initializeApartmentObjectBindings();
   }
 
-  private registerBuildingColliders() {
-    const phys = UnifiedPhysicsManager.getInstance();
-    if (!phys) return;
+  /** Adds the independent command centre, medical annex, four-bay garage and self-sufficiency facilities. */
 
-    const ox = this.origin.x;
-    const oy = this.origin.y;
-    const oz = this.origin.z;
+  /** Builds the two detached facilities; the existing five-level apartment remains Building 1. */
+  /** Builds Option A Neo-Tactical structures: explorable 4-floor Mansion Wings, 8-floor 25-screen Command Center, and 3-level Vertical Garage. */
+  private buildIndependentCompoundBuildings() {
+    const campus = new THREE.Group();
+    campus.name = 'rebirth_option_a_neo_tactical_compound_structures';
+    this.group.add(campus);
 
-    // Exterior Apartment Walls (North wall has 2.4m central doorway with sliding glass patio doors to backyard)
-    phys.registerBoxCollider('apt_north_wall_l', 'wall', [ox - 4.6, oy + 1.6, oz + 6.8], 6.8, 3.2, 0.6);
-    phys.registerBoxCollider('apt_north_wall_r', 'wall', [ox + 4.6, oy + 1.6, oz + 6.8], 6.8, 3.2, 0.6);
-    phys.registerBoxCollider('apt_north_wall_upper', 'wall', [ox, oy + 8.0, oz + 6.8], 16.0, 9.6, 0.6);
-    phys.registerBoxCollider('apt_patio_door', 'wall', [ox, oy + 1.4, oz + 6.8], 2.4, 2.6, 0.2, 0, this.patioDoorOpen);
-    phys.registerBoxCollider('apt_east_wall', 'wall', [ox + 7.8, oy + 6.4, oz], 0.6, 12.8, 14.0);
-    phys.registerBoxCollider('apt_west_wall', 'wall', [ox - 7.8, oy + 6.4, oz], 0.6, 12.8, 14.0);
-    phys.registerBoxCollider('apt_south_wall_left', 'wall', [ox - 4.5, oy + 6.4, oz - 6.8], 7.0, 12.8, 0.6);
-    phys.registerBoxCollider('apt_south_wall_right', 'wall', [ox + 4.5, oy + 6.4, oz - 6.8], 7.0, 12.8, 0.6);
+    const graphite = new THREE.MeshStandardMaterial({ color: 0x161f29, roughness: 0.36, metalness: 0.8 });
+    const slate = new THREE.MeshStandardMaterial({ color: 0x333c48, roughness: 0.72, metalness: 0.32 });
+    const glass = new THREE.MeshStandardMaterial({
+      color: 0x56bddc,
+      roughness: 0.14,
+      metalness: 0.18,
+      transparent: true,
+      opacity: 0.34,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    });
+    const cyan = new THREE.MeshStandardMaterial({ color: 0x6ce8ff, emissive: 0x0891b2, emissiveIntensity: 1.15 });
+    const amber = new THREE.MeshStandardMaterial({ color: 0xfbbf24, emissive: 0xd97706, emissiveIntensity: 0.9 });
+    const floorMat = new THREE.MeshStandardMaterial({ color: 0x4b5563, roughness: 0.76, metalness: 0.25 });
+    const woodAccent = new THREE.MeshStandardMaterial({ color: 0x6b4c35, roughness: 0.68 });
+    const fabricMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85 });
 
-    // Compound Perimeter Enclosure Walls (Zero gaps, only front double gate at center)
-    phys.registerBoxCollider('apt_perim_west', 'wall', [ox - 19.0, oy + 1.7, oz + 2.5], 0.6, 3.4, 49.0);
-    phys.registerBoxCollider('apt_perim_east', 'wall', [ox + 19.0, oy + 1.7, oz + 2.5], 0.6, 3.4, 49.0);
-    phys.registerBoxCollider('apt_perim_rear', 'wall', [ox, oy + 1.7, oz + 27.0], 38.5, 3.4, 0.6);
-    phys.registerBoxCollider('apt_perim_front_left_outer', 'wall', [ox - 15.86, oy + 1.7, oz - 22.0], 6.28, 3.4, 0.6);
-    phys.registerBoxCollider('apt_perim_front_left_inner', 'wall', [ox - 6.915, oy + 1.7, oz - 22.0], 8.73, 3.4, 0.6);
-    phys.registerBoxCollider('apt_perim_front_right_inner', 'wall', [ox + 6.915, oy + 1.7, oz - 22.0], 8.73, 3.4, 0.6);
-    phys.registerBoxCollider('apt_perim_front_right_outer', 'wall', [ox + 15.86, oy + 1.7, oz - 22.0], 6.28, 3.4, 0.6);
+    // =========================================================================
+    // BUILDING 1 EXTENSION: MODERN GLASS LUXURY FORTRESS WINGS (4 FLOORS)
+    // =========================================================================
+    const mansionWings = new THREE.Group();
+    mansionWings.name = 'building_1_player_mansion_attached_wings';
+    mansionWings.userData = {
+      buildingNumber: 1,
+      style: 'Modern Glass Luxury Fortress',
+      floors: 4,
+      rooftopTerrace: true,
+      basement: true,
+      targetFootprint: [30, 24],
+      attachedToExistingMansion: true,
+    };
+    campus.add(mansionWings);
+
+    const creamFabricMat = new THREE.MeshStandardMaterial({ color: 0xe6dfd3, roughness: 0.88 });
+    const charcoalUpholsteryMat = new THREE.MeshStandardMaterial({ color: 0x2c3038, roughness: 0.85 });
+    const brassHardwareMat = new THREE.MeshStandardMaterial({ color: 0xc8a45d, metalness: 0.85, roughness: 0.25 });
+    const porcelainMat = new THREE.MeshStandardMaterial({ color: 0xf8f8f6, roughness: 0.16, metalness: 0.08 });
+    const shelterSteelMat = new THREE.MeshStandardMaterial({ color: 0x373e47, metalness: 0.78, roughness: 0.36 });
+    const lushFoliageMat = new THREE.MeshStandardMaterial({ color: 0x2f7d44, roughness: 0.88 });
+
+    const floorGroups = [this.floor1Group, this.floor2Group, this.floor3Group, this.floor4Group];
+    for (const side of [-1, 1] as const) {
+      const wingCenterX = side * 11.5;
+      const outerX = side * 14.92;
+      const wingShell = new THREE.Group();
+      wingShell.name = side < 0 ? 'mansion_west_wing_shell' : 'mansion_east_wing_shell';
+      mansionWings.add(wingShell);
+
+      // Honed travertine plinth foundation
+      const basePad = new THREE.Mesh(new THREE.BoxGeometry(7.0, 0.25, 24.0), this.travertineStoneMat);
+      basePad.position.set(wingCenterX, 0.12, 0);
+      basePad.receiveShadow = true;
+      wingShell.add(basePad);
+
+      // Architectural travertine & bronze structural piers (full 13m height)
+      for (const z of [-11.85, -6.0, 0, 6.0, 11.85]) {
+        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.42, 13.0, 0.56), this.travertineStoneMat);
+        pier.position.set(outerX, 6.5, z);
+        pier.castShadow = true;
+        pier.receiveShadow = true;
+        const bronzeMullion = new THREE.Mesh(new THREE.BoxGeometry(0.46, 13.0, 0.14), this.charcoalBronzeMat);
+        bronzeMullion.position.set(outerX, 6.5, z);
+        wingShell.add(pier, bronzeMullion);
+      }
+
+      // Per-floor panoramic curtain glass, limestone slab edges & warm architectural lighting
+      for (let fl = 0; fl < 4; fl++) {
+        const fy = fl * 3.2;
+        const fg = floorGroups[fl];
+
+        // Walkable interior slabs (preserve East stairwell opening at X in [12.3, 14.5], Z in [-3.8, +1.8])
+        if (fl > 0) {
+          if (side > 0) {
+            const slabW = new THREE.Mesh(new THREE.BoxGeometry(4.3, 0.22, 23.6), this.warmLimestoneMat);
+            slabW.position.set(10.15, fy + 0.11, 0);
+            slabW.receiveShadow = true;
+            const slabN = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.22, 10.0), this.warmLimestoneMat);
+            slabN.position.set(13.65, fy + 0.11, 6.8);
+            slabN.receiveShadow = true;
+            const slabS = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.22, 8.0), this.warmLimestoneMat);
+            slabS.position.set(13.65, fy + 0.11, -7.8);
+            slabS.receiveShadow = true;
+            fg.add(slabW, slabN, slabS);
+          } else {
+            const slab = new THREE.Mesh(new THREE.BoxGeometry(6.9, 0.22, 23.6), this.warmLimestoneMat);
+            slab.position.set(wingCenterX, fy + 0.11, 0);
+            slab.receiveShadow = true;
+            fg.add(slab);
+          }
+        }
+
+        // Exterior limestone spandrel + floor-to-ceiling low-E curtain glazing + bronze transom
+        const lowerSpandrel = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.34, 23.8), this.warmLimestoneMat);
+        lowerSpandrel.position.set(outerX, fy + 0.22, 0);
+        const outerGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.58, 23.4), this.curtainGlassMat);
+        outerGlass.position.set(outerX, fy + 1.68, 0);
+        const slabFascia = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.22, 24.1), this.charcoalBronzeMat);
+        slabFascia.position.set(outerX + side * 0.06, fy + 3.1, 0);
+        const warmUnderGlow = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 23.4), this.warmSconceMat);
+        warmUnderGlow.position.set(outerX + side * 0.14, fy + 2.98, 0);
+        wingShell.add(lowerSpandrel, outerGlass, slabFascia, warmUnderGlow);
+
+        // North wing end wall: stone plinth + full-height panoramic glass
+        const northLower = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.42, 0.26), this.travertineStoneMat);
+        northLower.position.set(wingCenterX, fy + 0.21, 11.86);
+        const northGlass = new THREE.Mesh(new THREE.BoxGeometry(6.2, 2.52, 0.06), this.curtainGlassMat);
+        northGlass.position.set(wingCenterX, fy + 1.68, 11.86);
+        const northHeader = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.22, 0.28), this.charcoalBronzeMat);
+        northHeader.position.set(wingCenterX, fy + 3.06, 11.86);
+        wingShell.add(northLower, northGlass, northHeader);
+
+        // South wing front wall (ground floor has double architectural entry; upper floors have curtain glass)
+        if (fl === 0) {
+          for (const dx of [-2.35, 2.35]) {
+            const sStone = new THREE.Mesh(new THREE.BoxGeometry(2.1, 3.1, 0.28), this.travertineStoneMat);
+            sStone.position.set(wingCenterX + dx, fy + 1.55, -11.86);
+            wingShell.add(sStone);
+          }
+          const canopy = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.16, 1.6), this.charcoalBronzeMat);
+          canopy.position.set(wingCenterX, 3.12, -12.55);
+          const canopyWarmWash = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.04, 0.08), this.warmSconceMat);
+          canopyWarmWash.position.set(wingCenterX, 3.02, -13.15);
+          const accessPad = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.28, 0.06), brassHardwareMat);
+          accessPad.position.set(wingCenterX + 1.25, 1.35, -12.02);
+          wingShell.add(canopy, canopyWarmWash, accessPad);
+        } else {
+          const southLower = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.42, 0.26), this.travertineStoneMat);
+          southLower.position.set(wingCenterX, fy + 0.21, -11.86);
+          const southGlass = new THREE.Mesh(new THREE.BoxGeometry(6.2, 2.52, 0.06), this.curtainGlassMat);
+          southGlass.position.set(wingCenterX, fy + 1.68, -11.86);
+          const southHeader = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.22, 0.28), this.charcoalBronzeMat);
+          southHeader.position.set(wingCenterX, fy + 3.06, -11.86);
+          wingShell.add(southLower, southGlass, southHeader);
+        }
+
+        // Warm 3000K architectural interior lighting
+        const light = new THREE.PointLight(fl === 2 ? 0xf0f6ff : 0xffe9cc, 1.15, 14, 1.4);
+        light.position.set(wingCenterX, fy + 2.75, 0);
+        this.floorLights.push(light);
+        fg.add(light);
+
+        if (side < 0) {
+          if (fl === 0) {
+            // Ground Floor West Wing: Private Cinema & Travertine Hearth Lounge
+            const lSofaMain = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.72, 1.05), creamFabricMat);
+            lSofaMain.position.set(-12.2, fy + 0.48, 3.8);
+            const lSofaChaise = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.72, 1.8), creamFabricMat);
+            lSofaChaise.position.set(-13.1, fy + 0.48, 2.6);
+            const coffeeTable = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.36, 0.95), this.walnutAccentMat);
+            coffeeTable.position.set(-11.8, fy + 0.30, 1.8);
+            const cinemaWall = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.2, 0.25), this.travertineStoneMat);
+            cinemaWall.position.set(-12.2, fy + 1.25, 7.6);
+            const cinemaScreen = new THREE.Mesh(
+              new THREE.BoxGeometry(2.4, 1.25, 0.06),
+              new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.18, metalness: 0.5 })
+            );
+            cinemaScreen.position.set(-12.2, fy + 1.48, 7.42);
+            const hearth = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.38, 0.45), this.charcoalBronzeMat);
+            hearth.position.set(-12.2, fy + 0.32, 7.35);
+            const emberGlow = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.1, 0.16), this.warmSconceMat);
+            emberGlow.position.set(-12.2, fy + 0.54, 7.35);
+            const readingChair = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.75, 1.0), charcoalUpholsteryMat);
+            readingChair.position.set(-12.4, fy + 0.48, -7.0);
+            fg.add(lSofaMain, lSofaChaise, coffeeTable, cinemaWall, cinemaScreen, hearth, emberGlow, readingChair);
+          } else if (fl === 1) {
+            // First Floor West Wing: Master Luxury Spa Bathroom & Dressing Lounge
+            const soakingTub = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.65, 2.1), porcelainMat);
+            soakingTub.position.set(-12.8, fy + 0.45, 5.2);
+            const tubWater = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 1.8), this.waterMat);
+            tubWater.rotation.x = -Math.PI / 2;
+            tubWater.position.set(-12.8, fy + 0.78, 5.2);
+            const doubleVanity = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.85, 0.68), this.walnutAccentMat);
+            doubleVanity.position.set(-11.8, fy + 0.54, -2.5);
+            const marbleTop = new THREE.Mesh(new THREE.BoxGeometry(2.84, 0.06, 0.72), this.travertineStoneMat);
+            marbleTop.position.set(-11.8, fy + 0.99, -2.5);
+            const rainShowerGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.35, 2.1), this.curtainGlassMat);
+            rainShowerGlass.position.set(-12.4, fy + 1.35, -7.2);
+            const dressingOttoman = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.65, 0.44, 16), creamFabricMat);
+            dressingOttoman.position.set(-11.8, fy + 0.34, 1.2);
+            fg.add(soakingTub, tubWater, doubleVanity, marbleTop, rainShowerGlass, dressingOttoman);
+          } else if (fl === 2) {
+            // Second Floor West Wing: Emergency Treatment Room & Trauma Recovery
+            for (const bz of [-6.0, 2.5, 7.2]) {
+              const pod = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.52, 1.02), porcelainMat);
+              pod.position.set(-12.6, fy + 0.4, bz);
+              const mon = new THREE.Mesh(
+                new THREE.BoxGeometry(0.68, 0.48, 0.08),
+                new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
+              );
+              mon.position.set(-13.85, fy + 1.35, bz);
+              const surgLamp = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, 0.08, 16), this.warmSconceMat);
+              surgLamp.position.set(-12.6, fy + 2.65, bz);
+              fg.add(pod, mon, surgLamp);
+            }
+          } else {
+            // Third Floor West Wing: Vertical Hydroponics & Cold Food Storage
+            for (const gz of [-6.5, -1.5, 3.5, 7.8]) {
+              const rack = new THREE.Mesh(new THREE.BoxGeometry(2.3, 1.85, 1.05), this.charcoalBronzeMat);
+              rack.position.set(-12.4, fy + 1.02, gz);
+              const foliage = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.42, 0.88), lushFoliageMat);
+              foliage.position.set(-12.4, fy + 1.22, gz);
+              const growStrip = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.05, 0.2), this.warmSconceMat);
+              growStrip.position.set(-12.4, fy + 1.9, gz);
+              fg.add(rack, foliage, growStrip);
+            }
+          }
+        } else {
+          if (fl === 0) {
+            // Ground Floor East Wing: Reception Vestibule & Formal Gallery Lounge
+            const desk = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.96, 0.88), this.travertineStoneMat);
+            desk.position.set(10.6, fy + 0.58, -6.5);
+            const walnutTrim = new THREE.Mesh(new THREE.BoxGeometry(2.54, 0.1, 0.92), this.walnutAccentMat);
+            walnutTrim.position.set(10.6, fy + 1.08, -6.5);
+            const lounge = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.68, 1.0), creamFabricMat);
+            lounge.position.set(10.8, fy + 0.45, 5.8);
+            fg.add(desk, walnutTrim, lounge);
+          } else if (fl === 1) {
+            // First Floor East Wing: Private Guest Bedroom Suite
+            const guestBed = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.5, 2.3), this.walnutAccentMat);
+            guestBed.position.set(10.6, fy + 0.38, 6.2);
+            const guestMattress = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.28, 2.1), creamFabricMat);
+            guestMattress.position.set(10.6, fy + 0.68, 6.2);
+            const bench = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.45, 0.65), charcoalUpholsteryMat);
+            bench.position.set(10.6, fy + 0.36, -7.2);
+            fg.add(guestBed, guestMattress, bench);
+          } else if (fl === 2) {
+            // Second Floor East Wing: Secure Reinforced Survival Shelter & Vault
+            for (const az of [-7.5, 5.2, 8.2]) {
+              const shelterLocker = new THREE.Mesh(new THREE.BoxGeometry(1.65, 2.2, 0.95), shelterSteelMat);
+              shelterLocker.position.set(10.4, fy + 1.2, az);
+              const blastSeal = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.8, 0.65), brassHardwareMat);
+              blastSeal.position.set(9.56, fy + 1.2, az);
+              fg.add(shelterLocker, blastSeal);
+            }
+          } else {
+            // Third Floor East Wing: Lithium Inverter Vault & Maintenance Workshop
+            for (const pz of [-7.5, 5.2, 8.2]) {
+              const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.75, 2.15, 1.05), this.charcoalBronzeMat);
+              cabinet.position.set(10.4, fy + 1.18, pz);
+              const statusBar = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.1, 0.08), this.warmSconceMat);
+              statusBar.position.set(9.5, fy + 1.35, pz);
+              fg.add(cabinet, statusBar);
+            }
+          }
+        }
+      }
+
+      // Wing Rooftop Lounge Terrace (y = 12.92) with travertine deck & frameless glass parapet
+      const wingRoof = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.28, 24.2), this.travertineStoneMat);
+      wingRoof.position.set(wingCenterX, 12.92, 0);
+      wingRoof.receiveShadow = true;
+      const wingRail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.08, 24.0), this.curtainGlassMat);
+      wingRail.position.set(outerX, 13.56, 0);
+      const wingCap = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 24.1), this.charcoalBronzeMat);
+      wingCap.position.set(outerX, 14.12, 0);
+      wingShell.add(wingRoof, wingRail, wingCap);
+    }
+
+    // East Wing Architectural Steel & Walnut Staircase (X = 13.4, Z: -3.5 -> +1.5)
+    const eastWingStairs = new THREE.Group();
+    eastWingStairs.name = 'east_wing_four_floor_staircase';
+    for (let fl = 0; fl < 3; fl++) {
+      const baseH = fl * 3.2;
+      for (let s = 0; s < 14; s++) {
+        const tread = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.14, 0.42), this.walnutAccentMat);
+        tread.position.set(13.4, baseH + (s + 1) * (3.2 / 14), -3.5 + ((s + 0.5) / 14) * 5.0);
+        tread.castShadow = true;
+        eastWingStairs.add(tread);
+      }
+    }
+    mansionWings.add(eastWingStairs);
+
+    // =========================================================================
+    // BUILDING 2: NEO-TACTICAL 8-FLOOR RAILWAY COMMAND CENTER (25 LIVE SCREENS)
+    // Positioned cleanly in NW quadrant at local (-48, 0, +24) -> World (-74, 0, +62)
+    // =========================================================================
+    const command = new THREE.Group();
+    command.name = 'building_2_independent_railway_command_centre';
+    command.position.set(-48, 0, 24);
+    command.userData = {
+      buildingNumber: 2,
+      style: 'Option A Neo-Tactical Glass & Graphite',
+      floors: 8,
+      screenCount: 25,
+      basement: true,
+      roofHelipadDeck: true,
+      targetFootprint: [22, 18],
+      dispatchesExistingTrains: 6,
+    };
+    campus.add(command);
+
+    const cmdBase = new THREE.Mesh(new THREE.BoxGeometry(22.8, 0.55, 18.8), graphite);
+    cmdBase.position.y = 0.28;
+    command.add(cmdBase);
+
+    const wallT = 0.32;
+    const floorH = 3.45;
+    for (let f = 0; f < 8; f++) {
+      const floorY = 0.65 + f * floorH;
+      const slab = new THREE.Mesh(new THREE.BoxGeometry(22.4, 0.22, 18.4), graphite);
+      slab.position.y = floorY;
+      slab.receiveShadow = true;
+      command.add(slab);
+
+      // Exterior Cyan Floor Perimeter Strip
+      const ledStripS = new THREE.Mesh(new THREE.BoxGeometry(22.5, 0.07, 0.08), cyan);
+      ledStripS.position.set(0, floorY + 3.28, -9.05);
+      const ledStripW = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.07, 18.5), cyan);
+      ledStripW.position.set(-11.1, floorY + 3.28, 0);
+      const ledStripE = ledStripW.clone();
+      ledStripE.position.x = 11.1;
+      command.add(ledStripS, ledStripW, ledStripE);
+
+      // East & West Curtain Walls
+      for (const side of [-1, 1]) {
+        const x = side * 10.92;
+        const lower = new THREE.Mesh(new THREE.BoxGeometry(wallT, 0.65, 18), slate);
+        lower.position.set(x, floorY + 0.42, 0);
+        const upper = new THREE.Mesh(new THREE.BoxGeometry(wallT, 0.52, 18), graphite);
+        upper.position.set(x, floorY + 3.12, 0);
+        const glazing = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.0, 15.8), glass);
+        glazing.position.set(x, floorY + 1.82, 0);
+        command.add(lower, upper, glazing);
+        for (const z of [-8.65, 0, 8.65]) {
+          const pier = new THREE.Mesh(new THREE.BoxGeometry(0.46, 3.3, 0.68), graphite);
+          pier.position.set(x, floorY + 1.7, z);
+          pier.castShadow = true;
+          command.add(pier);
+        }
+      }
+
+      // North Solid Video-Wall Structural Backing
+      const backWall = new THREE.Mesh(new THREE.BoxGeometry(22, 3.28, wallT), slate);
+      backWall.position.set(0, floorY + 1.72, 8.82);
+      command.add(backWall);
+
+      // South Front Wall (Ground floor has wide open entrance, upper floors have panoramic glass)
+      if (f === 0) {
+        for (const x of [-6.6, 6.6]) {
+          const front = new THREE.Mesh(new THREE.BoxGeometry(8.8, 3.28, wallT), slate);
+          front.position.set(x, floorY + 1.72, -8.82);
+          command.add(front);
+        }
+        const header = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.58, wallT), graphite);
+        header.position.set(0, floorY + 3.04, -8.82);
+        const entryCanopy = new THREE.Mesh(new THREE.BoxGeometry(5.8, 0.2, 2.2), graphite);
+        entryCanopy.position.set(0, floorY + 3.2, -10.0);
+        const canopyLed = new THREE.Mesh(new THREE.BoxGeometry(5.8, 0.08, 0.08), cyan);
+        canopyLed.position.set(0, floorY + 3.2, -11.1);
+        command.add(header, entryCanopy, canopyLed);
+      } else {
+        const frontLower = new THREE.Mesh(new THREE.BoxGeometry(22, 0.72, wallT), slate);
+        frontLower.position.set(0, floorY + 0.45, -8.82);
+        const frontUpper = new THREE.Mesh(new THREE.BoxGeometry(22, 0.52, wallT), graphite);
+        frontUpper.position.set(0, floorY + 3.12, -8.82);
+        const glazing = new THREE.Mesh(new THREE.BoxGeometry(19.6, 1.98, 0.1), glass);
+        glazing.position.set(0, floorY + 1.82, -8.82);
+        command.add(frontLower, frontUpper, glazing);
+      }
+
+      // Interior Floor Lighting + Elevator Call Panel
+      const flLight = new THREE.PointLight(f === 2 ? 0x67e8f9 : 0xe0f2fe, 1.25, 22, 1.3);
+      flLight.position.set(-1.0, floorY + 2.75, 0);
+      command.add(flLight);
+
+      const callPanel = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.78, 0.1), cyan);
+      callPanel.name = `command_elevator_call_panel_f${f + 1}`;
+      callPanel.position.set(-5.8, floorY + 1.25, -1.2);
+      command.add(callPanel);
+
+      // Floor-specific furnishings & operator consoles
+      if (f === 0) {
+        const reception = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.95, 0.95), graphite);
+        reception.position.set(-0.8, floorY + 0.58, 2.25);
+        command.add(reception);
+      } else if (f <= 2) {
+        for (const dx of [-4.0, -0.8, 2.4]) {
+          if (f === 2 && dx > 0) continue;
+          const desk = new THREE.Mesh(new THREE.BoxGeometry(2.35, 0.85, 0.9), graphite);
+          desk.position.set(dx, floorY + 0.52, 2.25);
+          command.add(desk);
+        }
+      } else if (f <= 5) {
+        const desk = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.85, 0.95), graphite);
+        desk.position.set(-0.8, floorY + 0.52, 2.25);
+        command.add(desk);
+        for (const rx of [-7.5, -5.5]) {
+          const rack = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.3, 0.9), graphite);
+          rack.position.set(rx, floorY + 1.25, 5.2);
+          command.add(rack);
+        }
+      } else if (f === 6) {
+        // Floor 7: Command Briefing Holo-Table & Officer Bunks
+        const holoTable = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.88, 2.0), graphite);
+        holoTable.position.set(-2.0, floorY + 0.54, 1.5);
+        const holoPlate = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.08, 1.5), cyan);
+        holoPlate.position.set(-2.0, floorY + 1.0, 1.5);
+        const bunk1 = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.55, 1.05), slate);
+        bunk1.position.set(-7.6, floorY + 0.42, 4.8);
+        command.add(holoTable, holoPlate, bunk1);
+      } else if (f === 7) {
+        // Floor 8: Executive Observatory Desk & Central Server Racks
+        const execDesk = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.88, 1.1), graphite);
+        execDesk.position.set(-2.0, floorY + 0.54, 1.5);
+        for (let sr = 0; sr < 4; sr++) {
+          const srv = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.4, 0.9), graphite);
+          srv.position.set(-7.8 + sr * 1.4, floorY + 1.3, 5.8);
+          command.add(srv);
+        }
+        command.add(execDesk);
+      }
+    }
+
+    // Roof Deck (y = 0.65 + 8 * 3.45 = 28.25) with East stairwell hatch cutout (X in [6.2, 9.2], Z in [-5.4, +6.2])
+    const roofY = 0.65 + 8 * floorH;
+    const roofWest = new THREE.Mesh(new THREE.BoxGeometry(17.4, 0.38, 18.7), graphite);
+    roofWest.position.set(-2.65, roofY, 0);
+    const roofEastFar = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.38, 18.7), graphite);
+    roofEastFar.position.set(10.3, roofY, 0);
+    const roofStairN = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.38, 3.15), graphite);
+    roofStairN.position.set(7.65, roofY, 7.78);
+    const roofStairS = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.38, 3.95), graphite);
+    roofStairS.position.set(7.65, roofY, -7.38);
+    command.add(roofWest, roofEastFar, roofStairN, roofStairS);
+
+    // Rooftop Helipad + Glass Safety Railings + Comms Spires
+    const helipad = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 4.8, 0.14, 32), slate);
+    helipad.position.set(-2.2, roofY + 0.25, 0);
+    const heliRing = new THREE.Mesh(new THREE.RingGeometry(3.6, 4.0, 32), amber);
+    heliRing.rotation.x = -Math.PI / 2;
+    heliRing.position.set(-2.2, roofY + 0.33, 0);
+    const heliHBar1 = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.04, 2.8), amber);
+    heliHBar1.position.set(-3.1, roofY + 0.33, 0);
+    const heliHBar2 = heliHBar1.clone();
+    heliHBar2.position.x = -1.3;
+    const heliHCross = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.04, 0.45), amber);
+    heliHCross.position.set(-2.2, roofY + 0.33, 0);
+    command.add(helipad, heliRing, heliHBar1, heliHBar2, heliHCross);
+
+    for (const [rx, rz, rw, rd] of [
+      [0, -9.15, 22.4, 0.1],
+      [0, 9.15, 22.4, 0.1],
+      [-11.15, 0, 0.1, 18.4],
+      [11.15, 0, 0.1, 18.4],
+    ] as const) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(rw, 1.05, rd), glass);
+      rail.position.set(rx, roofY + 0.72, rz);
+      command.add(rail);
+    }
+    for (let i = 0; i < 3; i++) {
+      const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.14, 4.2, 8), graphite);
+      ant.position.set(-7.5 + i * 3.8, roofY + 2.2, 7.2);
+      const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8), cyan);
+      beacon.position.set(-7.5 + i * 3.8, roofY + 4.35, 7.2);
+      command.add(ant, beacon);
+    }
+
+    // 8-Stop High-Speed Glass Elevator Shaft on West (-7.2, -1.2)
+    const basementWell = new THREE.Mesh(new THREE.BoxGeometry(18, 2.6, 14), graphite);
+    basementWell.position.set(0, -1.35, 0);
+    command.add(basementWell);
+    const liftShaft = new THREE.Group();
+    liftShaft.name = 'railway_command_elevator_shaft';
+    liftShaft.position.set(-7.2, 0, -1.2);
+    command.add(liftShaft);
+    for (const [x, z] of [[-1.05, -1.05], [1.05, -1.05], [-1.05, 1.05], [1.05, 1.05]] as const) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 27.6, 0.12), graphite);
+      post.position.set(x, 14.0, z);
+      liftShaft.add(post);
+    }
+    const liftPlatform = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.18, 1.9), cyan);
+    liftPlatform.name = 'command_elevator_platform';
+    liftPlatform.position.y = 0.78;
+    liftShaft.add(liftPlatform);
+    this.commandElevatorPlatform = liftPlatform;
+    liftShaft.userData = { stops: [0, 1, 2, 3, 4, 5, 6, 7], platform: liftPlatform.name, requiresPlayerInteraction: true };
+
+    // Continuous 8-Floor Staircase on East (X = 7.65, connecting F1..F8 + Roof Deck)
+    const stairGroup = new THREE.Group();
+    stairGroup.name = 'railway_command_eight_floor_staircase';
+    command.add(stairGroup);
+    for (let floor = 0; floor < 8; floor++) {
+      const baseY = 0.76 + floor * floorH;
+      for (let step = 0; step < 16; step++) {
+        const tread = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.16, 0.56), graphite);
+        tread.position.set(7.65, baseY + (step + 1) * (floorH / 16), -5.0 + step * 0.62);
+        tread.castShadow = true;
+        stairGroup.add(tread);
+      }
+      const landing = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.18, 2.2), graphite);
+      landing.position.set(7.65, baseY + floorH, 5.15);
+      stairGroup.add(landing);
+    }
+
+    // 25 Live Interactive Telemetry Screens distributed across all 8 floors
+    this.commandScreens = new CommandCenterScreens(command);
+    command.userData.dispatchDisplays = ['25_live_screens', 'six_train_telemetry', 'network_map', '5km_radar', 'alerts'];
+    command.userData.controlsConnectedTo = 'AITrainManager';
+    command.userData.explorableRooms = [
+      'f1_grand_dispatch_lobby',
+      'f2_train_dispatch_hall',
+      'f3_security_surveillance',
+      'f4_signal_interlocking',
+      'f5_communications_center',
+      'f6_traction_engineering',
+      'f7_briefing_quarters',
+      'f8_executive_observatory',
+      'roof_helipad_deck',
+    ];
+    command.userData.navigation = { stairs: true, elevator: true, floors: 8 };
+
+    const doorFrameLeft = new THREE.Mesh(new THREE.BoxGeometry(0.24, 3.1, 0.36), graphite);
+    doorFrameLeft.position.set(-2.25, 1.55, -8.82);
+    const doorFrameRight = doorFrameLeft.clone();
+    doorFrameRight.position.x = 2.25;
+    const doorHeader = new THREE.Mesh(new THREE.BoxGeometry(4.7, 0.24, 0.36), graphite);
+    doorHeader.position.set(0, 3.1, -8.82);
+    command.add(doorFrameLeft, doorFrameRight, doorHeader);
+
+    // =========================================================================
+    // BUILDING 3: OPTION A 3-LEVEL VERTICAL SECURITY GARAGE (4 BAY VEHICLES)
+    // Positioned in SW quadrant at local (-48, 0, -32) -> World (-74, 0, +6)
+    // Contains: Bay 1 Armed SUV, Bay 2 Bike, Bay 3 Cycle, Bay 4 Military Vehicle
+    // =========================================================================
+    const garage = new THREE.Group();
+    garage.name = 'building_3_vertical_security_garage';
+    garage.position.set(-48, 0, -32);
+    campus.add(garage);
+    garage.userData = {
+      buildingNumber: 3,
+      style: 'Option A Neo-Tactical Vertical Garage',
+      levels: 3,
+      targetFootprint: [20, 14],
+      vehicleBays: ['armed_suv', 'bike', 'cycle', 'military_enforcement_armed_armoured'],
+      doorCount: 4,
+    };
+
+    const garageBase = new THREE.Mesh(new THREE.BoxGeometry(20.6, 0.35, 14.6), graphite);
+    garageBase.position.y = 0.18;
+    garageBase.receiveShadow = true;
+    garage.add(garageBase);
+
+    // Level 1 Ground Hangar + Level 2 Mezzanine Workshop (y=4.55) + Level 3 Drone Roof Pad (y=9.0)
+    const gBackWall = new THREE.Mesh(new THREE.BoxGeometry(20.0, 9.0, 0.35), slate);
+    gBackWall.position.set(0, 4.55, 6.82);
+    garage.add(gBackWall);
+
+    for (const side of [-1, 1]) {
+      const sLower = new THREE.Mesh(new THREE.BoxGeometry(0.35, 4.5, 14.0), slate);
+      sLower.position.set(side * 9.82, 2.3, 0);
+      const sUpperLower = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.8, 14.0), slate);
+      sUpperLower.position.set(side * 9.82, 4.95, 0);
+      const sGlass = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.9, 13.4), glass);
+      sGlass.position.set(side * 9.82, 6.85, 0);
+      const sUpperTop = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.65, 14.0), graphite);
+      sUpperTop.position.set(side * 9.82, 8.65, 0);
+      const sLed = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.08, 14.2), cyan);
+      sLed.position.set(side * 10.02, 4.58, 0);
+      garage.add(sLower, sUpperLower, sGlass, sUpperTop, sLed);
+    }
+
+    // Front Facade: 4 Drive-In Bay Piers on Level 1 + Panoramic Glass Loft on Level 2
+    const garageFrontZ = -6.82;
+    for (const x of [-9.7, -4.9, 0, 4.9, 9.7]) {
+      const pier = new THREE.Mesh(new THREE.BoxGeometry(x === -9.7 || x === 9.7 ? 0.6 : 0.8, 3.3, 0.35), graphite);
+      pier.position.set(x, 1.85, garageFrontZ);
+      const bayLight = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.4, 0.08), cyan);
+      bayLight.position.set(x, 1.9, garageFrontZ - 0.2);
+      garage.add(pier, bayLight);
+    }
+    const garageLintel = new THREE.Mesh(new THREE.BoxGeometry(20.0, 1.15, 0.35), graphite);
+    garageLintel.position.set(0, 4.02, garageFrontZ);
+    const frontLed = new THREE.Mesh(new THREE.BoxGeometry(20.2, 0.08, 0.1), cyan);
+    frontLed.position.set(0, 4.6, garageFrontZ - 0.22);
+    const frontUpperLower = new THREE.Mesh(new THREE.BoxGeometry(20.0, 0.75, 0.32), slate);
+    frontUpperLower.position.set(0, 4.95, garageFrontZ);
+    const frontUpperGlass = new THREE.Mesh(new THREE.BoxGeometry(18.6, 2.9, 0.1), glass);
+    frontUpperGlass.position.set(0, 6.85, garageFrontZ);
+    const frontUpperTop = new THREE.Mesh(new THREE.BoxGeometry(20.0, 0.65, 0.35), graphite);
+    frontUpperTop.position.set(0, 8.65, garageFrontZ);
+    garage.add(garageLintel, frontLed, frontUpperLower, frontUpperGlass, frontUpperTop);
+
+    // 4 Coordinated Motorized Shutters + Bay Markings + EV/Fuel Pedestals
+    this.garageShutterGroup = new THREE.Group();
+    this.garageShutterGroup.name = 'four_independent_automatic_garage_shutters';
+    this.garageShutterGroup.position.set(0, this.garageShutterOpen ? 2.65 : 0, -7.08);
+    garage.add(this.garageShutterGroup);
+    for (let i = 0; i < 4; i++) {
+      const x = -7.35 + i * 4.9;
+      const frame = new THREE.Mesh(new THREE.BoxGeometry(4.35, 3.55, 0.22), graphite);
+      frame.position.set(x, 1.8, -7.12);
+      const door = new THREE.Mesh(new THREE.BoxGeometry(4.1, 3.3, 0.12), cyan);
+      door.position.set(x, 1.65, 0);
+      this.garageShutterGroup.add(door);
+      const bayMark = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 5.8), floorMat);
+      bayMark.position.set(x, 0.25, 0);
+      garage.add(frame, bayMark);
+      if (i < 3) {
+        const charger = new THREE.Mesh(new THREE.BoxGeometry(0.32, 1.45, 0.38), graphite);
+        charger.position.set(x + 2.45, 0.9, -2.5);
+        const chargerLed = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.35, 0.4), cyan);
+        chargerLed.position.set(x + 2.45, 1.35, -2.5);
+        garage.add(charger, chargerLed);
+      }
+    }
+
+    // Overhead Gantry Bridge Crane inside Hangar + Ground Workshop Corner
+    const gantryBeam = new THREE.Mesh(new THREE.BoxGeometry(18.6, 0.28, 0.42), amber);
+    gantryBeam.position.set(0, 3.92, 0.4);
+    const hoist = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.45, 0.95), graphite);
+    hoist.position.set(7.2, 3.62, 0.4);
+    const workshop = new THREE.Mesh(new THREE.BoxGeometry(5.0, 2.2, 3.2), graphite);
+    workshop.position.set(7.2, 1.2, 5.0);
+    garage.add(gantryBeam, hoist, workshop);
+
+    // Level 1 -> Level 2 Rear Staircase (Z = 5.4, X: -8.6 -> -1.2, clear of vehicle bays & workshop)
+    for (let s = 0; s < 14; s++) {
+      const tread = new THREE.Mesh(new THREE.BoxGeometry(0.54, 0.14, 1.5), graphite);
+      tread.position.set(-8.4 + s * 0.54, 0.36 + (s + 1) * (4.24 / 14), 5.4);
+      garage.add(tread);
+    }
+
+    // Level 2 Mezzanine Floor Slab (y = 4.55) with stairwell opening (X in [-8.8, -0.8], Z in [4.4, 6.4])
+    const l2Main = new THREE.Mesh(new THREE.BoxGeometry(19.6, 0.24, 11.0), floorMat);
+    l2Main.position.set(0, 4.55, -1.1);
+    l2Main.receiveShadow = true;
+    const l2EastRear = new THREE.Mesh(new THREE.BoxGeometry(10.6, 0.24, 2.6), floorMat);
+    l2EastRear.position.set(4.5, 4.55, 5.5);
+    garage.add(l2Main, l2EastRear);
+
+    // Level 2 Mezzanine Furnishings: Armor/Weapon Tuning Bench, Diagnostic Terminal, Parts Racks
+    const tuneBench = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.92, 1.1), graphite);
+    tuneBench.position.set(4.2, 5.1, -3.2);
+    const diagScreen = new THREE.Mesh(new THREE.BoxGeometry(1.4, 0.8, 0.1), cyan);
+    diagScreen.position.set(4.2, 5.95, -3.45);
+    const partsRack = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.3, 3.2), slate);
+    partsRack.position.set(-7.6, 5.8, -2.5);
+    const l2Light = new THREE.PointLight(0x9be7ff, 1.35, 22, 1.3);
+    l2Light.position.set(0, 8.1, 0);
+    garage.add(tuneBench, diagScreen, partsRack, l2Light);
+
+    // Level 2 -> Level 3 Roof Staircase (Z = 5.4, X: -0.4 -> +6.8, climbing up to Roof y = 9.0)
+    for (let s = 0; s < 14; s++) {
+      const tread = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.14, 1.5), graphite);
+      tread.position.set(-0.4 + s * 0.52, 4.65 + (s + 1) * (4.35 / 14), 5.4);
+      garage.add(tread);
+    }
+
+    // Level 3 Roof Deck (y = 9.0) with stairwell cutout (X in [-0.6, +7.2], Z in [4.4, 6.4])
+    const l3Main = new THREE.Mesh(new THREE.BoxGeometry(20.4, 0.3, 11.4), graphite);
+    l3Main.position.set(0, 9.0, -1.3);
+    const l3WestRear = new THREE.Mesh(new THREE.BoxGeometry(9.4, 0.3, 3.0), graphite);
+    l3WestRear.position.set(-5.3, 9.0, 5.7);
+    const l3EastRear = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.3, 3.0), graphite);
+    l3EastRear.position.set(8.6, 9.0, 5.7);
+    garage.add(l3Main, l3WestRear, l3EastRear);
+
+    // Level 3 Roof Drone Resupply Pad, Solar Bank & Glass Safety Railings
+    const dronePad = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.4, 0.12, 24), slate);
+    dronePad.position.set(-3.2, 9.2, -1.2);
+    const droneRing = new THREE.Mesh(new THREE.RingGeometry(2.4, 2.75, 24), cyan);
+    droneRing.rotation.x = -Math.PI / 2;
+    droneRing.position.set(-3.2, 9.27, -1.2);
+    const solarBank = new THREE.Mesh(new THREE.BoxGeometry(4.2, 1.1, 1.6), graphite);
+    solarBank.position.set(4.8, 9.65, -3.5);
+    garage.add(dronePad, droneRing, solarBank);
+
+    for (const [rx, rz, rw, rd] of [
+      [0, -7.1, 20.2, 0.1],
+      [0, 7.1, 20.2, 0.1],
+      [-10.1, 0, 0.1, 14.2],
+      [10.1, 0, 0.1, 14.2],
+    ] as const) {
+      const rail = new THREE.Mesh(new THREE.BoxGeometry(rw, 1.0, rd), glass);
+      rail.position.set(rx, 9.65, rz);
+      garage.add(rail);
+    }
+
+    garage.userData.facilities = [
+      'four_armored_vehicle_bays',
+      'overhead_gantry_crane',
+      'mezzanine_armor_tuning_deck',
+      'vehicle_diagnostic_terminal',
+      'roof_drone_resupply_pad',
+      'solar_battery_bank',
+    ];
+    garage.userData.vehicleBayLabels = [
+      'ARMED SUV',
+      'MOTORBIKE',
+      'EXPEDITION BICYCLE',
+      'MILITARY ENFORCEMENT VEHICLE (ARMED + ARMOURED)',
+    ];
   }
 
   // ==========================================
@@ -403,72 +1159,105 @@ export class ApartmentBuilding {
   // ==========================================
   private createSlabWithStairwell(mat: THREE.Material, thickness: number, yPos: number): THREE.Group {
     const g = new THREE.Group();
-    // West section: covers X = -8.0 to +4.5 (width 12.5, depth 14, center X = -1.75)
-    const westSlab = new THREE.Mesh(new THREE.BoxGeometry(12.5, thickness, 14), mat);
-    westSlab.position.set(-1.75, yPos, 0);
+    // West main section: X = -8.0 to +2.6 (width 10.6, depth 14, center X = -2.7)
+    const westSlab = new THREE.Mesh(new THREE.BoxGeometry(10.6, thickness, 14), mat);
+    westSlab.position.set(-2.7, yPos, 0);
     westSlab.receiveShadow = true;
 
-    // East North section: covers X = 4.5 to 8.0, Z = 2.0 to 7.0 (width 3.5, depth 5, center X = 6.25, Z = 4.5)
+    // Elevator corridor strip North of shaft: X = 2.6 to 4.5, Z = -4.4 to +7.0
+    const elevNorth = new THREE.Mesh(new THREE.BoxGeometry(1.9, thickness, 11.4), mat);
+    elevNorth.position.set(3.55, yPos, 1.3);
+    elevNorth.receiveShadow = true;
+
+    // Elevator corridor strip South of shaft: X = 2.6 to 4.5, Z = -7.0 to -6.4
+    const elevSouth = new THREE.Mesh(new THREE.BoxGeometry(1.9, thickness, 0.6), mat);
+    elevSouth.position.set(3.55, yPos, -6.7);
+    elevSouth.receiveShadow = true;
+
+    // East North section: covers X = 4.5 to 8.0, Z = 2.0 to 7.0
     const eastNorth = new THREE.Mesh(new THREE.BoxGeometry(3.5, thickness, 5.0), mat);
     eastNorth.position.set(6.25, yPos, 4.5);
     eastNorth.receiveShadow = true;
 
-    // East South section: covers X = 4.5 to 8.0, Z = -7.0 to -4.5 (width 3.5, depth 2.5, center X = 6.25, Z = -5.75)
+    // East South section: covers X = 4.5 to 8.0, Z = -7.0 to -4.5
     const eastSouth = new THREE.Mesh(new THREE.BoxGeometry(3.5, thickness, 2.5), mat);
     eastSouth.position.set(6.25, yPos, -5.75);
     eastSouth.receiveShadow = true;
 
-    g.add(westSlab, eastNorth, eastSouth);
+    g.add(westSlab, elevNorth, elevSouth, eastNorth, eastSouth);
     return g;
   }
 
   // ==========================================
-  // FLOOR 1: WHITE WALL MAIN LIVING AREA
+  // GROUND FLOOR (LEVEL 0): LUXURY LIVING & GRAND LOBBY
   // ==========================================
   private buildFloor1() {
     const f1 = this.floor1Group;
+    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc8a45d, metalness: 0.85, roughness: 0.25 });
+    const boucleMat = new THREE.MeshStandardMaterial({ color: 0xe8e2d7, roughness: 0.9 });
+    const slateUpholsteryMat = new THREE.MeshStandardMaterial({ color: 0x2b303a, roughness: 0.85 });
+    const marbleIslandMat = new THREE.MeshStandardMaterial({ color: 0xf4f1eb, roughness: 0.22, metalness: 0.08 });
 
-    // Ground Floor Solid Base
-    const floorSlab = new THREE.Mesh(new THREE.BoxGeometry(16, 0.25, 14), this.woodFloorMat);
+    // Ground Floor Honed Travertine Base + Walnut Living/Bedroom Inlay
+    const floorSlab = new THREE.Mesh(new THREE.BoxGeometry(16, 0.25, 14), this.travertineStoneMat);
     floorSlab.position.set(0, 0.12, 0);
     floorSlab.receiveShadow = true;
-    f1.add(floorSlab);
+    const walnutInlay = new THREE.Mesh(new THREE.BoxGeometry(10.0, 0.02, 9.6), this.walnutAccentMat);
+    walnutInlay.position.set(-2.6, 0.25, 1.8);
+    walnutInlay.receiveShadow = true;
+    f1.add(floorSlab, walnutInlay);
 
-    // Ceiling with stairwell cutout so player head is never blocked
-    const ceiling = this.createSlabWithStairwell(this.whiteWallMat, 0.2, 3.1);
+    // Ceiling with stairwell cutout + Elevator shaft opening at X in [2.6, 4.6], Z in [-6.4, -4.4]
+    const ceiling = this.createSlabWithStairwell(this.warmLimestoneMat, 0.2, 3.1);
     f1.add(ceiling);
 
-    // Interior White Dividing Walls (Dividing Bedroom, Kitchen, Living Room)
-    const bedDivider = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.9, 7.5), this.whiteWallMat);
+    // Architectural Dividing Walls (Limestone + Walnut Acoustic Slats)
+    const bedDivider = new THREE.Mesh(new THREE.BoxGeometry(0.24, 2.9, 7.5), this.warmLimestoneMat);
     bedDivider.position.set(-2.5, 1.6, 2.8);
-    const kitchenDivider = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.9, 5.0), this.whiteWallMat);
+    const kitchenDivider = new THREE.Mesh(new THREE.BoxGeometry(0.24, 2.9, 5.0), this.warmLimestoneMat);
     kitchenDivider.position.set(2.5, 1.6, 4.0);
+    for (let s = 0; s < 5; s++) {
+      const slat = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.7, 0.14), this.walnutAccentMat);
+      slat.position.set(-2.36, 1.55, 0.5 + s * 0.45);
+      f1.add(slat);
+    }
     f1.add(bedDivider, kitchenDivider);
 
-    // Warm Interior Ceiling Lamps
-    const lamp1 = new THREE.PointLight(0xffecd0, 1.8, 14, 1.3);
-    lamp1.position.set(-4.5, 2.7, 2.5);
-    const lamp2 = new THREE.PointLight(0xffeed0, 2.0, 15, 1.3);
-    lamp2.position.set(0, 2.7, 0);
-    this.floorLights.push(lamp1, lamp2);
-    f1.add(lamp1, lamp2);
+    // Warm 3000K Architectural Ceiling & Chandelier Lighting
+    const lamp1 = new THREE.PointLight(0xffe6c4, 1.8, 14, 1.3);
+    lamp1.position.set(-4.5, 2.75, 2.5);
+    const lamp2 = new THREE.PointLight(0xffe9cc, 2.1, 16, 1.3);
+    lamp2.position.set(0, 2.75, -0.5);
+    const lobbyLight = new THREE.PointLight(0xffebd2, 1.4, 12, 1.4);
+    lobbyLight.position.set(2.2, 2.75, -4.6);
+    this.floorLights.push(lamp1, lamp2, lobbyLight);
+    f1.add(lamp1, lamp2, lobbyLight);
 
-    // --- 1. BEDROOM ---
-    // Solid Double Bed: Frame (2.4 x 0.5 x 2.8), Headboard, Thick Mattress (2.2 x 0.35 x 2.5), Quilt, Pillows
-    const bedFrame = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 2.8), this.metalTrimMat);
+    // Sculptural Brass Ring Chandelier over Living Salon
+    const chandelier = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.035, 10, 32), brassMat);
+    chandelier.rotation.x = Math.PI / 2;
+    chandelier.position.set(0, 2.68, -0.4);
+    const chGlow = new THREE.Mesh(new THREE.TorusGeometry(0.73, 0.02, 8, 32), this.warmSconceMat);
+    chGlow.rotation.x = Math.PI / 2;
+    chGlow.position.set(0, 2.65, -0.4);
+    f1.add(chandelier, chGlow);
+
+    // --- 1. GROUND FLOOR GUEST BEDROOM SUITE ---
+    const bedFrame = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 2.8), this.walnutAccentMat);
     bedFrame.position.set(-5.5, 0.35, 3.8);
     bedFrame.castShadow = true;
     bedFrame.receiveShadow = true;
 
-    const headboard = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.4, 0.2), this.woodFloorMat);
-    headboard.position.set(-5.5, 0.9, 5.15);
+    const headboard = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.55, 0.18), this.walnutAccentMat);
+    headboard.position.set(-5.5, 0.96, 5.18);
     headboard.castShadow = true;
     headboard.receiveShadow = true;
+    const headboardPad = new THREE.Mesh(new THREE.BoxGeometry(2.35, 1.05, 0.08), boucleMat);
+    headboardPad.position.set(-5.5, 0.98, 5.06);
 
-    // Mattress top finished surface is at Y = 0.35 + 0.35/2 + 0.35 = 0.875m
     const mattress = new THREE.Mesh(
       new THREE.BoxGeometry(2.2, 0.35, 2.5),
-      new THREE.MeshStandardMaterial({ color: 0xfdfdfd, roughness: 0.92 })
+      new THREE.MeshStandardMaterial({ color: 0xfbfaf7, roughness: 0.92 })
     );
     mattress.position.set(-5.5, 0.65, 3.8);
     mattress.castShadow = true;
@@ -476,70 +1265,60 @@ export class ApartmentBuilding {
 
     const blanket = new THREE.Mesh(
       new THREE.BoxGeometry(2.22, 0.38, 1.7),
-      new THREE.MeshStandardMaterial({ color: 0x1f3c5e, roughness: 0.85 })
+      slateUpholsteryMat
     );
     blanket.position.set(-5.5, 0.66, 3.3);
     blanket.castShadow = true;
 
     const pillow1 = new THREE.Mesh(
       new THREE.BoxGeometry(0.85, 0.16, 0.55),
-      new THREE.MeshStandardMaterial({ color: 0xf3f4f6, roughness: 0.95 })
+      new THREE.MeshStandardMaterial({ color: 0xf5f4f0, roughness: 0.95 })
     );
     pillow1.position.set(-6.1, 0.85, 4.6);
     pillow1.castShadow = true;
     const pillow2 = pillow1.clone();
     pillow2.position.x = -4.9;
 
-    // Nightstand & Bedside Lamp with toggleable warm point light
-    const nightstand = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.65, 0.7), this.woodFloorMat);
+    // Nightstand & Bedside Warm Brass Lamp
+    const nightstand = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.65, 0.72), this.walnutAccentMat);
     nightstand.position.set(-7.2, 0.45, 4.8);
     nightstand.castShadow = true;
     nightstand.receiveShadow = true;
 
-    const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.14, 0.08, 10), this.metalTrimMat);
+    const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.14, 0.08, 12), brassMat);
     lampBase.position.set(-7.2, 0.81, 4.8);
-    const lampStem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.35, 8), this.metalTrimMat);
+    const lampStem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.35, 8), brassMat);
     lampStem.position.set(-7.2, 1.0, 4.8);
     const lampShade = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.22, 0.28, 12),
-      new THREE.MeshStandardMaterial({ color: 0xffedd5, roughness: 0.6, transparent: true, opacity: 0.9 })
+      new THREE.CylinderGeometry(0.12, 0.22, 0.28, 14),
+      new THREE.MeshStandardMaterial({ color: 0xfff1dc, roughness: 0.6, transparent: true, opacity: 0.92 })
     );
     lampShade.position.set(-7.2, 1.15, 4.8);
     this.bedsideLampLight = new THREE.PointLight(0xffecd0, 1.4, 6.0, 1.5);
     this.bedsideLampLight.position.set(-7.2, 1.15, 4.8);
 
-    // Solid Wardrobe at (-7.2, 1.4) with double hinged doors
+    // Walnut Wardrobe at (-7.2, 1.4) with double hinged doors
     const wardrobeGroup = new THREE.Group();
     wardrobeGroup.position.set(-7.2, 0, 1.4);
-    const wardrobeBody = new THREE.Mesh(
-      new THREE.BoxGeometry(0.85, 2.3, 1.6),
-      new THREE.MeshStandardMaterial({ color: 0x3e2723, roughness: 0.7 })
-    );
+    const wardrobeBody = new THREE.Mesh(new THREE.BoxGeometry(0.85, 2.3, 1.6), this.walnutAccentMat);
     wardrobeBody.position.set(0, 1.25, 0);
     wardrobeBody.castShadow = true;
     wardrobeBody.receiveShadow = true;
     wardrobeGroup.add(wardrobeBody);
 
-    // Left and right opening wardrobe doors on hinges
     this.wardrobeLeftDoor = new THREE.Group();
     this.wardrobeLeftDoor.position.set(0.43, 1.25, -0.76);
-    const wDoorL = new THREE.Mesh(
-      new THREE.BoxGeometry(0.05, 2.22, 0.76),
-      new THREE.MeshStandardMaterial({ color: 0x4e342e, roughness: 0.65 })
-    );
+    const wDoorL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.22, 0.76), this.walnutAccentMat);
     wDoorL.position.set(0, 0, 0.38);
-    const wHandleL = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.16, 8), this.metalTrimMat);
+    const wHandleL = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.22, 8), brassMat);
     wHandleL.position.set(0.04, 0, 0.7);
     this.wardrobeLeftDoor.add(wDoorL, wHandleL);
 
     this.wardrobeRightDoor = new THREE.Group();
     this.wardrobeRightDoor.position.set(0.43, 1.25, 0.76);
-    const wDoorR = new THREE.Mesh(
-      new THREE.BoxGeometry(0.05, 2.22, 0.76),
-      new THREE.MeshStandardMaterial({ color: 0x4e342e, roughness: 0.65 })
-    );
+    const wDoorR = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.22, 0.76), this.walnutAccentMat);
     wDoorR.position.set(0, 0, -0.38);
-    const wHandleR = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.16, 8), this.metalTrimMat);
+    const wHandleR = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.22, 8), brassMat);
     wHandleR.position.set(0.04, 0, -0.7);
     this.wardrobeRightDoor.add(wDoorR, wHandleR);
     wardrobeGroup.add(this.wardrobeLeftDoor, this.wardrobeRightDoor);
@@ -547,159 +1326,129 @@ export class ApartmentBuilding {
     // Study & Personal Computer Desk at (-3.5, 0.6)
     const deskGroup = new THREE.Group();
     deskGroup.position.set(-3.5, 0, 0.6);
-    const deskTop = new THREE.Mesh(
-      new THREE.BoxGeometry(1.6, 0.06, 0.85),
-      new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.5, metalness: 0.4 })
-    );
+    const deskTop = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 0.85), this.walnutAccentMat);
     deskTop.position.set(0, 0.75, 0);
     deskTop.castShadow = true;
-    const deskLeg1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.72, 0.06), this.metalTrimMat);
+    const deskLeg1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.72, 0.06), this.charcoalBronzeMat);
     deskLeg1.position.set(-0.72, 0.36, -0.36);
     const deskLeg2 = deskLeg1.clone(); deskLeg2.position.set(0.72, 0.36, -0.36);
     const deskLeg3 = deskLeg1.clone(); deskLeg3.position.set(-0.72, 0.36, 0.36);
     const deskLeg4 = deskLeg1.clone(); deskLeg4.position.set(0.72, 0.36, 0.36);
 
-    // Computer Monitor displaying live terminal OS
-    const monitorStand = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.12, 0.25, 10), this.metalTrimMat);
+    const monitorStand = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.12, 0.25, 10), this.charcoalBronzeMat);
     monitorStand.position.set(0, 0.9, 0.25);
-    const monitorFrame = new THREE.Mesh(
-      new THREE.BoxGeometry(1.0, 0.62, 0.05),
-      new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.8, roughness: 0.3 })
-    );
+    const monitorFrame = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.62, 0.05), this.charcoalBronzeMat);
     monitorFrame.position.set(0, 1.25, 0.25);
     this.computerScreenMesh = new THREE.Mesh(
       new THREE.PlaneGeometry(0.96, 0.58),
       new THREE.MeshBasicMaterial({ map: this.computerScreenTexture })
     );
-    this.computerScreenMesh.rotation.y = Math.PI; // Faces -Z into bedroom
+    this.computerScreenMesh.rotation.y = Math.PI;
     this.computerScreenMesh.position.set(0, 1.25, 0.22);
 
-    // Keyboard & Mouse
-    const deskKb = new THREE.Mesh(
-      new THREE.BoxGeometry(0.48, 0.02, 0.16),
-      new THREE.MeshStandardMaterial({ color: 0x374151, roughness: 0.4 })
-    );
+    const deskKb = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.02, 0.16), this.charcoalBronzeMat);
     deskKb.position.set(0, 0.79, -0.05);
-    const deskMouse = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 0.025, 0.12),
-      new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.3 })
-    );
+    const deskMouse = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.025, 0.12), this.charcoalBronzeMat);
     deskMouse.position.set(0.35, 0.79, -0.05);
 
-    // Ergonomic Study Chair
-    const chairSeat = new THREE.Mesh(
-      new THREE.BoxGeometry(0.52, 0.08, 0.52),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 })
-    );
+    const chairSeat = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.08, 0.52), slateUpholsteryMat);
     chairSeat.position.set(0, 0.48, -0.42);
     chairSeat.castShadow = true;
-    const chairBack = new THREE.Mesh(
-      new THREE.BoxGeometry(0.48, 0.55, 0.06),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.8 })
-    );
+    const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.55, 0.06), slateUpholsteryMat);
     chairBack.position.set(0, 0.78, -0.66);
-    const chairStem = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.44, 8), this.metalTrimMat);
+    const chairStem = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.44, 8), this.charcoalBronzeMat);
     chairStem.position.set(0, 0.22, -0.42);
     deskGroup.add(deskTop, deskLeg1, deskLeg2, deskLeg3, deskLeg4, monitorStand, monitorFrame, this.computerScreenMesh, deskKb, deskMouse, chairSeat, chairBack, chairStem);
 
-    f1.add(bedFrame, headboard, mattress, blanket, pillow1, pillow2, nightstand, lampBase, lampStem, lampShade, this.bedsideLampLight, wardrobeGroup, deskGroup);
+    f1.add(bedFrame, headboard, headboardPad, mattress, blanket, pillow1, pillow2, nightstand, lampBase, lampStem, lampShade, this.bedsideLampLight, wardrobeGroup, deskGroup);
 
     // --- 2. WORKING TELEVISION WITH BROADCAST SCREEN ---
-    const tvStand = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.65, 0.6), this.metalTrimMat);
+    const tvStand = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.65, 0.6), this.walnutAccentMat);
     tvStand.position.set(-5.5, 0.45, 0.0);
     tvStand.castShadow = true;
     tvStand.receiveShadow = true;
 
-    const tvFrame = new THREE.Mesh(
-      new THREE.BoxGeometry(2.0, 1.25, 0.1),
-      new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.85 })
-    );
+    const tvFrame = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.25, 0.1), this.charcoalBronzeMat);
     tvFrame.position.set(-5.5, 1.55, 0.0);
     tvFrame.rotation.x = -0.06;
 
     this.tvMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 1.15), this.tvScreenMat);
-    this.tvMesh.rotation.y = 0; // Directly faces +Z towards bed
+    this.tvMesh.rotation.y = 0;
     this.tvMesh.rotation.x = -0.06;
     this.tvMesh.position.set(-5.5, 1.55, 0.06);
     f1.add(tvStand, tvFrame, this.tvMesh);
 
-    // --- 2B. RELOCATED GROUND-FLOOR MEDICAL FIRST-AID STATION (At X = 3.6, Z = -5.2) ---
-    const medGroup = new THREE.Group();
-    medGroup.name = 'floor1_medical_recovery_station';
-    medGroup.position.set(3.6, 0, -5.2);
-
-    const medBedFrame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.45, 1.1), this.metalTrimMat);
-    medBedFrame.position.set(0, 0.32, 0);
-    medBedFrame.castShadow = true;
-    const medMattress = new THREE.Mesh(
-      new THREE.BoxGeometry(2.1, 0.25, 1.0),
-      new THREE.MeshStandardMaterial({ color: 0xecfdf5, roughness: 0.65 })
+    // --- 2B. GRAND LOBBY BIOMETRIC ACCESS CONTROL, SECURITY CAMERA & PANORAMIC GLASS ELEVATOR ---
+    // Biometric Access Control Wall Console beside front double doors
+    const accessPillar = new THREE.Mesh(new THREE.BoxGeometry(0.42, 2.8, 0.28), this.travertineStoneMat);
+    accessPillar.position.set(1.65, 1.52, -6.35);
+    const biometricPad = new THREE.Mesh(
+      new THREE.BoxGeometry(0.24, 0.38, 0.06),
+      new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.75, roughness: 0.3 })
     );
-    medMattress.position.set(0, 0.65, 0);
-    const medPillow = new THREE.Mesh(
-      new THREE.BoxGeometry(0.55, 0.14, 0.75),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.85 })
+    biometricPad.position.set(1.65, 1.38, -6.18);
+    const biometricLed = new THREE.Mesh(
+      new THREE.BoxGeometry(0.14, 0.04, 0.02),
+      new THREE.MeshBasicMaterial({ color: 0x10b981 })
     );
-    medPillow.position.set(-0.75, 0.8, 0);
-
-    const ivPole = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 1.85, 8), this.metalTrimMat);
-    ivPole.position.set(0.95, 0.95, -0.6);
-    const salineBag = new THREE.Mesh(
-      new THREE.BoxGeometry(0.18, 0.32, 0.12),
-      new THREE.MeshStandardMaterial({ color: 0xd1fae5, transparent: true, opacity: 0.85 })
+    biometricLed.position.set(1.65, 1.5, -6.14);
+    // Discreet Interior Lobby Ceiling Security Dome Camera
+    const camMount = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 0.08, 16), this.charcoalBronzeMat);
+    camMount.position.set(-1.8, 2.94, -5.8);
+    const camDome = new THREE.Mesh(
+      new THREE.SphereGeometry(0.11, 12, 10),
+      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.15, metalness: 0.6 })
     );
-    salineBag.position.set(0.95, 1.65, -0.6);
-    medGroup.add(medBedFrame, medMattress, medPillow, ivPole, salineBag);
-    f1.add(medGroup);
+    camDome.position.set(-1.8, 2.88, -5.8);
+    // Sculptural Lobby Console Table
+    const lobbyConsole = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.86, 0.52), this.travertineStoneMat);
+    lobbyConsole.position.set(-0.2, 0.55, -4.6);
+    lobbyConsole.castShadow = true;
+    const lobbyVase = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.1, 0.42, 14), brassMat);
+    lobbyVase.position.set(-0.2, 1.19, -4.6);
+    f1.add(accessPillar, biometricPad, biometricLed, camMount, camDome, lobbyConsole, lobbyVase);
 
-    // --- 2C. DEDICATED GROUND-FLOOR SECURITY MONITORING STATION ---
-    this.commandConsoleGroup = new THREE.Group();
-    this.commandConsoleGroup.name = 'floor1_security_monitoring_centre';
-    this.commandConsoleGroup.position.set(2.38, 0, -0.5);
+    // Panoramic Glass Residential Elevator Shaft (X = 3.6, Z = -5.4, spanning Ground -> Rooftop)
+    const aptLiftShaft = new THREE.Group();
+    aptLiftShaft.name = 'apartment_panoramic_glass_elevator_shaft';
+    aptLiftShaft.position.set(3.6, 0, -5.4);
+    for (const [px, pz] of [[-0.92, -0.92], [0.92, -0.92], [-0.92, 0.92], [0.92, 0.92]] as const) {
+      const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 13.8, 0.1), this.charcoalBronzeMat);
+      post.position.set(px, 7.0, pz);
+      aptLiftShaft.add(post);
+    }
+    const shaftGlassBack = new THREE.Mesh(new THREE.BoxGeometry(1.8, 13.4, 0.05), this.curtainGlassMat);
+    shaftGlassBack.position.set(0, 6.8, -0.92);
+    const shaftGlassSide = new THREE.Mesh(new THREE.BoxGeometry(0.05, 13.4, 1.8), this.curtainGlassMat);
+    shaftGlassSide.position.set(0.92, 6.8, 0);
+    aptLiftShaft.add(shaftGlassBack, shaftGlassSide);
 
-    const cmdDesk = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.85, 3.4), this.metalTrimMat);
-    cmdDesk.position.set(0, 0.45, 0);
-    cmdDesk.castShadow = true;
-    cmdDesk.receiveShadow = true;
+    const aptCabGroup = new THREE.Group();
+    aptCabGroup.name = 'apartment_elevator_platform';
+    aptCabGroup.position.y = 0.25;
+    const cabFloor = new THREE.Mesh(new THREE.BoxGeometry(1.76, 0.12, 1.76), this.travertineStoneMat);
+    const cabTrim = new THREE.Mesh(new THREE.BoxGeometry(1.82, 0.08, 1.82), brassMat);
+    cabTrim.position.y = 0.05;
+    const cabBackGlass = new THREE.Mesh(new THREE.BoxGeometry(1.7, 2.2, 0.05), this.curtainGlassMat);
+    cabBackGlass.position.set(0, 1.16, -0.84);
+    const cabLight = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.04, 1.2), this.warmSconceMat);
+    cabLight.position.set(0, 2.26, 0);
+    aptCabGroup.add(cabFloor, cabTrim, cabBackGlass, cabLight);
+    aptLiftShaft.add(aptCabGroup);
+    this.aptElevatorPlatform = aptCabGroup;
+    this.group.add(aptLiftShaft);
 
-    const cmdKeyboard = new THREE.Mesh(
-      new THREE.BoxGeometry(0.45, 0.04, 2.2),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.7 })
-    );
-    cmdKeyboard.position.set(-0.2, 0.89, 0);
-    cmdKeyboard.rotation.z = 0.08;
-
-    for (let i = 0; i < 4; i++) {
-      const led = new THREE.Mesh(
-        new THREE.SphereGeometry(0.035, 8, 8),
-        new THREE.MeshBasicMaterial({ color: [0x10b981, 0x06b6d4, 0xf59e0b, 0xef4444][i] })
-      );
-      led.position.set(-0.25, 0.92, -0.8 + i * 0.5);
-      this.commandConsoleGroup.add(led);
+    // Elevator floor call pads on Ground..Rooftop
+    for (let fl = 0; fl < 5; fl++) {
+      const callPad = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.34, 0.05), brassMat);
+      callPad.position.set(2.55, fl * 3.2 + 1.35, -5.4);
+      this.group.add(callPad);
     }
 
-    const screenFrame = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 1.9, 3.3),
-      new THREE.MeshStandardMaterial({ color: 0x090d16, roughness: 0.3, metalness: 0.9 })
-    );
-    screenFrame.position.set(0.42, 1.85, 0);
-
-    const screenMat = new THREE.MeshBasicMaterial({ map: this.securityScreenTexture });
-    this.securityScreenMesh = new THREE.Mesh(new THREE.PlaneGeometry(3.2, 1.8), screenMat);
-    this.securityScreenMesh.rotation.y = -Math.PI / 2; // Facing West into main living space
-    this.securityScreenMesh.position.set(0.37, 1.85, 0);
-
-    const stool = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.55, 12), this.metalTrimMat);
-    stool.position.set(-0.85, 0.28, 0);
-    stool.castShadow = true;
-
-    this.commandConsoleGroup.add(cmdDesk, cmdKeyboard, screenFrame, this.securityScreenMesh, stool);
-    f1.add(this.commandConsoleGroup);
-
-    // --- 3. REFRIGERATOR WITH INTERACTION ---
+    // --- 3. LUXURY INTEGRATED REFRIGERATOR ---
     const fridgeBody = new THREE.Mesh(
       new THREE.BoxGeometry(1.2, 2.2, 1.0),
-      new THREE.MeshStandardMaterial({ color: 0xd8d8d8, metalness: 0.6, roughness: 0.25 })
+      new THREE.MeshStandardMaterial({ color: 0x3b4048, metalness: 0.72, roughness: 0.28 })
     );
     fridgeBody.position.set(4.5, 1.22, 5.8);
     fridgeBody.castShadow = true;
@@ -709,47 +1458,40 @@ export class ApartmentBuilding {
     this.fridgeDoor.position.set(4.5, 1.22, 5.3);
     const doorPanel = new THREE.Mesh(
       new THREE.BoxGeometry(1.2, 2.18, 0.1),
-      new THREE.MeshStandardMaterial({ color: 0xe2e2e2, metalness: 0.65, roughness: 0.25 })
+      new THREE.MeshStandardMaterial({ color: 0x454b54, metalness: 0.75, roughness: 0.26 })
     );
-    const doorHandle = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 0.6, 0.08),
-      new THREE.MeshStandardMaterial({ color: 0x444444, metalness: 0.9 })
-    );
+    const doorHandle = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.85, 0.06), brassMat);
     doorHandle.position.set(0.48, 0, -0.08);
     this.fridgeDoor.add(doorPanel, doorHandle);
     f1.add(fridgeBody, this.fridgeDoor);
 
-    // --- 4. KITCHENETTE COUNTER, DOUBLE SINK & 4-BURNER STOVE ---
-    const kitchenCounter = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.9, 1.1), this.metalTrimMat);
+    // --- 4. MODERN CHEF'S MARBLE KITCHEN COUNTER, SINK & INDUCTION STOVE ---
+    const kitchenCounter = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.9, 1.1), this.walnutAccentMat);
     kitchenCounter.position.set(5.8, 0.57, 3.2);
     kitchenCounter.castShadow = true;
     kitchenCounter.receiveShadow = true;
+    const counterMarbleTop = new THREE.Mesh(new THREE.BoxGeometry(3.66, 0.08, 1.16), marbleIslandMat);
+    counterMarbleTop.position.set(5.8, 1.05, 3.2);
 
-    // Stainless steel kitchen sink
     const kitchenSink = new THREE.Mesh(
       new THREE.BoxGeometry(1.1, 0.38, 0.75),
-      new THREE.MeshStandardMaterial({ color: 0x888888, metalness: 0.9, roughness: 0.3 })
+      new THREE.MeshStandardMaterial({ color: 0x9ca3af, metalness: 0.88, roughness: 0.24 })
     );
-    kitchenSink.position.set(5.8, 0.85, 2.5);
+    kitchenSink.position.set(5.8, 0.9, 2.5);
 
-    const kitchenFaucet = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.025, 0.025, 0.38, 8),
-      new THREE.MeshStandardMaterial({ color: 0xcccccc, metalness: 0.9, roughness: 0.15 })
-    );
-    kitchenFaucet.position.set(5.8, 1.15, 2.85);
+    const kitchenFaucet = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.38, 8), brassMat);
+    kitchenFaucet.position.set(5.8, 1.2, 2.85);
 
-    // Kitchen running water stream
     this.kitchenTapWaterMesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.015, 0.025, 0.32, 6),
       new THREE.MeshStandardMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.7, roughness: 0.1 })
     );
-    this.kitchenTapWaterMesh.position.set(5.8, 0.95, 2.75);
+    this.kitchenTapWaterMesh.position.set(5.8, 0.98, 2.75);
     this.kitchenTapWaterMesh.visible = false;
 
-    // 4-Burner Electric Cooking Stove with illuminated burner coils at (5.8, 4.6)
     const stoveBody = new THREE.Mesh(
       new THREE.BoxGeometry(1.1, 0.92, 1.1),
-      new THREE.MeshStandardMaterial({ color: 0x1f242d, metalness: 0.85, roughness: 0.3 })
+      new THREE.MeshStandardMaterial({ color: 0x1b1f26, metalness: 0.8, roughness: 0.25 })
     );
     stoveBody.position.set(5.8, 0.58, 4.6);
     stoveBody.castShadow = true;
@@ -772,13 +1514,16 @@ export class ApartmentBuilding {
       this.kitchenStoveBurners.push(burner);
       f1.add(burner);
     }
-    f1.add(kitchenCounter, kitchenSink, kitchenFaucet, this.kitchenTapWaterMesh, stoveBody);
+    f1.add(kitchenCounter, counterMarbleTop, kitchenSink, kitchenFaucet, this.kitchenTapWaterMesh, stoveBody);
 
-    // --- 4B. DINING AREA (Table + 4 Chairs) at (2.2, 1.2) ---
-    const diningTable = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.8, 1.2), this.woodFloorMat);
-    diningTable.position.set(2.2, 0.52, 1.2);
+    // --- 4B. FORMAL DINING ROOM (Travertine & Walnut Table + 4 Designer Chairs) at (2.2, 1.2) ---
+    const diningTable = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.1, 1.2), marbleIslandMat);
+    diningTable.position.set(2.2, 0.88, 1.2);
     diningTable.castShadow = true;
     diningTable.receiveShadow = true;
+    const diningPedestal = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.74, 0.55), this.walnutAccentMat);
+    diningPedestal.position.set(2.2, 0.48, 1.2);
+    diningPedestal.castShadow = true;
 
     const chairOffsets = [
       [-0.6, -0.75, 0],
@@ -788,7 +1533,7 @@ export class ApartmentBuilding {
     ];
     for (let i = 0; i < chairOffsets.length; i++) {
       const [cx, cz, crot] = chairOffsets[i];
-      const chair = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.85, 0.44), this.woodFloorMat);
+      const chair = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.85, 0.44), boucleMat);
       chair.name = `dining_chair_${i}`;
       chair.position.set(2.2 + cx, 0.45, 1.2 + cz);
       chair.rotation.y = crot;
@@ -796,39 +1541,34 @@ export class ApartmentBuilding {
       chair.receiveShadow = true;
       f1.add(chair);
     }
-    f1.add(diningTable);
+    f1.add(diningTable, diningPedestal);
 
-    // --- 5. LIVING ROOM SOFA, COFFEE TABLE & REAL-TIME WALL CLOCK ---
-    const sofa = new THREE.Mesh(
-      new THREE.BoxGeometry(2.8, 0.85, 1.2),
-      new THREE.MeshStandardMaterial({ color: 0x2e4033, roughness: 0.85 })
-    );
-    sofa.position.set(0, 0.55, 0.5);
+    // --- 5. SPACIOUS LUXURY LIVING ROOM SOFA, COFFEE TABLE & REAL-TIME WALL CLOCK ---
+    const sofa = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.82, 1.2), boucleMat);
+    sofa.position.set(0, 0.54, 0.5);
     sofa.castShadow = true;
     sofa.receiveShadow = true;
 
-    const coffeeTable = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.45, 0.9), this.woodFloorMat);
-    coffeeTable.position.set(0, 0.35, -1.2);
+    const coffeeTable = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.42, 0.92), marbleIslandMat);
+    coffeeTable.position.set(0, 0.34, -1.2);
     coffeeTable.castShadow = true;
     coffeeTable.receiveShadow = true;
 
-    // Smartphone prop on coffee table
     const phoneMesh = new THREE.Mesh(
       new THREE.BoxGeometry(0.18, 0.02, 0.34),
       new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.2 })
     );
-    phoneMesh.position.set(0.3, 0.59, -1.2);
+    phoneMesh.position.set(0.3, 0.57, -1.2);
     const phoneScreen = new THREE.Mesh(
       new THREE.PlaneGeometry(0.16, 0.3),
       new THREE.MeshBasicMaterial({ color: 0x00d2d3 })
     );
     phoneScreen.rotation.x = -Math.PI / 2;
-    phoneScreen.position.set(0.3, 0.605, -1.2);
+    phoneScreen.position.set(0.3, 0.585, -1.2);
 
-    // Real-Time Wall Clock mounted on living room dividing wall at (-1.2, 2.4, -1.8)
     const wallClockMesh = new THREE.Mesh(
       new THREE.CylinderGeometry(0.42, 0.42, 0.06, 24),
-      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.5, metalness: 0.7 })
+      brassMat
     );
     wallClockMesh.rotation.x = Math.PI / 2;
     wallClockMesh.position.set(-1.2, 2.3, -1.8);
@@ -839,18 +1579,18 @@ export class ApartmentBuilding {
     clockFace.position.set(-1.2, 2.3, -1.76);
     f1.add(sofa, coffeeTable, phoneMesh, phoneScreen, wallClockMesh, clockFace);
 
-    // --- 6. WORKING CEILING FAN ---
+    // --- 6. ARCHITECTURAL WALNUT & BRASS CEILING FAN ---
     const fanHub = new THREE.Group();
     fanHub.position.set(0, 2.95, 0.5);
-    const fanStem = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.3, 6), this.metalTrimMat);
+    const fanStem = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.3, 6), this.charcoalBronzeMat);
     fanStem.position.y = -0.15;
-    const fanMotor = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.15, 10), this.metalTrimMat);
+    const fanMotor = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.15, 10), brassMat);
     fanMotor.position.y = -0.3;
 
     this.fanBlades = new THREE.Group();
     this.fanBlades.position.y = -0.32;
     for (let i = 0; i < 4; i++) {
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.02, 0.16), this.woodFloorMat);
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.02, 0.16), this.walnutAccentMat);
       blade.rotation.y = (i * Math.PI) / 2;
       blade.position.set(Math.cos(blade.rotation.y) * 0.55, 0, Math.sin(blade.rotation.y) * 0.55);
       this.fanBlades.add(blade);
@@ -858,11 +1598,8 @@ export class ApartmentBuilding {
     fanHub.add(fanStem, fanMotor, this.fanBlades);
     f1.add(fanHub);
 
-    // --- 7. WALL-MOUNTED AIR CONDITIONER ---
-    this.acMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(1.8, 0.5, 0.4),
-      new THREE.MeshStandardMaterial({ color: 0xfafafa, roughness: 0.4 })
-    );
+    // --- 7. SLEEK CLIMATE CONTROL UNIT ---
+    this.acMesh = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.48, 0.36), this.charcoalBronzeMat);
     this.acMesh.position.set(-2.5, 2.5, -6.6);
 
     this.acLedMat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
@@ -870,20 +1607,16 @@ export class ApartmentBuilding {
     acLed.position.set(-1.8, 2.4, -6.38);
     f1.add(this.acMesh, acLed);
 
-    // --- 8. FULL-HEIGHT DOUBLE FRONT ENTRANCE DOORS ---
+    // --- 8. REINFORCED ARCHITECTURAL BRONZE & WALNUT FRONT ENTRANCE DOUBLE DOORS ---
     this.frontDoorMesh = new THREE.Group();
     this.frontDoorMesh.name = 'apartment_double_front_doors';
-    const doorHeight = 2.38;
+    const doorHeight = 2.42;
     const doorLeafWidth = 0.99;
-    const doorThickness = 0.14;
+    const doorThickness = 0.15;
     this.frontDoorMesh.position.set(0, 1.4, -6.9);
 
-    const doorMaterial = this.woodFloorMat;
-    const handleMaterial = new THREE.MeshStandardMaterial({
-      color: 0xdaa520,
-      metalness: 0.9,
-      roughness: 0.25,
-    });
+    const doorMaterial = this.walnutAccentMat;
+    const handleMaterial = brassMat;
 
     this.frontDoorLeftLeaf = new THREE.Group();
     this.frontDoorLeftLeaf.name = 'frontDoorLeftLeaf';
@@ -892,9 +1625,11 @@ export class ApartmentBuilding {
     leftPanel.position.set(doorLeafWidth / 2, 0, 0);
     leftPanel.castShadow = true;
     leftPanel.receiveShadow = true;
-    const leftHandle = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), handleMaterial);
-    leftHandle.position.set(doorLeafWidth - 0.13, 0, 0.105);
-    this.frontDoorLeftLeaf.add(leftPanel, leftHandle);
+    const leftBronzeTrim = new THREE.Mesh(new THREE.BoxGeometry(0.08, doorHeight, doorThickness + 0.02), this.charcoalBronzeMat);
+    leftBronzeTrim.position.set(doorLeafWidth - 0.04, 0, 0);
+    const leftHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.72, 10), handleMaterial);
+    leftHandle.position.set(doorLeafWidth - 0.14, 0, 0.11);
+    this.frontDoorLeftLeaf.add(leftPanel, leftBronzeTrim, leftHandle);
 
     this.frontDoorRightLeaf = new THREE.Group();
     this.frontDoorRightLeaf.name = 'frontDoorRightLeaf';
@@ -903,27 +1638,29 @@ export class ApartmentBuilding {
     rightPanel.position.set(-doorLeafWidth / 2, 0, 0);
     rightPanel.castShadow = true;
     rightPanel.receiveShadow = true;
-    const rightHandle = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), handleMaterial);
-    rightHandle.position.set(-doorLeafWidth + 0.13, 0, 0.105);
-    this.frontDoorRightLeaf.add(rightPanel, rightHandle);
+    const rightBronzeTrim = new THREE.Mesh(new THREE.BoxGeometry(0.08, doorHeight, doorThickness + 0.02), this.charcoalBronzeMat);
+    rightBronzeTrim.position.set(-doorLeafWidth + 0.04, 0, 0);
+    const rightHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.72, 10), handleMaterial);
+    rightHandle.position.set(-doorLeafWidth + 0.14, 0, 0.11);
+    this.frontDoorRightLeaf.add(rightPanel, rightBronzeTrim, rightHandle);
 
     this.frontDoorMesh.add(this.frontDoorLeftLeaf, this.frontDoorRightLeaf);
     f1.add(this.frontDoorMesh);
 
-    // --- REAR SLIDING PATIO DOUBLE DOORS (X = 0, Z = 6.8) ---
+    // --- REAR SLIDING PATIO GLASS DOUBLE DOORS (X = 0, Z = 6.8) ---
     this.patioDoorMesh = new THREE.Group();
     this.patioDoorMesh.name = 'rear_patio_sliding_doors';
     this.patioDoorMesh.position.set(0, 1.4, 6.8);
 
-    const patioFrame = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2.6, 0.12), this.metalTrimMat);
+    const patioFrame = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2.6, 0.12), this.charcoalBronzeMat);
     this.patioDoorMesh.add(patioFrame);
 
     const patioLeafW = 1.15;
-    this.patioDoorLeftLeaf = new THREE.Mesh(new THREE.BoxGeometry(patioLeafW, 2.45, 0.06), this.glassMat);
+    this.patioDoorLeftLeaf = new THREE.Mesh(new THREE.BoxGeometry(patioLeafW, 2.45, 0.06), this.curtainGlassMat);
     this.patioDoorLeftLeaf.position.set(this.patioDoorOpen ? -1.15 : -0.58, 0, 0.02);
     this.patioDoorLeftLeaf.castShadow = true;
 
-    this.patioDoorRightLeaf = new THREE.Mesh(new THREE.BoxGeometry(patioLeafW, 2.45, 0.06), this.glassMat);
+    this.patioDoorRightLeaf = new THREE.Mesh(new THREE.BoxGeometry(patioLeafW, 2.45, 0.06), this.curtainGlassMat);
     this.patioDoorRightLeaf.position.set(this.patioDoorOpen ? 1.15 : 0.58, 0, -0.02);
     this.patioDoorRightLeaf.castShadow = true;
 
@@ -931,34 +1668,22 @@ export class ApartmentBuilding {
     f1.add(this.patioDoorMesh);
 
     // ==============================================================
-    // COMPLETE LUXURY BATHROOM SUITE (Southwest Wing: X = -7.4 to -3.5, Z = -6.6 to -3.2)
+    // GUEST LUXURY SPA BATHROOM SUITE (Southwest: X = -7.4 to -3.5, Z = -6.6 to -3.2)
     // ==============================================================
     const bathGroup = new THREE.Group();
     bathGroup.name = 'ground_floor_luxury_bathroom_suite';
 
-    // 1. Ceramic Tiled Floor Slab
-    const ceramicTileMat = new THREE.MeshStandardMaterial({
-      color: 0xe2e8f0,
-      roughness: 0.25,
-      metalness: 0.1,
-    });
+    const ceramicTileMat = this.travertineStoneMat;
     const bathFloor = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.08, 3.4), ceramicTileMat);
     bathFloor.position.set(-5.45, 0.16, -4.9);
     bathFloor.receiveShadow = true;
 
-    // 2. Interior Bathroom Partition Walls
-    const bathWallMat = new THREE.MeshStandardMaterial({
-      color: 0xf1f5f9,
-      roughness: 0.45,
-      side: THREE.DoubleSide,
-    });
-    // North partition wall with bedroom (X = -7.5 to -3.5, Z = -3.2)
+    const bathWallMat = this.warmLimestoneMat;
     const bathNorthWall = new THREE.Mesh(new THREE.BoxGeometry(3.9, 2.8, 0.18), bathWallMat);
     bathNorthWall.position.set(-5.45, 1.55, -3.2);
     bathNorthWall.castShadow = true;
     bathNorthWall.receiveShadow = true;
 
-    // East partition wall South section (Z = -6.6 to -4.8, length 1.8m)
     const bathEastWallSouth = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.8, 1.8), bathWallMat);
     bathEastWallSouth.position.set(-3.5, 1.55, -5.7);
     bathEastWallSouth.castShadow = true;
@@ -1271,130 +1996,280 @@ export class ApartmentBuilding {
   }
 
   // ==========================================
-  // FLOOR 2: GREY WALL RESIDENTIAL FLOOR
+  // FIRST FLOOR (LEVEL 1): PRIVATE RESIDENCE
   // ==========================================
   private buildFloor2() {
-    const f2 = this.floor2Group; const yOff = 3.2;
-    f2.add(this.createSlabWithStairwell(this.floorTileMat, 0.25, yOff + 0.12));
-    f2.add(this.createSlabWithStairwell(this.greyWallMat, 0.2, yOff + 3.1));
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0xe7edf0, roughness: 0.8, side: THREE.DoubleSide });
-    const partition = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.8, 10.5), wallMat); partition.position.set(-1.9,yOff+1.55,0.2); f2.add(partition);
-    const bedMat = new THREE.MeshStandardMaterial({color:0xf1f4f5,roughness:0.82});
-    const frameMat = new THREE.MeshStandardMaterial({color:0x9aa5ad,metalness:0.65,roughness:0.35});
-    // Reception counter and triage station.
-    const reception = new THREE.Mesh(new THREE.BoxGeometry(3.4,1.05,0.9), frameMat); reception.position.set(2.6,yOff+0.62,-4.8); f2.add(reception);
-    const receptionScreen = new THREE.Mesh(new THREE.BoxGeometry(0.9,0.55,0.08),new THREE.MeshBasicMaterial({color:0x37c9d8})); receptionScreen.position.set(2.6,yOff+1.35,-4.65); f2.add(receptionScreen);
-    // Four patient bays: bed, monitor, IV stand, oxygen cylinder per bay.
-    for(let i=0;i<4;i++){
-      const x=-5.7+(i%2)*3.0, z=-3.5+Math.floor(i/2)*5.0;
-      const bed=new THREE.Mesh(new THREE.BoxGeometry(2.15,0.22,1.0),bedMat); bed.position.set(x,yOff+0.55,z); f2.add(bed);
-      const mattress=new THREE.Mesh(new THREE.BoxGeometry(1.95,0.18,0.88),new THREE.MeshStandardMaterial({color:0xffffff})); mattress.position.set(x,yOff+0.74,z); f2.add(mattress);
-      const monitor=new THREE.Mesh(new THREE.BoxGeometry(0.65,0.58,0.18),new THREE.MeshStandardMaterial({color:0x26343b,emissive:0x063e46})); monitor.position.set(x+0.9,yOff+1.55,z-0.2); f2.add(monitor);
-      const screen=new THREE.Mesh(new THREE.PlaneGeometry(0.48,0.32),new THREE.MeshBasicMaterial({color:0x39e0a0})); screen.position.set(x+0.9,yOff+1.55,z-0.305); f2.add(screen);
-      const pole=new THREE.Mesh(new THREE.CylinderGeometry(0.035,0.035,1.65,8),frameMat); pole.position.set(x-1.0,yOff+1.15,z); f2.add(pole);
-      const bag=new THREE.Mesh(new THREE.BoxGeometry(0.22,0.35,0.16),new THREE.MeshStandardMaterial({color:0xd9f1ed,roughness:0.42,metalness:0.08})); bag.position.set(x-1.0,yOff+1.8,z); f2.add(bag);
-      const oxygen=new THREE.Mesh(new THREE.CylinderGeometry(0.18,0.18,1.05,12),new THREE.MeshStandardMaterial({color:0x4c9f77,metalness:0.55})); oxygen.position.set(x+1.25,yOff+0.75,z+0.55); f2.add(oxygen);
+    const f2 = this.floor2Group;
+    const yOff = 3.2;
+    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc8a45d, metalness: 0.85, roughness: 0.25 });
+    const creamMat = new THREE.MeshStandardMaterial({ color: 0xede7dc, roughness: 0.88 });
+    const taupeMat = new THREE.MeshStandardMaterial({ color: 0x6b6257, roughness: 0.85 });
+    const porcelainMat = new THREE.MeshStandardMaterial({ color: 0xf8f8f6, roughness: 0.16, metalness: 0.08 });
+
+    // Walnut & Travertine Floor + Limestone Ceiling
+    f2.add(this.createSlabWithStairwell(this.walnutAccentMat, 0.25, yOff + 0.12));
+    f2.add(this.createSlabWithStairwell(this.warmLimestoneMat, 0.2, yOff + 3.1));
+
+    // Interior Architectural Partition Walls (leaving Z in [-2.8, -0.8] open for West Wing & X=0 open for balconies)
+    const loungePartition = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.8, 5.2), this.warmLimestoneMat);
+    loungePartition.position.set(-1.9, yOff + 1.55, 3.6);
+    const guestSuiteWall = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.8, 0.18), this.warmLimestoneMat);
+    guestSuiteWall.position.set(1.2, yOff + 1.55, 2.2);
+    const masterBathWall = new THREE.Mesh(new THREE.BoxGeometry(4.0, 2.8, 0.18), this.travertineStoneMat);
+    masterBathWall.position.set(-5.6, yOff + 1.55, -2.9);
+    f2.add(loungePartition, guestSuiteWall, masterBathWall);
+
+    // --- MASTER BEDROOM SUITE (Northwest Core: X in [-7.6, -2.0], Z in [0.2, 6.5]) ---
+    const masterFrame = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.45, 2.9), this.walnutAccentMat);
+    masterFrame.position.set(-4.8, yOff + 0.36, 3.6);
+    masterFrame.castShadow = true;
+    const masterHeadboard = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.65, 0.18), this.walnutAccentMat);
+    masterHeadboard.position.set(-4.8, yOff + 0.98, 5.2);
+    const masterMattress = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.34, 2.6), porcelainMat);
+    masterMattress.position.set(-4.8, yOff + 0.68, 3.6);
+    const masterDuvet = new THREE.Mesh(new THREE.BoxGeometry(2.42, 0.36, 1.75), taupeMat);
+    masterDuvet.position.set(-4.8, yOff + 0.70, 3.1);
+    for (const px of [-5.45, -4.15]) {
+      const pillow = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.16, 0.56), creamMat);
+      pillow.position.set(px, yOff + 0.9, 4.6);
+      f2.add(pillow);
     }
-    // Examination tables and diagnostic equipment.
-    for(const z of [-5.8,4.2,5.8]){ // Keep clinical equipment outside the protected stairwell corridor.
-      const exam=new THREE.Mesh(new THREE.BoxGeometry(1.8,0.82,0.85),bedMat); exam.position.set(5.6,yOff+0.55,z); f2.add(exam);
-      const cabinet=new THREE.Mesh(new THREE.BoxGeometry(0.8,1.6,0.65),frameMat); cabinet.position.set(7.0,yOff+0.9,z); f2.add(cabinet);
+    for (const nx of [-6.45, -3.15]) {
+      const stand = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.58, 0.62), this.walnutAccentMat);
+      stand.position.set(nx, yOff + 0.42, 4.8);
+      const sconce = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 0.28, 12), this.warmSconceMat);
+      sconce.position.set(nx, yOff + 0.95, 4.8);
+      f2.add(stand, sconce);
     }
-    // Medicine and sterile supply cabinets along rear wall.
-    for(let i=0;i<5;i++){
-      const cab=new THREE.Mesh(new THREE.BoxGeometry(1.05,2.0,0.55),new THREE.MeshStandardMaterial({color:0xdce3e8,metalness:0.25})); cab.position.set(-5.8+i*2.6,yOff+1.15,6.0); f2.add(cab);
-      const label=new THREE.Mesh(new THREE.BoxGeometry(0.48,0.12,0.04),new THREE.MeshBasicMaterial({color:0x39b8c8})); label.position.set(-5.8+i*2.6,yOff+1.75,5.7); f2.add(label);
+    // Master Walk-in Wardrobe
+    const masterWardrobe = new THREE.Mesh(new THREE.BoxGeometry(0.85, 2.35, 2.4), this.walnutAccentMat);
+    masterWardrobe.position.set(-7.1, yOff + 1.32, 1.6);
+    const wardrobeTrim = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.1, 0.08), brassMat);
+    wardrobeTrim.position.set(-6.64, yOff + 1.32, 1.6);
+    f2.add(masterFrame, masterHeadboard, masterMattress, masterDuvet, masterWardrobe, wardrobeTrim);
+
+    // --- ATTACHED MASTER LUXURY BATHROOM (Southwest Core: X in [-7.6, -3.4], Z in [-6.5, -3.0]) ---
+    const spaFloor = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.06, 3.4), this.travertineStoneMat);
+    spaFloor.position.set(-5.5, yOff + 0.25, -4.8);
+    const spaTub = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.65, 1.95), porcelainMat);
+    spaTub.position.set(-6.4, yOff + 0.58, -5.2);
+    const spaTubWater = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.7), this.waterMat);
+    spaTubWater.rotation.x = -Math.PI / 2;
+    spaTubWater.position.set(-6.4, yOff + 0.92, -5.2);
+    const spaVanity = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.85, 0.68), this.walnutAccentMat);
+    spaVanity.position.set(-4.5, yOff + 0.65, -3.4);
+    const spaMirror = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.95, 0.04), brassMat);
+    spaMirror.position.set(-4.5, yOff + 1.78, -3.08);
+    f2.add(spaFloor, spaTub, spaTubWater, spaVanity, spaMirror);
+
+    // --- ADDITIONAL BEDROOM (Northeast Core: X in [-1.0, 4.0], Z in [2.5, 6.5]) ---
+    const addBed = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.45, 2.4), this.walnutAccentMat);
+    addBed.position.set(1.5, yOff + 0.36, 4.8);
+    const addMattress = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.3, 2.2), creamMat);
+    addMattress.position.set(1.5, yOff + 0.66, 4.8);
+    const addWardrobe = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.2, 1.8), this.walnutAccentMat);
+    addWardrobe.position.set(3.6, yOff + 1.25, 4.8);
+    f2.add(addBed, addMattress, addWardrobe);
+
+    // --- FAMILY LOUNGE (Central Core: X in [-1.5, 3.8], Z in [-4.0, +1.8]) ---
+    const familySofa = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.8, 1.15), creamMat);
+    familySofa.position.set(0.4, yOff + 0.54, -1.2);
+    const familyTable = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.38, 0.85), this.travertineStoneMat);
+    familyTable.position.set(0.4, yOff + 0.34, -2.7);
+    const mediaUnit = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.65, 2.2), this.walnutAccentMat);
+    mediaUnit.position.set(-1.55, yOff + 0.46, -1.2);
+    const loungeTv = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.1, 1.85), this.charcoalBronzeMat);
+    loungeTv.position.set(-1.72, yOff + 1.45, -1.2);
+    f2.add(familySofa, familyTable, mediaUnit, loungeTv);
+
+    // --- CANTILEVERED PANORAMIC BALCONIES (South Z = -8.1 & North Z = +8.1) ---
+    for (const bz of [-8.1, 8.1]) {
+      const balcSlab = new THREE.Mesh(new THREE.BoxGeometry(15.6, 0.24, 2.2), this.travertineStoneMat);
+      balcSlab.position.set(0, yOff + 0.12, bz);
+      balcSlab.receiveShadow = true;
+      const outerZ = bz < 0 ? -9.15 : 9.15;
+      const railGlass = new THREE.Mesh(new THREE.BoxGeometry(15.6, 1.05, 0.06), this.curtainGlassMat);
+      railGlass.position.set(0, yOff + 0.72, outerZ);
+      const railCap = new THREE.Mesh(new THREE.BoxGeometry(15.6, 0.06, 0.1), this.charcoalBronzeMat);
+      railCap.position.set(0, yOff + 1.26, outerZ);
+      for (const lx of [-4.5, 4.5]) {
+        const chair = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.65, 0.95), creamMat);
+        chair.position.set(lx, yOff + 0.48, bz);
+        f2.add(chair);
+      }
+      f2.add(balcSlab, railGlass, railCap);
     }
-    // Enclosed operating room on the east end with operating table and surgical lights.
-    const opWall=new THREE.Mesh(new THREE.BoxGeometry(0.14,2.8,4.8),wallMat); opWall.position.set(3.7,yOff+1.55,2.0); f2.add(opWall);
-    const opTable=new THREE.Mesh(new THREE.BoxGeometry(2.0,0.28,1.0),frameMat); opTable.position.set(5.5,yOff+0.72,2.0); f2.add(opTable);
-    const lamp=new THREE.Mesh(new THREE.CylinderGeometry(0.55,0.7,0.12,16),new THREE.MeshStandardMaterial({color:0xf5f7f8,emissive:0x344044})); lamp.position.set(5.5,yOff+2.65,2.0); f2.add(lamp);
-    const diagnostic=new THREE.Mesh(new THREE.BoxGeometry(1.0,1.35,0.8),frameMat); diagnostic.position.set(2.2,yOff+0.95,-1.0); f2.add(diagnostic); // Relocated west of the stairwell.
-    const emergencyBox=new THREE.Mesh(new THREE.BoxGeometry(1.5,0.8,0.7),new THREE.MeshStandardMaterial({color:0xb52e32})); emergencyBox.position.set(0.0,yOff+0.55,-5.4); f2.add(emergencyBox);
-    const light=new THREE.PointLight(0xd8f5ff,2.0,18,1.3); light.position.set(0,yOff+2.65,0); this.floorLights.push(light); f2.add(light);
+
+    const light = new THREE.PointLight(0xffe9cc, 1.9, 18, 1.3);
+    light.position.set(-0.5, yOff + 2.7, 0);
+    this.floorLights.push(light);
+    f2.add(light);
   }
 
   // ==========================================
-  // FLOOR 3: FICTIONAL 100-ITEM GAME ARMORY
+  // SECOND FLOOR (LEVEL 2): MEDICAL & SURVIVAL
   // ==========================================
   private buildFloor3() {
     const f3 = this.floor3Group;
     const yOff = 6.4;
+    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc8a45d, metalness: 0.85, roughness: 0.25 });
+    const bedMat = new THREE.MeshStandardMaterial({ color: 0xf1f4f5, roughness: 0.78 });
+    const frameMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.65, roughness: 0.35 });
+    const shelterMat = new THREE.MeshStandardMaterial({ color: 0x2a313b, metalness: 0.82, roughness: 0.32 });
 
-    // Floor Slab with stairwell cutout
-    const floorSlab = this.createSlabWithStairwell(this.metalTrimMat, 0.25, yOff + 0.12);
-    f3.add(floorSlab);
+    // Clean Terrazzo/Limestone Floor + Ceiling
+    f3.add(this.createSlabWithStairwell(this.warmLimestoneMat, 0.25, yOff + 0.12));
+    f3.add(this.createSlabWithStairwell(this.warmLimestoneMat, 0.2, yOff + 3.1));
 
-    // Ceiling with stairwell cutout
-    const ceiling = this.createSlabWithStairwell(this.metalTrimMat, 0.2, yOff + 3.1);
-    f3.add(ceiling);
+    // Glass & Bronze Divider separating Medical Wing (West) from Survival Vault & Command (East)
+    const divider = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.85, 6.2), this.charcoalBronzeMat);
+    divider.position.set(-1.5, yOff + 1.55, 2.9);
+    const dividerGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.2, 5.8), this.curtainGlassMat);
+    dividerGlass.position.set(-1.5, yOff + 1.6, 2.9);
+    f3.add(divider, dividerGlass);
 
-    // High-tech Secure Armory Room Walls (Dark graphite with cyan indicator strips)
-    const divider = new THREE.Mesh(new THREE.BoxGeometry(0.25, 2.9, 10.0), this.armoryWallMat);
-    divider.position.set(-1.5, yOff + 1.6, 0);
-    f3.add(divider);
+    // --- 1. MEDICAL CENTRE RECEPTION & TRIAGE (West-South: -2.8, -5.2) ---
+    const reception = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.05, 0.88), this.travertineStoneMat);
+    reception.position.set(-2.8, yOff + 0.62, -5.2);
+    const receptionScreen = new THREE.Mesh(
+      new THREE.BoxGeometry(0.95, 0.55, 0.08),
+      new THREE.MeshBasicMaterial({ color: 0x37c9d8 })
+    );
+    receptionScreen.position.set(-2.8, yOff + 1.38, -5.05);
+    f3.add(reception, receptionScreen);
 
-    // Cyan Neon Accent Lines
-    const stripMat = new THREE.MeshBasicMaterial({ color: 0x00d2d3 });
-    const strip1 = new THREE.Mesh(new THREE.BoxGeometry(0.04, 0.1, 9.8), stripMat);
-    strip1.position.set(-1.35, yOff + 2.2, 0);
-    f3.add(strip1);
-
-    // Weapon Storage Lockers along West Wall
-    for (let z = -4.5; z <= 4.5; z += 2.2) {
-      const locker = new THREE.Mesh(
-        new THREE.BoxGeometry(1.2, 2.4, 1.8),
-        new THREE.MeshStandardMaterial({ color: 0x2e3440, metalness: 0.85, roughness: 0.35 })
+    // --- 2. FOUR HOSPITAL PATIENT BAYS (West Wall, leaving Z = -1.8 open for West Wing Trauma Annex) ---
+    const bayPositions: Array<[number, number]> = [
+      [-6.0, -4.2],
+      [-6.0, 0.8],
+      [-6.0, 3.4],
+      [-6.0, 5.8],
+    ];
+    for (const [bx, bz] of bayPositions) {
+      const bed = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.22, 1.0), bedMat);
+      bed.position.set(bx, yOff + 0.55, bz);
+      const mattress = new THREE.Mesh(
+        new THREE.BoxGeometry(1.92, 0.18, 0.88),
+        new THREE.MeshStandardMaterial({ color: 0xffffff })
       );
-      locker.position.set(-6.5, yOff + 1.35, z);
-      f3.add(locker);
+      mattress.position.set(bx, yOff + 0.74, bz);
+      const monitor = new THREE.Mesh(
+        new THREE.BoxGeometry(0.6, 0.52, 0.16),
+        new THREE.MeshStandardMaterial({ color: 0x1e293b, emissive: 0x063e46 })
+      );
+      monitor.position.set(bx - 1.15, yOff + 1.5, bz);
+      const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.44, 0.3), new THREE.MeshBasicMaterial({ color: 0x39e0a0 }));
+      screen.rotation.y = Math.PI / 2;
+      screen.position.set(bx - 1.06, yOff + 1.5, bz);
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.65, 8), frameMat);
+      pole.position.set(bx + 0.95, yOff + 1.15, bz - 0.55);
+      const oxygen = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.16, 0.16, 1.02, 12),
+        new THREE.MeshStandardMaterial({ color: 0x4c9f77, metalness: 0.55 })
+      );
+      oxygen.position.set(bx - 1.2, yOff + 0.75, bz + 0.52);
+      f3.add(bed, mattress, monitor, screen, pole, oxygen);
+    }
 
-      // Weapon rack display inside
+    // Emergency Treatment / Operating Station & Medical Supply Cabinets
+    const examTable = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.72, 0.95), bedMat);
+    examTable.position.set(-3.1, yOff + 0.5, 3.6);
+    const surgLamp = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.5, 0.65, 0.12, 16),
+      new THREE.MeshStandardMaterial({ color: 0xf8fafc, emissive: 0x38bdf8, emissiveIntensity: 0.35 })
+    );
+    surgLamp.position.set(-3.1, yOff + 2.65, 3.6);
+    f3.add(examTable, surgLamp);
+
+    for (let i = 0; i < 3; i++) {
+      const medCab = new THREE.Mesh(
+        new THREE.BoxGeometry(1.05, 2.0, 0.55),
+        new THREE.MeshStandardMaterial({ color: 0xdce3e8, metalness: 0.25 })
+      );
+      medCab.position.set(-5.8 + i * 1.4, yOff + 1.15, 6.2);
+      f3.add(medCab);
+    }
+
+    // --- 3. SECURITY MONITORING & 5KM RADAR COMMAND STATION (Relocated from Ground Lobby) ---
+    this.commandConsoleGroup = new THREE.Group();
+    this.commandConsoleGroup.name = 'floor2_security_monitoring_centre';
+    this.commandConsoleGroup.position.set(0.3, yOff, -4.2);
+
+    const cmdDesk = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.85, 0.95), this.charcoalBronzeMat);
+    cmdDesk.position.set(0, 0.45, 0);
+    cmdDesk.castShadow = true;
+
+    const cmdKeyboard = new THREE.Mesh(
+      new THREE.BoxGeometry(1.9, 0.04, 0.42),
+      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.7 })
+    );
+    cmdKeyboard.position.set(0, 0.89, 0.18);
+    for (let i = 0; i < 4; i++) {
+      const led = new THREE.Mesh(
+        new THREE.SphereGeometry(0.032, 8, 8),
+        new THREE.MeshBasicMaterial({ color: [0x10b981, 0x06b6d4, 0xf59e0b, 0xef4444][i] })
+      );
+      led.position.set(-0.6 + i * 0.4, 0.92, 0.22);
+      this.commandConsoleGroup.add(led);
+    }
+
+    const screenFrame = new THREE.Mesh(new THREE.BoxGeometry(2.9, 1.65, 0.08), this.charcoalBronzeMat);
+    screenFrame.position.set(0, 1.75, -0.38);
+    const screenMat = new THREE.MeshBasicMaterial({ map: this.securityScreenTexture });
+    this.securityScreenMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 1.56), screenMat);
+    this.securityScreenMesh.position.set(0, 1.75, -0.33);
+
+    const stool = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.55, 12), this.charcoalBronzeMat);
+    stool.position.set(0, 0.28, 0.85);
+    this.commandConsoleGroup.add(cmdDesk, cmdKeyboard, screenFrame, this.securityScreenMesh, stool);
+    f3.add(this.commandConsoleGroup);
+
+    // --- 4. SURVIVAL EQUIPMENT, ARMORY VAULT & SECURE SURVIVAL SHELTER (East Core) ---
+    // Reinforced Biometric Vault & Emergency Rations/Supply Lockers along North Wall
+    const vault = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.65, 1.1), shelterMat);
+    vault.position.set(0.2, yOff + 1.45, 5.8);
+    const vaultDial = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.08, 16), brassMat);
+    vaultDial.rotation.x = Math.PI / 2;
+    vaultDial.position.set(0.2, yOff + 1.5, 5.22);
+    f3.add(vault, vaultDial);
+
+    for (let x = 2.4; x <= 6.4; x += 2.0) {
+      const locker = new THREE.Mesh(new THREE.BoxGeometry(1.5, 2.3, 0.95), shelterMat);
+      locker.position.set(x, yOff + 1.3, 5.8);
       const rackGun = new THREE.Mesh(
-        new THREE.BoxGeometry(0.12, 0.35, 1.2),
+        new THREE.BoxGeometry(1.1, 0.28, 0.12),
         new THREE.MeshStandardMaterial({ color: 0x5e81ac, metalness: 0.8 })
       );
-      rackGun.position.set(-5.8, yOff + 1.4, z);
-      f3.add(rackGun);
+      rackGun.position.set(x, yOff + 1.45, 5.25);
+      f3.add(locker, rackGun);
     }
 
-    // Ammunition Crates & Heavy Ordnance Shelves along North Wall
-    for (let x = -4.5; x <= 2.5; x += 2.4) {
-      const crate = new THREE.Mesh(
-        new THREE.BoxGeometry(1.6, 0.9, 1.1),
-        new THREE.MeshStandardMaterial({ color: 0x434c5e, metalness: 0.6, roughness: 0.5 })
+    // Emergency Supply Crates & Tactical Armor Stands
+    for (let i = 0; i < 3; i++) {
+      const armorTorso = new THREE.Mesh(
+        new THREE.BoxGeometry(0.7, 0.92, 0.36),
+        new THREE.MeshStandardMaterial({ color: 0x4c5a45, metalness: 0.25, roughness: 0.8 })
       );
-      crate.position.set(x, yOff + 0.6, 5.8);
-      f3.add(crate);
+      armorTorso.position.set(2.2 + i * 1.55, yOff + 1.15, 3.8);
+      const helmet = new THREE.Mesh(
+        new THREE.SphereGeometry(0.26, 12, 8),
+        new THREE.MeshStandardMaterial({ color: 0x56614c, metalness: 0.35 })
+      );
+      helmet.position.set(2.2 + i * 1.55, yOff + 1.88, 3.8);
+      f3.add(armorTorso, helmet);
+    }
+    for (let i = 0; i < 3; i++) {
+      const supplyCrate = new THREE.Mesh(
+        new THREE.BoxGeometry(1.0, 0.85, 0.95),
+        new THREE.MeshStandardMaterial({ color: 0x4b5563, metalness: 0.55, roughness: 0.45 })
+      );
+      supplyCrate.position.set(5.8, yOff + 0.58, -5.8 + i * 1.2);
+      f3.add(supplyCrate);
     }
 
-    // Secure equipment cabinets, armor storage and tactical kit displays.
-    const gearMat = new THREE.MeshStandardMaterial({ color: 0x39434d, metalness: 0.7, roughness: 0.38 });
-    for (let i=0;i<4;i++) {
-      const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.0,2.35,0.85),gearMat);
-      cabinet.position.set(1.0+i*1.45,yOff+1.3,-5.8); f3.add(cabinet);
-      const latch = new THREE.Mesh(new THREE.BoxGeometry(0.08,0.5,0.05),this.metalTrimMat);
-      latch.position.set(1.38+i*1.45,yOff+1.3,-5.34); f3.add(latch);
-    }
-    for (let i=0;i<3;i++) {
-      const armorTorso = new THREE.Mesh(new THREE.BoxGeometry(0.72,0.95,0.38),new THREE.MeshStandardMaterial({color:0x4c5a45,metalness:0.25,roughness:0.8}));
-      armorTorso.position.set(2.2+i*1.55,yOff+1.15,4.2); f3.add(armorTorso);
-      const helmet = new THREE.Mesh(new THREE.SphereGeometry(0.28,12,8),new THREE.MeshStandardMaterial({color:0x56614c,metalness:0.35}));
-      helmet.position.set(2.2+i*1.55,yOff+1.9,4.2); f3.add(helmet);
-      const pack = new THREE.Mesh(new THREE.BoxGeometry(0.5,0.65,0.28),gearMat); pack.position.set(2.2+i*1.55,yOff+0.95,4.52); f3.add(pack);
-    }
-    const vault = new THREE.Mesh(new THREE.BoxGeometry(2.0,2.65,1.1),new THREE.MeshStandardMaterial({color:0x171c22,metalness:0.9,roughness:0.28}));
-    vault.position.set(-3.8,yOff+1.45,-5.7); f3.add(vault);
-    const vaultDial = new THREE.Mesh(new THREE.CylinderGeometry(0.22,0.22,0.08,16),new THREE.MeshStandardMaterial({color:0xd4af37,metalness:0.9}));
-    vaultDial.rotation.x=Math.PI/2; vaultDial.position.set(-3.8,yOff+1.5,-5.1); f3.add(vaultDial);
-
-    // Interactive Armory Console / Master Terminal (Center East)
-    const consolePedestal = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.4, 0.6, 1.1, 8),
-      this.metalTrimMat
-    );
+    // Interactive Armory Master Terminal (Center East: X = 2.0, Z = 0.0)
+    const consolePedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, 1.1, 8), this.charcoalBronzeMat);
     consolePedestal.position.set(2.0, yOff + 0.65, 0.0);
-
     const consoleScreen = new THREE.Mesh(
       new THREE.BoxGeometry(1.4, 0.8, 0.1),
       new THREE.MeshBasicMaterial({ color: 0x00e5ff })
@@ -1403,19 +2278,24 @@ export class ApartmentBuilding {
     consoleScreen.position.set(2.0, yOff + 1.45, 0.0);
     f3.add(consolePedestal, consoleScreen);
 
-    // High-tech Armory Spotlights
-    const armoryLight1 = new THREE.PointLight(0x00e5ff, 2.2, 14, 1.4);
-    armoryLight1.position.set(-4.0, yOff + 2.7, 0);
-    const armoryLight2 = new THREE.PointLight(0xffffff, 1.8, 14, 1.3);
-    armoryLight2.position.set(2.0, yOff + 2.7, 0);
-    this.floorLights.push(armoryLight1, armoryLight2);
-    f3.add(armoryLight1, armoryLight2);
+    // Cantilevered South & North Balconies on Floor 2
+    for (const bz of [-8.1, 8.1]) {
+      const balcSlab = new THREE.Mesh(new THREE.BoxGeometry(15.6, 0.24, 2.2), this.warmLimestoneMat);
+      balcSlab.position.set(0, yOff + 0.12, bz);
+      const outerZ = bz < 0 ? -9.15 : 9.15;
+      const railGlass = new THREE.Mesh(new THREE.BoxGeometry(15.6, 1.05, 0.06), this.curtainGlassMat);
+      railGlass.position.set(0, yOff + 0.72, outerZ);
+      const railCap = new THREE.Mesh(new THREE.BoxGeometry(15.6, 0.06, 0.1), this.charcoalBronzeMat);
+      railCap.position.set(0, yOff + 1.26, outerZ);
+      f3.add(balcSlab, railGlass, railCap);
+    }
 
-    // Floor 3 Signboard
-    const plaque = new THREE.Mesh(new THREE.PlaneGeometry(2.4, 0.7), new THREE.MeshBasicMaterial({ color: 0x111111 }));
-    plaque.position.set(4.4, yOff + 1.8, -3.8);
-    plaque.rotation.y = -Math.PI / 2;
-    f3.add(plaque);
+    const medLight = new THREE.PointLight(0xeef7ff, 2.0, 16, 1.3);
+    medLight.position.set(-4.2, yOff + 2.7, 0);
+    const survLight = new THREE.PointLight(0xffe9cc, 1.8, 16, 1.3);
+    survLight.position.set(2.2, yOff + 2.7, 0);
+    this.floorLights.push(medLight, survLight);
+    f3.add(medLight, survLight);
   }
 
   // ==========================================
@@ -1934,369 +2814,345 @@ export class ApartmentBuilding {
   }
 
   // ==========================================
-  // EXTERIOR FACADE & DIRECTIONAL CUTAWAY
+  // OPTION A: NEO-TACTICAL GLASS & GRAPHITE EXTERIOR FACADE
   // ==========================================
   private buildExteriorFacade() {
     const ext = this.exteriorWalls;
+    // Luxury fortress envelope: keep the reinforced frame opaque, while the
+    // infill panels become low-iron panoramic glazing. The physics perimeter
+    // remains registered separately, so this visual-only material change does
+    // not open holes in the apartment or alter player collision.
+    const neoPanelMat = new THREE.MeshPhysicalMaterial({
+      color: 0x8fc8d8,
+      roughness: 0.12,
+      metalness: 0.18,
+      transmission: 0.18,
+      transparent: true,
+      opacity: 0.24,
+      thickness: 0.18,
+      ior: 1.46,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+      envMapIntensity: 1.35,
+    });
+    const cyanAccentMat = new THREE.MeshBasicMaterial({ color: 0x5be7ff });
+    const windowFrameMat = new THREE.MeshStandardMaterial({ color: 0x151e28, metalness: 0.8, roughness: 0.3 });
+    const windowGlassMat = new THREE.MeshStandardMaterial({
+      color: 0x5cc4df,
+      metalness: 0.25,
+      roughness: 0.12,
+      transparent: true,
+      opacity: 0.4,
+      side: THREE.DoubleSide,
+    });
 
-    // Corner Pillars & Cornices for exterior architectural look
+    // Corner Pillars & Neo-Tactical Cyan Cornices for 4 enclosed floors
     for (const [cx, cz] of [[-7.9, -6.9], [7.9, -6.9], [-7.9, 6.9], [7.9, 6.9]]) {
-      const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.8, 14.2, 0.8), this.metalTrimMat);
-      pillar.position.set(cx, 7.1, cz);
+      const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.8, 13.0, 0.8), this.metalTrimMat);
+      pillar.position.set(cx, 6.5, cz);
       pillar.castShadow = true;
       ext.add(pillar);
     }
 
-    // Floor Decorative Cornices between stories
     for (let f = 1; f <= 4; f++) {
-      const cornice = new THREE.Mesh(new THREE.BoxGeometry(16.5, 0.35, 14.5), this.metalTrimMat);
+      const cornice = new THREE.Mesh(new THREE.BoxGeometry(16.4, 0.28, 14.4), this.metalTrimMat);
       cornice.position.set(0, f * 3.2, 0);
-      ext.add(cornice);
+      const ledN = new THREE.Mesh(new THREE.BoxGeometry(16.5, 0.06, 0.08), cyanAccentMat);
+      ledN.position.set(0, f * 3.2, 7.22);
+      const ledS = ledN.clone();
+      ledS.position.z = -7.22;
+      ext.add(cornice, ledN, ledS);
     }
 
     // 1. North Wall (Back) with 2.4m central doorway for rear sliding patio doors
     this.northWallMesh = new THREE.Group();
-    // Floor 1 Left wing
-    const northWallF1Left = new THREE.Mesh(new THREE.BoxGeometry(6.8, 3.2, 0.5), this.brickFacadeMat);
+    const northWallF1Left = new THREE.Mesh(new THREE.BoxGeometry(6.8, 3.2, 0.5), neoPanelMat);
     northWallF1Left.position.set(-4.6, 1.6, 6.8);
     northWallF1Left.castShadow = true;
-
-    // Floor 1 Right wing
-    const northWallF1Right = new THREE.Mesh(new THREE.BoxGeometry(6.8, 3.2, 0.5), this.brickFacadeMat);
+    const northWallF1Right = new THREE.Mesh(new THREE.BoxGeometry(6.8, 3.2, 0.5), neoPanelMat);
     northWallF1Right.position.set(4.6, 1.6, 6.8);
     northWallF1Right.castShadow = true;
-
-    // Floor 1 Door Lintel above patio doorway
-    const northWallF1Lintel = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.6, 0.5), this.brickFacadeMat);
+    const northWallF1Lintel = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.6, 0.5), neoPanelMat);
     northWallF1Lintel.position.set(0, 2.9, 6.8);
-
-    // Floors 2-4 Upper North Wall
-    const northWallUpper = new THREE.Mesh(new THREE.BoxGeometry(16.0, 9.6, 0.5), this.brickFacadeMat);
+    const northWallUpper = new THREE.Mesh(new THREE.BoxGeometry(16.0, 9.6, 0.5), neoPanelMat);
     northWallUpper.position.set(0, 8.0, 6.8);
     northWallUpper.castShadow = true;
-
     this.northWallMesh.add(northWallF1Left, northWallF1Right, northWallF1Lintel, northWallUpper);
     ext.add(this.northWallMesh);
 
     // 2. East Wall (Stairwell Bay)
     this.eastWallMesh = new THREE.Group();
-    const eastWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, 12.8, 14.0), this.brickFacadeMat);
+    const eastWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, 12.8, 14.0), neoPanelMat);
     eastWall.position.set(7.8, 6.4, 0);
     eastWall.castShadow = true;
     this.eastWallMesh.add(eastWall);
     ext.add(this.eastWallMesh);
 
-    // 3. West Wall (Bedrooms & Armory Display)
+    // 3. West Wall — cut a 2.0 m wide Neo-Tactical passage at Z = -1.8 (Z in [-2.8, -0.8]) on Floors 1..4 into West Wing
     this.westWallMesh = new THREE.Group();
-    const westWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, 12.8, 14.0), this.brickFacadeMat);
-    westWall.position.set(-7.8, 6.4, 0);
-    westWall.castShadow = true;
-    this.westWallMesh.add(westWall);
+    const westWallSouth = new THREE.Mesh(new THREE.BoxGeometry(0.5, 12.8, 4.2), neoPanelMat);
+    westWallSouth.position.set(-7.8, 6.4, -4.9);
+    westWallSouth.castShadow = true;
+    const westWallNorth = new THREE.Mesh(new THREE.BoxGeometry(0.5, 12.8, 7.8), neoPanelMat);
+    westWallNorth.position.set(-7.8, 6.4, 3.1);
+    westWallNorth.castShadow = true;
+    this.westWallMesh.add(westWallSouth, westWallNorth);
+    for (let fl = 0; fl < 4; fl++) {
+      const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.65, 2.0), windowFrameMat);
+      lintel.position.set(-7.8, fl * 3.2 + 2.88, -1.8);
+      this.westWallMesh.add(lintel);
+    }
     ext.add(this.westWallMesh);
 
-    // 4. South Wall (Front Entrance Facade with door opening)
+    // 4. South Wall (Front Entrance Facade with Neo-Tactical Canopy)
     this.southWallMesh = new THREE.Group();
-    const southWallLeft = new THREE.Mesh(new THREE.BoxGeometry(7.0, 12.8, 0.5), this.brickFacadeMat);
+    const southWallLeft = new THREE.Mesh(new THREE.BoxGeometry(7.0, 12.8, 0.5), neoPanelMat);
     southWallLeft.position.set(-4.5, 6.4, -6.8);
     southWallLeft.castShadow = true;
-
-    const southWallRight = new THREE.Mesh(new THREE.BoxGeometry(7.0, 12.8, 0.5), this.brickFacadeMat);
+    const southWallRight = new THREE.Mesh(new THREE.BoxGeometry(7.0, 12.8, 0.5), neoPanelMat);
     southWallRight.position.set(4.5, 6.4, -6.8);
     southWallRight.castShadow = true;
-
-    const southWallTop = new THREE.Mesh(new THREE.BoxGeometry(2.0, 9.6, 0.5), this.brickFacadeMat);
+    const southWallTop = new THREE.Mesh(new THREE.BoxGeometry(2.0, 9.6, 0.5), neoPanelMat);
     southWallTop.position.set(0, 8.0, -6.8);
-
-    this.southWallMesh.add(southWallLeft, southWallRight, southWallTop);
+    const frontCanopy = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.18, 1.5), windowFrameMat);
+    frontCanopy.position.set(0, 3.08, -7.65);
+    const frontCanopyLed = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.06, 0.08), cyanAccentMat);
+    frontCanopyLed.position.set(0, 3.08, -8.4);
+    this.southWallMesh.add(southWallLeft, southWallRight, southWallTop, frontCanopy, frontCanopyLed);
     ext.add(this.southWallMesh);
 
-    // Exterior architecture is intentionally four enclosed storeys plus an
-    // unmistakably open fifth-floor rooftop deck. The roof pool/parapet lives
-    // in floor5Group at y=12.8; tall facade walls must not hide it from outside.
-    const windowFrameMat = new THREE.MeshStandardMaterial({ color: 0x252d34, metalness: 0.65, roughness: 0.35 });
-    const windowGlassMat = new THREE.MeshStandardMaterial({ color: 0x8ed8e8, metalness: 0.35, roughness: 0.12, transparent: true, opacity: 0.48, side: THREE.DoubleSide });
+    // Continuous dark-metal curtain-wall mullions visually tie the individual
+    // panes into a floor-to-ceiling glass facade while retaining the existing
+    // structural concrete/metal corner frame and all original room geometry.
+    const curtainMullionMat = new THREE.MeshStandardMaterial({ color: 0x202a34, metalness: 0.86, roughness: 0.24 });
     for (let level = 0; level < 4; level++) {
       const y = level * 3.2 + 1.75;
-      // Two front-facing window bays per enclosed floor, positioned clear of the entrance.
       for (const x of [-4.5, 4.5]) {
-        const pane = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.35, 0.07), windowGlassMat);
+        const pane = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.65, 0.07), windowGlassMat);
         pane.position.set(x, y, -7.075);
-        const frame = new THREE.Mesh(new THREE.BoxGeometry(2.18, 1.5, 0.12), windowFrameMat);
+        const frame = new THREE.Mesh(new THREE.BoxGeometry(2.58, 1.82, 0.12), windowFrameMat);
         frame.position.set(x, y, -7.12);
-        const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.35, 0.14), windowFrameMat);
+        const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.65, 0.14), windowFrameMat);
         mullion.position.set(x, y, -7.13);
         this.southWallMesh.add(frame, pane, mullion);
       }
-      // Repeated side windows make all four enclosed levels readable in silhouette.
-      for (const side of [-1, 1]) {
-        for (const z of [-4.2, 0, 4.2]) {
-          const pane = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.25, 1.8), windowGlassMat);
-          pane.position.set(side * 8.075, y, z);
-          const frame = new THREE.Mesh(new THREE.BoxGeometry(0.12, 1.42, 1.94), windowFrameMat);
-          frame.position.set(side * 8.12, y, z);
-          (side < 0 ? this.westWallMesh : this.eastWallMesh).add(frame, pane);
+      for (const z of [-4.2, 0, 4.2]) {
+        const paneN = new THREE.Mesh(new THREE.BoxGeometry(2.1, 1.55, 0.07), windowGlassMat);
+        paneN.position.set(z, y, 7.075);
+        const frameN = new THREE.Mesh(new THREE.BoxGeometry(2.26, 1.72, 0.12), windowFrameMat);
+        frameN.position.set(z, y, 7.12);
+        this.northWallMesh.add(frameN, paneN);
+      }
+      // Fine vertical mullions at each bay edge create a premium curtain-wall rhythm.
+      for (const x of [-7.45, -5.3, -2.65, 0, 2.65, 5.3, 7.45]) {
+        const southMullion = new THREE.Mesh(new THREE.BoxGeometry(0.075, 2.75, 0.16), curtainMullionMat);
+        southMullion.position.set(x, level * 3.2 + 1.6, -7.13);
+        const northMullion = southMullion.clone();
+        northMullion.position.z = 7.13;
+        this.southWallMesh.add(southMullion);
+        this.northWallMesh.add(northMullion);
+      }
+    }
+
+    // Premium residential finish package. These are facade-only visual details:
+    // they sit outside the existing envelope and do not replace rooms, doors,
+    // stairs, interactive objects, or the established physics perimeter.
+    const stoneCladdingMat = new THREE.MeshStandardMaterial({
+      color: 0xd7cbbb,
+      roughness: 0.72,
+      metalness: 0.04,
+    });
+    const bronzeFinMat = new THREE.MeshStandardMaterial({
+      color: 0x34343a,
+      roughness: 0.3,
+      metalness: 0.82,
+    });
+    const planterMat = new THREE.MeshStandardMaterial({ color: 0x343b3d, roughness: 0.78 });
+    const foliageMat = new THREE.MeshStandardMaterial({ color: 0x47764b, roughness: 0.92 });
+    const warmLightMat = new THREE.MeshStandardMaterial({
+      color: 0xffe4b8,
+      emissive: 0xffb65d,
+      emissiveIntensity: 1.15,
+      roughness: 0.3,
+    });
+
+    // Travertine feature piers and recessed bronze fins give the glass facade
+    // a clear structural rhythm without changing the building footprint.
+    for (const x of [-7.35, 7.35]) {
+      const pier = new THREE.Mesh(new THREE.BoxGeometry(0.42, 12.55, 0.22), stoneCladdingMat);
+      pier.position.set(x, 6.38, -7.17);
+      pier.castShadow = true;
+      pier.receiveShadow = true;
+      this.southWallMesh.add(pier);
+      for (let fin = 0; fin < 4; fin++) {
+        const verticalFin = new THREE.Mesh(new THREE.BoxGeometry(0.055, 2.55, 0.18), bronzeFinMat);
+        verticalFin.position.set(x + (x < 0 ? 0.34 : -0.34), 1.6 + fin * 3.2, -7.23);
+        this.southWallMesh.add(verticalFin);
+      }
+    }
+
+    // Slim planted facade ledges on upper levels. They are kept above the
+    // ground-floor entrance and clear of the pre-existing balcony decks.
+    for (const level of [2, 3]) {
+      const y = level * 3.2 - 0.22;
+      for (const z of [-7.58, 7.58]) {
+        const trough = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.38, 0.62), planterMat);
+        trough.position.set(0, y, z);
+        trough.castShadow = true;
+        trough.receiveShadow = true;
+        ext.add(trough);
+        for (let plant = 0; plant < 5; plant++) {
+          const shrub = new THREE.Mesh(new THREE.SphereGeometry(0.22, 9, 7), foliageMat);
+          shrub.position.set(-1.65 + plant * 0.82, y + 0.34, z);
+          shrub.scale.set(1.15, 0.8, 0.9);
+          shrub.castShadow = true;
+          ext.add(shrub);
         }
       }
     }
+
+    // Warm architectural sconces at the front corners and discreet security
+    // cameras under the upper overhangs reinforce the luxury-fortress theme.
+    for (const x of [-7.35, -2.2, 2.2, 7.35]) {
+      for (const level of [0, 1, 2, 3]) {
+        const y = level * 3.2 + 2.55;
+        const sconce = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.48, 0.12), warmLightMat);
+        sconce.position.set(x, y, -7.34);
+        this.southWallMesh.add(sconce);
+        if (level === 0 || level === 2) {
+          const glow = new THREE.PointLight(0xffc987, 0.32, 4.2, 2);
+          glow.position.set(x, y - 0.18, -7.55);
+          this.southWallMesh.add(glow);
+        }
+      }
+    }
+    for (const x of [-7.0, 7.0]) {
+      const cameraHousing = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.12, 0.28), bronzeFinMat);
+      cameraHousing.position.set(x, 12.35, -7.42);
+      cameraHousing.rotation.x = -0.18;
+      this.southWallMesh.add(cameraHousing);
+      const lens = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 8), cyanAccentMat);
+      lens.position.set(x, 12.31, -7.56);
+      this.southWallMesh.add(lens);
+    }
+
+    // A restrained stone portal frames the existing front door without
+    // narrowing its opening or moving the original entrance interaction.
+    for (const x of [-1.55, 1.55]) {
+      const portal = new THREE.Mesh(new THREE.BoxGeometry(0.24, 3.05, 0.34), stoneCladdingMat);
+      portal.position.set(x, 1.55, -7.2);
+      portal.castShadow = true;
+      this.southWallMesh.add(portal);
+    }
+    const portalHeader = new THREE.Mesh(new THREE.BoxGeometry(3.34, 0.22, 0.42), stoneCladdingMat);
+    portalHeader.position.set(0, 3.08, -7.2);
+    this.southWallMesh.add(portalHeader);
   }
 
   // ==========================================
   // ENCLOSED RESIDENTIAL PROPERTY + BACKYARD POOL
   // ==========================================
+
   private buildEnclosedProperty() {
     const property = new THREE.Group();
-    property.name = 'apartment_enclosed_residential_compound';
+    property.name = 'last_sanctuary_rebirth_expanded_compound';
     this.group.add(property);
-
-    const wallMat = new THREE.MeshStandardMaterial({ color: 0x777d82, roughness: 0.88 });
-    const capMat = new THREE.MeshStandardMaterial({ color: 0x343a40, roughness: 0.55, metalness: 0.35 });
-    const pavingMat = new THREE.MeshStandardMaterial({ color: 0xaaa9a2, roughness: 0.92 });
-    const grassMat = new THREE.MeshStandardMaterial({ color: 0x496b3b, roughness: 1 });
-    const gateMat = new THREE.MeshStandardMaterial({ color: 0x202a32, metalness: 0.78, roughness: 0.32 });
-    const waterMat = new THREE.MeshStandardMaterial({ color: 0x16a9c7, roughness: 0.08, metalness: 0.12, transparent: true, opacity: 0.82 });
-
-    // Yard is a visual surface only; terrain remains the authoritative ground collider.
-    const lawn = new THREE.Mesh(new THREE.PlaneGeometry(37, 48), grassMat);
-    lawn.rotation.x = -Math.PI / 2;
-    lawn.position.set(0, 0.025, 2.5);
-    lawn.receiveShadow = true;
-    property.add(lawn);
-
-    const path = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.08, 17), pavingMat);
-    path.position.set(0, 0.09, -13.0);
-    path.receiveShadow = true;
-    property.add(path);
-
-    const wallH = 3.8;
-    const wallT = 0.65;
-    const wallY = wallH / 2;
+    const wallMat = new THREE.MeshStandardMaterial({ color: 0x252d36, roughness: 0.72, metalness: 0.42 });
+    const trimMat = new THREE.MeshStandardMaterial({ color: 0x9aa8b5, roughness: 0.38, metalness: 0.75 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x111923, roughness: 0.3, metalness: 0.82 });
+    const cyanMat = new THREE.MeshStandardMaterial({ color: 0x7de8ff, emissive: 0x087da8, emissiveIntensity: 1.0 });
+    const grassMat = new THREE.MeshStandardMaterial({ color: 0x466c3e, roughness: 1 });
+    const roadMat = new THREE.MeshStandardMaterial({ color: 0x252b31, roughness: 0.96 });
+    const pathMat = new THREE.MeshStandardMaterial({ color: 0x7b858d, roughness: 0.86 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x62b8d2, roughness: 0.15, metalness: 0.18, transparent: true, opacity: 0.42 });
+    // Former enclosure: 44 x 57.5 m (2,530 m²).
+    // Expanded 5x enclosure: 100 x 126.5 m (12,650 m² exact) in World X: [-108, -8], Z: [-37.5, 89.0].
+    // Local bounds relative to Building 1 origin (-26, 0, 38): X in [-82, +18], Z in [-75.5, +51.0].
+    const minX = -82, maxX = 18, southZ = -75.5, northZ = 51.0, wallH = 6, wallT = 0.9;
     const addWall = (name: string, x: number, z: number, w: number, d: number) => {
-      const mesh = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, d), wallMat);
-      mesh.name = name;
-      mesh.position.set(x, wallY, z);
-      mesh.castShadow = true;
-      mesh.receiveShadow = true;
-      property.add(mesh);
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.12, 0.22, d + 0.12), capMat);
-      cap.position.set(x, wallH + 0.1, z);
-      property.add(cap);
+      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, wallH, d), wallMat); wall.name = name; wall.position.set(x, wallH / 2, z); wall.castShadow = true; wall.receiveShadow = true; property.add(wall);
+      const cap = new THREE.Mesh(new THREE.BoxGeometry(w + 0.16, 0.22, d + 0.16), trimMat); cap.position.set(x, wallH + 0.1, z); property.add(cap);
+      const strip = new THREE.Mesh(new THREE.BoxGeometry(Math.max(0.15, w * 0.94), 0.08, Math.max(0.15, d * 0.94)), cyanMat); strip.position.set(x, wallH - 0.45, z); property.add(strip);
     };
-
-    // Continuous, fortified perimeter guard walls:
-    // West & East side walls stretch from Front (Z = -22.0) to Rear (Z = +29.5), total length 51.5m, center Z = 3.75.
-    addWall('compound_wall_west', -19.0, 3.75, wallT, 51.5);
-    addWall('compound_wall_east', 19.0, 3.75, wallT, 51.5);
-    // Rear north guard wall seamlessly connects west and east walls at Z = 29.5, width 38.65m.
-    addWall('compound_wall_rear', 0, 29.5, 38.65, wallT);
-
-    // Front perimeter wall boundary with exactly two authorised entrances: one vehicle gate and one pedestrian gate.
-    addWall('compound_wall_front_left_outer', -15.86, -22.0, 6.28, wallT);
-    addWall('compound_wall_front_left_inner', -6.915, -22.0, 8.73, wallT);
-    addWall('compound_wall_front_right_inner', 6.915, -22.0, 8.73, wallT);
-    addWall('compound_wall_front_east_pedestrian_closure', 12.07, -22.0, 1.58, wallT);
-    addWall('compound_wall_front_right_outer', 15.86, -22.0, 6.28, wallT);
-
-    // Corner security watchtower pillars
-    const cornerPositions = [
-      [-19.0, -22.0], [19.0, -22.0],
-      [-19.0, 29.5], [19.0, 29.5]
-    ];
-    for (const [cx, cz] of cornerPositions) {
-      const pillar = new THREE.Mesh(new THREE.BoxGeometry(1.1, 4.4, 1.1), capMat);
-      pillar.position.set(cx, 2.2, cz);
-      pillar.castShadow = true;
-      property.add(pillar);
-      const pLamp = new THREE.Mesh(
-        new THREE.BoxGeometry(0.5, 0.25, 0.5),
-        new THREE.MeshStandardMaterial({ color: 0x93c5fd, emissive: 0x1d4ed8, emissiveIntensity: 0.6 })
-      );
-      pLamp.position.set(cx, 4.52, cz);
-      property.add(pLamp);
-    }
-
-    // Reinforced main gate pillars
-    for (const x of [-2.8, 2.8]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.95, 4.4, 0.95), capMat);
-      post.position.set(x, 2.2, -22.0);
-      post.castShadow = true;
-      property.add(post);
-      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.25, 0.48), new THREE.MeshStandardMaterial({ color: 0xffd58a, emissive: 0x8a5418, emissiveIntensity: 0.55 }));
-      lamp.position.set(x, 4.52, -22.0);
-      property.add(lamp);
-    }
-
-    // Pedestrian door pillars
-    for (const x of [-12.85, -11.15]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.75, 4.2, 0.8), capMat);
-      post.position.set(x, 2.1, -22.0);
-      post.castShadow = true;
-      property.add(post);
-      const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.38, 0.2, 0.38), new THREE.MeshStandardMaterial({ color: 0x86efac, emissive: 0x15803d, emissiveIntensity: 0.5 }));
-      lamp.position.set(x, 4.3, -22.0);
-      property.add(lamp);
-    }
-
-    this.compoundGateGroup = new THREE.Group();
-    this.compoundGateGroup.name = 'compound_double_access_gate';
-    this.compoundGateGroup.position.set(0, 1.75, -22.0);
-    this.compoundGateLeftLeaf = new THREE.Group();
-    this.compoundGateLeftLeaf.position.x = -2.55;
-    this.compoundGateRightLeaf = new THREE.Group();
-    this.compoundGateRightLeaf.position.x = 2.55;
-    const makeLeaf = (pivot: THREE.Group, sign: number) => {
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(2.55, 3.4, 0.22), gateMat);
-      panel.position.x = sign * 1.275;
-      panel.castShadow = true;
-      panel.receiveShadow = true;
-      pivot.add(panel);
-      for (let i = 0; i < 5; i++) {
-        const bar = new THREE.Mesh(new THREE.BoxGeometry(0.09, 3.45, 0.26), capMat);
-        bar.position.x = sign * (0.3 + i * 0.48);
-        pivot.add(bar);
-      }
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.14, 0.28), capMat);
-      rail.position.set(sign * 1.275, 0.95, 0);
-      pivot.add(rail);
+    const lawn = new THREE.Mesh(new THREE.PlaneGeometry(99, 125.5), grassMat); lawn.rotation.x = -Math.PI / 2; lawn.position.set(-32, 0.02, -12.25); lawn.receiveShadow = true; property.add(lawn);
+    // Exactly five gate openings: one 12 m main gate, two 2 m pedestrian gates and two 8 m vehicle gates.
+    addWall('rebirth_wall_west_south', minX, -38.25, wallT, 74.5); addWall('rebirth_wall_west_north', minX, 26.0, wallT, 50.0);
+    addWall('rebirth_wall_east_south', maxX, -50.25, wallT, 50.5); addWall('rebirth_wall_east_north', maxX, 14.0, wallT, 74.0);
+    addWall('rebirth_wall_north_west', -55.0, northZ, 54.0, wallT); addWall('rebirth_wall_north_east', -1.0, northZ, 38.0, wallT);
+    addWall('rebirth_wall_south_west', -67.0, southZ, 30.0, wallT); addWall('rebirth_wall_south_middle', -25.0, southZ, 38.0, wallT); addWall('rebirth_wall_south_east', 12.0, southZ, 12.0, wallT);
+    const tower = (x: number, z: number, side: 'left' | 'right', index: number, h = 8) => {
+      const towerGroup = new THREE.Group(); towerGroup.name = `perimeter_security_tower_${side}_${String(index + 1).padStart(2, '0')}`; towerGroup.position.set(x, 0, z);
+      const base = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.55, 2.5), darkMat); base.position.set(0, 0.28, 0); towerGroup.add(base);
+      const body = new THREE.Mesh(new THREE.BoxGeometry(2.15, h, 2.15), trimMat); body.position.set(0, h / 2 + 0.55, 0); body.castShadow = true; body.receiveShadow = true; towerGroup.add(body);
+      const beacon = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.22, 0.85), cyanMat); beacon.position.set(0, h + 0.68, 0); towerGroup.add(beacon);
+      const cam = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.3, 0.55), darkMat); cam.position.set(side === 'left' ? 0.25 : -0.25, h - 0.15, side === 'left' ? 1.15 : -1.15); towerGroup.add(cam);
+      const searchlight = new THREE.SpotLight(0x9bdcff, 1.35, 34, Math.PI / 5, 0.5, 1.5); searchlight.position.set(0, h - 0.2, 0); searchlight.target.position.set(side === 'left' ? 8 : -8, 0, 0); towerGroup.add(searchlight, searchlight.target);
+      towerGroup.userData = { side, index: index + 1, systems: ['armed_turret_mount', 'cctv', 'searchlight', 'motion_sensor', 'alarm_beacon'] }; property.add(towerGroup);
     };
-    makeLeaf(this.compoundGateLeftLeaf, 1);
-    makeLeaf(this.compoundGateRightLeaf, -1);
-    this.compoundGateGroup.add(this.compoundGateLeftLeaf, this.compoundGateRightLeaf);
-    property.add(this.compoundGateGroup);
-
-    // One secure pedestrian gate. The former east-side opening is filled by a solid wall.
-    const makePedestrianDoor = (x: number, side: 'left' | 'right') => {
-      const hinge = new THREE.Group();
-      hinge.name = `compound_pedestrian_door_${side}`;
-      hinge.position.set(x - 0.72, 0, -22.0);
-      const leaf = new THREE.Mesh(new THREE.BoxGeometry(1.44, 3.2, 0.18), gateMat);
-      leaf.position.set(0.72, 1.6, 0);
-      leaf.castShadow = true;
-      leaf.receiveShadow = true;
-      hinge.add(leaf);
-      for (let y = 0.5; y < 3.0; y += 0.8) {
-        const brace = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.08, 0.24), capMat);
-        brace.position.set(0.72, y, 0);
-        hinge.add(brace);
-      }
-      property.add(hinge);
-      return hinge;
+    // Exactly twenty perimeter security towers: ten along the West wall and ten along the East wall.
+    const westTowerZ = [-69, -56, -43, -30, -17, -6, 6, 20, 34, 46];
+    const eastTowerZ = [-69, -56, -43, -30, -18, -6, 6, 20, 34, 46];
+    westTowerZ.forEach((z, i) => tower(minX, z, 'left', i));
+    eastTowerZ.forEach((z, i) => tower(maxX, z, 'right', i));
+    // Gate 1: 12 m motorized main entrance (South Wall center local X=0 -> World X=-26).
+    this.compoundGateGroup = new THREE.Group(); this.compoundGateGroup.name = 'gate_1_main_motorized_12m'; this.compoundGateGroup.position.set(0, 0, southZ);
+    this.compoundGateLeftLeaf = new THREE.Group(); this.compoundGateLeftLeaf.position.x = -3; this.compoundGateRightLeaf = new THREE.Group(); this.compoundGateRightLeaf.position.x = 3;
+    for (const [pivot, sign] of [[this.compoundGateLeftLeaf, 1], [this.compoundGateRightLeaf, -1]] as const) {
+      const panel = new THREE.Mesh(new THREE.BoxGeometry(6, 4.8, 0.28), darkMat); panel.position.set(sign * 3, 2.4, 0); pivot.add(panel);
+      for (let i = 0; i < 9; i++) { const rib = new THREE.Mesh(new THREE.BoxGeometry(0.08, 4.8, 0.34), trimMat); rib.position.set(sign * (0.4 + i * 0.65), 2.4, 0); pivot.add(rib); }
+      const led = new THREE.Mesh(new THREE.BoxGeometry(5.8, 0.1, 0.36), cyanMat); led.position.set(sign * 3, 4.4, 0); pivot.add(led);
+    }
+    this.compoundGateGroup.add(this.compoundGateLeftLeaf, this.compoundGateRightLeaf); property.add(this.compoundGateGroup);
+    // Gates 2 and 3: independent pedestrian access on West (-82, 0) and East (+18, -24) walls.
+    const makePed = (x: number, z: number, side: 'left' | 'right', rotation: number) => {
+      const hinge = new THREE.Group(); hinge.name = side === 'left' ? 'gate_2_west_pedestrian_2m' : 'gate_3_east_emergency_pedestrian_2m'; hinge.position.set(x, 0, z); hinge.rotation.y = rotation;
+      const leaf = new THREE.Mesh(new THREE.BoxGeometry(2, 3.4, 0.2), darkMat); leaf.position.set(1, 1.7, 0); hinge.add(leaf);
+      const reader = new THREE.Mesh(new THREE.BoxGeometry(0.5, 1, 0.22), cyanMat); reader.position.set(0.35, 1.2, 0.18); hinge.add(reader); property.add(hinge); return hinge;
     };
-    this.compoundPedestrianDoorLeft = makePedestrianDoor(-12.0, 'left');
-    this.compoundPedestrianDoorRight = new THREE.Group(); // empty compatibility placeholder; never added to the world
-
-    // Backyard pool sits BEHIND the apartment (positive local Z), at ground level.
-    const pool = new THREE.Group();
-    pool.name = 'backyard_swimming_pool';
-    pool.position.set(0, 0, 21.5);
-    property.add(pool);
-    const deck = new THREE.Mesh(new THREE.BoxGeometry(15.5, 0.16, 12.5), pavingMat);
-    deck.position.y = 0.08;
-    deck.receiveShadow = true;
-    pool.add(deck);
-    const basinMat = new THREE.MeshStandardMaterial({ color: 0x315a68, roughness: 0.42 });
-    const basin = new THREE.Mesh(new THREE.BoxGeometry(10.8, 0.55, 8.8), basinMat);
-    basin.position.y = 0.16;
-    pool.add(basin);
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(9.9, 7.9), waterMat);
-    water.rotation.x = -Math.PI / 2;
-    water.position.y = 0.48;
-    water.receiveShadow = true;
-    pool.add(water);
-    this.backyardPoolWaterMesh = water;
-
-    // Pool coping and shallow steps; open centre remains available for swimming.
-    const copingMat = new THREE.MeshStandardMaterial({ color: 0xe2ded4, roughness: 0.7 });
-    const coping = [
-      [0, 0.48, -4.45, 11.3, 0.35, 0.42], [-3.4, 0.48, 4.45, 4.5, 0.35, 0.42], [3.4, 0.48, 4.45, 4.5, 0.35, 0.42],
-      [-5.45, 0.48, 0, 0.42, 0.35, 8.8], [5.45, 0.48, 0, 0.42, 0.35, 8.8],
-    ];
-    for (const [x,y,z,w,h,d] of coping) {
-      const edge = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), copingMat);
-      edge.position.set(x,y,z);
-      edge.castShadow = true;
-      pool.add(edge);
+    this.compoundPedestrianDoorLeft = makePed(minX, 0, 'left', Math.PI / 2);
+    this.compoundPedestrianDoorRight = makePed(maxX, -24, 'right', -Math.PI / 2);
+    // Gate 4: independent 8 m South vehicle entrance straight into Garage road (local X = -48).
+    this.vehicleGateGroup = new THREE.Group(); this.vehicleGateGroup.name = 'gate_4_independent_vehicle_8m'; this.vehicleGateGroup.position.set(-48, this.vehicleGateOpen ? 5.0 : 0, southZ);
+    const vehicleLeaf = new THREE.Mesh(new THREE.BoxGeometry(8, 4.8, 0.28), darkMat); vehicleLeaf.position.y = 2.4; this.vehicleGateGroup.add(vehicleLeaf);
+    for (let i = 0; i < 11; i++) { const rib = new THREE.Mesh(new THREE.BoxGeometry(0.08, 4.8, 0.34), trimMat); rib.position.set(-3.7 + i * 0.74, 2.4, 0); this.vehicleGateGroup.add(rib); } property.add(this.vehicleGateGroup);
+    // Gate 5: independent 8 m North vehicle entrance (local X = -24, cleanly clear of Railway Station at Z=94).
+    this.vehicleGate2Group = new THREE.Group(); this.vehicleGate2Group.name = 'gate_5_north_vehicle_8m'; this.vehicleGate2Group.position.set(-24, this.vehicleGate2Open ? 5.0 : 0, northZ);
+    const vehicleLeaf2 = new THREE.Mesh(new THREE.BoxGeometry(8, 4.8, 0.28), darkMat); vehicleLeaf2.position.y = 2.4; this.vehicleGate2Group.add(vehicleLeaf2);
+    for (let i = 0; i < 11; i++) { const rib = new THREE.Mesh(new THREE.BoxGeometry(0.08, 4.8, 0.34), trimMat); rib.position.set(-3.7 + i * 0.74, 2.4, 0); this.vehicleGate2Group.add(rib); } property.add(this.vehicleGate2Group);
+    // Internal paved vehicle avenues, garage/gate connectors, pedestrian walkways, and courtyard plaza.
+    const road = (name: string, x: number, z: number, w: number, d: number) => {
+      const m = new THREE.Mesh(new THREE.BoxGeometry(w, 0.12, d), roadMat); m.name = name; m.position.set(x, 0.08, z); m.receiveShadow = true; property.add(m);
+    };
+    road('main_gate_to_mansion_road', 0, -43.75, 7, 63.5);
+    road('vehicle_gate_to_garage_road', -48, -57.25, 10, 36.5);
+    road('garage_access_connector', -24, -46, 48, 7);
+    road('north_vehicle_gate_access_road', -24, 26.5, 8, 49);
+    road('command_centre_south_plaza', -48, 8, 16, 14);
+    road('west_service_boulevard', -68, 2, 7, 52);
+    // Sidewalk paths connecting West Gate 2 (-82, 0), East Gate 3 (+18, -24), Courtyard, and all 3 buildings.
+    const westGatePath = new THREE.Mesh(new THREE.BoxGeometry(44, 0.08, 2.8), pathMat); westGatePath.position.set(-60, 0.08, 0); property.add(westGatePath);
+    const eastGatePath = new THREE.Mesh(new THREE.BoxGeometry(18, 0.08, 2.8), pathMat); eastGatePath.position.set(9, 0.08, -24); property.add(eastGatePath);
+    const eastGateApron = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.08, 2.8), pathMat); eastGateApron.position.set(19, 0.08, -24); property.add(eastGateApron);
+    const courtyardToMansionPath = new THREE.Mesh(new THREE.BoxGeometry(10, 0.08, 3.2), pathMat); courtyardToMansionPath.position.set(-19, 0.08, -2); property.add(courtyardToMansionPath);
+    const patioDeck = new THREE.Mesh(new THREE.BoxGeometry(16, 0.16, 10), pathMat); patioDeck.position.set(0, 0.09, 12.2); patioDeck.receiveShadow = true; property.add(patioDeck);
+    // Compound Outdoor Vehicle Parking Pad (Vanguard Sedan & Quad ATV)
+    const outdoorParkPad = new THREE.Mesh(new THREE.BoxGeometry(12, 0.1, 8), roadMat); outdoorParkPad.position.set(-27.5, 0.09, -48); outdoorParkPad.receiveShadow = true; property.add(outdoorParkPad);
+    // Central landscaped courtyard centered cleanly at local (-30, 0, -2) between Mansion, Command Centre, and Garage.
+    const courtyard = new THREE.Group(); courtyard.name = 'central_landscaped_courtyard'; courtyard.position.set(-30, 0, -2); property.add(courtyard);
+    const plaza = new THREE.Mesh(new THREE.CylinderGeometry(8.5, 8.5, 0.22, 40), pathMat); plaza.position.y = 0.12; courtyard.add(plaza);
+    const basin = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 3.2, 0.42, 32), trimMat); basin.position.y = 0.35; courtyard.add(basin);
+    const fountain = new THREE.Mesh(new THREE.CircleGeometry(2.75, 32), glassMat); fountain.rotation.x = -Math.PI / 2; fountain.position.y = 0.58; courtyard.add(fountain);
+    const monument = new THREE.Mesh(new THREE.ConeGeometry(1.1, 4.5, 6), trimMat); monument.position.y = 2.8; courtyard.add(monument);
+    // Low ornamental planters provide green landscaping around the courtyard plaza.
+    for (const [x, z] of [[-10, -8], [10, -8], [-10, 8], [10, 8]] as const) {
+      const planter = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.45, 2.4), trimMat); planter.position.set(x, 0.28, z); courtyard.add(planter);
+      const planting = new THREE.Mesh(new THREE.BoxGeometry(3.8, 0.42, 2.0), grassMat); planting.position.set(x, 0.68, z); courtyard.add(planting);
     }
-    const steps = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.18, 1.2), copingMat);
-    steps.position.set(-4.1, 0.28, 3.6);
-    pool.add(steps);
-    for (let i = 0; i < 3; i++) {
-      const entryStep = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.16, 0.55), copingMat);
-      entryStep.position.set(0, 0.16 + i * 0.14, 4.9 - i * 0.48);
-      pool.add(entryStep);
+    for (const [x, z] of [[-78, -68], [-78, -32], [-78, 12], [-78, 45], [14, -68], [14, -32], [14, 18], [14, 45], [-55, 48], [-24, 48], [6, 48]] as const) {
+      const lamp = new THREE.PointLight(0x8bdfff, 1, 18, 1.7); lamp.position.set(x, 4.5, z); property.add(lamp);
     }
-
-    // Poolside loungers and low garden lights make the rear yard readable and usable.
-    const loungerMat = new THREE.MeshStandardMaterial({ color: 0xf0eee8, roughness: 0.72 });
-    for (const x of [-6.1, 6.1]) {
-      const lounger = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.22, 2.4), loungerMat);
-      lounger.position.set(x, 0.28, 21.5);
-      lounger.rotation.y = x < 0 ? 0.12 : -0.12;
-      lounger.castShadow = true;
-      property.add(lounger);
-      const light = new THREE.PointLight(0x8bdfff, 0.75, 9, 1.8);
-      light.position.set(x * 1.35, 1.0, 21.5);
-      property.add(light);
-      this.floorLights.push(light);
-    }
-      
-    // Backyard stone patio and paved walkways connecting rear sliding doors directly to garage & pool
-    const backyardPatio = new THREE.Mesh(new THREE.BoxGeometry(22.0, 0.12, 12.0), pavingMat);
-    backyardPatio.position.set(-3.5, 0.06, 11.5);
-    backyardPatio.receiveShadow = true;
-    property.add(backyardPatio);
-
-    const garageDriveway = new THREE.Mesh(new THREE.BoxGeometry(9.0, 0.12, 10.0), pavingMat);
-    garageDriveway.position.set(-12.5, 0.06, 8.5);
-    garageDriveway.receiveShadow = true;
-    property.add(garageDriveway);
-
-    // Secure Solid Private Garage in the Backyard (local X = -12.5, Z = 14.5)
-    // Houses drivable vehicles (SUV, Sedan, ATV, Motorbike, Bicycle)
-    const garage = new THREE.Group();
-    garage.name = 'apartment_private_garage';
-    garage.position.set(-12.5, 0, 14.5);
-    property.add(garage);
-
-    const garageWall = new THREE.MeshStandardMaterial({ color: 0xb8bdc1, roughness: 0.82 });
-    const garageDark = new THREE.MeshStandardMaterial({ color: 0x30383f, metalness: 0.55, roughness: 0.4 });
-    const garageFloor = new THREE.Mesh(new THREE.BoxGeometry(8.5, 0.12, 9.5), pavingMat);
-    garageFloor.position.y = 0.06;
-    garage.add(garageFloor);
-
-    // Solid concrete perimeter walls: West wall, East wall, North rear wall
-    for (const [x, z, w, d] of [
-      [-4.2, 0, 0.25, 9.5], // West solid wall
-      [4.2, 0, 0.25, 9.5],  // East solid wall
-      [0, 4.7, 8.5, 0.25],  // North solid rear wall
-      [-3.4, -4.7, 1.7, 0.25], // South wall left pillar
-      [3.4, -4.7, 1.7, 0.25],  // South wall right pillar
-      [0, -4.7, 5.1, 0.45],    // South wall upper lintel
-    ] as [number, number, number, number][]) {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(w, z === -4.7 && w === 5.1 ? 0.6 : 3.0, d), garageWall);
-      wall.position.set(x, z === -4.7 && w === 5.1 ? 2.9 : 1.5, z);
-      wall.castShadow = true;
-      garage.add(wall);
-    }
-
-    // Heavy reinforced garage roof
-    const roof = new THREE.Mesh(new THREE.BoxGeometry(8.8, 0.25, 9.8), garageDark);
-    roof.position.set(0, 3.25, 0);
-    garage.add(roof);
-
-    // Large roll-up shutter gate facing South toward the driveway (Z = -4.7)
-    this.garageShutterGroup = new THREE.Group();
-    this.garageShutterGroup.name = 'interactive_garage_shutter';
-    this.garageShutterGroup.position.set(0, this.garageShutterOpen ? 2.65 : 0, -4.7);
-    garage.add(this.garageShutterGroup);
-
-    const shutter = new THREE.Mesh(new THREE.BoxGeometry(5.1, 2.55, 0.12), garageDark);
-    shutter.position.set(0, 1.35, 0);
-    this.garageShutterGroup.add(shutter);
-
-    for (let slat = 0; slat < 12; slat++) {
-      const line = new THREE.Mesh(new THREE.BoxGeometry(5.05, 0.035, 0.035), capMat);
-      line.position.set(0, 0.25 + slat * 0.19, 0.08);
-      this.garageShutterGroup.add(line);
+    for (const [x, z, w, d] of [[0, -69, 16, 10], [-48, -69, 12, 10], [-75, 0, 10, 8], [12, -24, 10, 8]] as const) {
+      const pad = new THREE.Mesh(new THREE.BoxGeometry(w, 0.08, d), pathMat); pad.position.set(x, 0.06, z); property.add(pad);
     }
   }
 
@@ -2377,7 +3233,74 @@ export class ApartmentBuilding {
   }
 
   // ==========================================
-  // UPDATE LOOP & CAMERA-AWARE VISIBILITY
+    /**
+   * Bind independently addressable roots across the basement, four floors, rooftop,
+   * exterior wall assembly and stair/elevator assembly. Existing objects are not
+   * re-parented, so their authored transforms and animation hierarchies remain intact.
+   */
+  private initializeApartmentObjectBindings(): void {
+    const levels: Array<[string, THREE.Object3D | undefined]> = [
+      ['basement', this.basementGroup], ['floor1', this.floor1Group],
+      ['floor2', this.floor2Group], ['floor3', this.floor3Group],
+      ['floor4', this.floor4Group], ['rooftop', this.floor5Group],
+      ['exterior-walls', this.exteriorWalls], ['stairs-elevator', this.staircaseGroup],
+    ];
+    for (const [levelId, level] of levels) {
+      if (!level) continue;
+      level.children.slice().forEach((root, index) => {
+        if (root.userData.apartmentBindingId) return;
+        const name = (root.name || `object-${index}`).replace(/[^a-zA-Z0-9_-]/g, '-');
+        const id = `${levelId}:${name}:${index}`;
+        root.userData.apartmentBindingId = id;
+        this.apartmentObjectBindings.set(id, new ApartmentObjectBinding({ id, root }));
+      });
+    }
+  }
+
+  /** Register an authored object with the centralized hinge/slide/rotation interaction system. */
+  public registerInteractable(options: ApartmentInteractableOptions): void {
+    this.objectAnimator.register(options);
+    const binding = this.apartmentObjectBindings.get(options.id);
+    if (!binding) this.bindApartmentObject(options.id, options.root);
+  }
+
+  /** Route a named object action through the central apartment animation owner. */
+  public interactWithObject(id: string, action: ApartmentObjectAction = 'toggle'): boolean {
+    return this.objectAnimator.applyAction(id, action);
+  }
+
+  /** Snapshot/restore movable object states with the rest of the apartment save data. */
+  public saveObjectInteractionStates(): Record<string, boolean> {
+    return this.objectAnimator.save();
+  }
+
+  public loadObjectInteractionStates(states: Record<string, boolean>): void {
+    this.objectAnimator.load(states);
+  }
+
+  /** Access the transform binding for a level object and attach dependent systems to it. */
+  public getObjectBinding(id: string): ApartmentObjectBinding | undefined {
+    return this.apartmentObjectBindings.get(id);
+  }
+
+  /** Register a runtime-created or replacement apartment object. */
+  public bindApartmentObject(id: string, root: THREE.Object3D): ApartmentObjectBinding {
+    this.unbindApartmentObject(id);
+    const binding = new ApartmentObjectBinding({ id, root });
+    root.userData.apartmentBindingId = id;
+    this.apartmentObjectBindings.set(id, binding);
+    return binding;
+  }
+
+  /** Dispose dependency anchors when an apartment object is permanently removed. */
+  public unbindApartmentObject(id: string): void {
+    const binding = this.apartmentObjectBindings.get(id);
+    if (!binding) return;
+    binding.dispose();
+    this.apartmentObjectBindings.delete(id);
+  }
+
+// UPDATE LOOP & CAMERA-AWARE VISIBILITY
   // ==========================================
   public update(
     delta: number,
@@ -2387,8 +3310,20 @@ export class ApartmentBuilding {
     wildlifeMgr?: WildlifeManager | null,
     aiTrainMgr?: any
   ) {
+    this.objectAnimator.update(delta);
+    for (const binding of this.apartmentObjectBindings.values()) binding.sync();
     this.turrets?.update(delta, zombieMgr || null, wildlifeMgr || null, playerPos);
     this.basementRoom?.update(delta, aiTrainMgr || null);
+    this.commandScreens?.update(delta, aiTrainMgr || null, {
+      mainGateOpen: this.compoundGateOpen,
+      vehicleGate1Open: this.vehicleGateOpen,
+      vehicleGate2Open: this.vehicleGate2Open,
+      westPedOpen: this.compoundPedestrianDoorsOpen[0],
+      eastPedOpen: this.compoundPedestrianDoorsOpen[1],
+      garageShutterOpen: this.garageShutterOpen,
+      turretCount: 20,
+      activeThreats: zombieMgr ? Math.min(99, zombieMgr.zombies.filter((z) => z.state !== 'dead').length) : 0,
+    });
     // 1. Ceiling Fan Rotation
     if (this.state.fanOn && this.fanBlades) {
       this.fanBlades.rotation.y += this.state.fanSpeed * delta;
@@ -2465,7 +3400,7 @@ export class ApartmentBuilding {
     const relY = playerPos.y - this.origin.y;
     const relZ = playerPos.z - this.origin.z;
 
-    const isInsideBuilding = Math.abs(relX) < 8.2 && Math.abs(relZ) < 7.2 && relY >= -3.5 && relY <= 17.0;
+    const isInsideBuilding = Math.abs(relX) < 15.2 && Math.abs(relZ) < 12.2 && relY >= -3.5 && relY <= 17.0;
 
     if (isInsideBuilding) {
       // In 3rd person mode, hide the wall between camera and player so the interior is NEVER obstructed
@@ -2519,6 +3454,9 @@ export class ApartmentBuilding {
       | 'backyardPool'
       | 'door'
       | 'compoundGate'
+      | 'vehicleGate'
+      | 'vehicleGate2'
+      | 'commandElevator'
       | 'compoundDoorLeft'
       | 'compoundDoorRight'
       | 'garageDoor'
@@ -2564,19 +3502,41 @@ export class ApartmentBuilding {
     const relY = pos.y - this.origin.y;
     const relZ = pos.z - this.origin.z;
 
-    // Relocated backyard private garage roll-up shutter (local X = -12.5, Z = 9.8)
-    if (Math.hypot(relX - (-12.5), relZ - 9.8) < 4.5 && relY < 3.2) {
-      return { id: 'garageDoor', label: 'Private Garage Shutter', prompt: `Press [E] to ${this.garageShutterOpen ? 'Lower' : 'Raise'} Garage Shutter Door` };
+    // Five-gate access, 4-bay garage (at local -48, -32), and Command Centre (at local -48, +24).
+    if (Math.abs(relX) < 7.0 && Math.abs(relZ + 75.5) < 2.8 && relY < 5.0) {
+      return { id: 'compoundGate', label: 'Main 12 m Compound Gate', prompt: `Press [E] to ${this.compoundGateOpen ? 'Close' : 'Open'} Main Security Gate` };
     }
-    // Outer double gate and backyard pool are outside the apartment footprint.
-    if (Math.abs(relX) < 4.2 && Math.abs(relZ + 22) < 2.8 && relY < 3.2) {
-      return { id: 'compoundGate', label: 'Residential Compound Double Gate', prompt: `Press [E] to ${this.compoundGateOpen ? 'Close' : 'Open'} Property Gate` };
+    if (Math.abs(relX + 48) < 10.5 && Math.abs(relZ + 39.1) < 3.2 && relY < 3.5) {
+      return { id: 'garageDoor', label: 'Four-Bay Vehicle Garage', prompt: `Press [E] to ${this.garageShutterOpen ? 'Close' : 'Open'} All Garage Bay Doors` };
     }
-    if (Math.abs(relX + 12.0) < 2.0 && Math.abs(relZ + 22) < 2.2 && relY < 3.0) {
-      return { id: 'compoundDoorLeft', label: 'West Perimeter Pedestrian Door', prompt: `Press [E] to ${this.compoundPedestrianDoorsOpen[0] ? 'Close' : 'Open'} Pedestrian Door` };
+    if (Math.abs(relX + 82) < 3.0 && Math.abs(relZ) < 3.0 && relY < 3.5) {
+      return { id: 'compoundDoorLeft', label: 'Gate 2 — West Pedestrian Access', prompt: `Press [E] to ${this.compoundPedestrianDoorsOpen[0] ? 'Close' : 'Open'} West Pedestrian Gate` };
     }
-    if (Math.abs(relX) < 5.8 && relZ > 16.0 && relZ < 27.0 && relY < 2.2) {
-      return { id: 'backyardPool', label: 'Backyard Swimming Pool', prompt: 'Press [E] to Enter Backyard Swimming Pool' };
+    if (Math.abs(relX - 18) < 3.0 && Math.abs(relZ + 24) < 3.0 && relY < 3.5) {
+      return { id: 'compoundDoorRight', label: 'Gate 3 — East Emergency Exit', prompt: `Press [E] to ${this.compoundPedestrianDoorsOpen[1] ? 'Close' : 'Open'} East Emergency Gate` };
+    }
+    if (Math.abs(relX + 48) < 5.0 && Math.abs(relZ + 75.5) < 3.0 && relY < 5.0) {
+      return { id: 'vehicleGate', label: 'Gate 4 — Independent Vehicle Entrance', prompt: `Press [E] to ${this.vehicleGateOpen ? 'Close' : 'Open'} Vehicle Gate` };
+    }
+    if (Math.abs(relX + 24) < 5.0 && Math.abs(relZ - 51.0) < 3.0 && relY < 5.0) {
+      return { id: 'vehicleGate2', label: 'Gate 5 — North Vehicle Entrance', prompt: `Press [E] to ${this.vehicleGate2Open ? 'Close' : 'Open'} North Vehicle Gate` };
+    }
+    if (
+      (Math.hypot(relX + 53.8, relZ - 22.8) < 2.2 && relY < 29.0) ||
+      (Math.hypot(relX + 55.2, relZ - 22.8) < 2.2 && relY < 29.0)
+    ) {
+      return { id: 'commandElevator', label: 'Railway Command Elevator (8 Floors)', prompt: `Press [E] to travel to the next command-centre floor (current ${this.commandElevatorFloor + 1}/8)` };
+    }
+    // Floor 3 West Surveillance Desk opens 5km Security Radar; all other Command Center consoles & video walls open Railway Operations
+    if (relX >= -56.0 && relX <= -50.2 && Math.abs(relZ - 26.25) < 2.6 && relY >= 7.0 && relY <= 10.8) {
+      return { id: 'securityCommandCenter', label: 'Perimeter Security & 20-Turret Console', prompt: 'Press [E] to Access 5km Security Radar & Compound Controls' };
+    }
+    if (relX >= -56.5 && relX <= -41.5 && (Math.abs(relZ - 26.25) < 2.6 || Math.abs(relZ - 32.0) < 2.6) && relY >= 0.4 && relY <= 28.2) {
+      return { id: 'railwayOperations', label: 'Railway Command 25-Screen Terminal', prompt: 'Press [E] to access live 6-train dispatch, telemetry and schedules' };
+    }
+    // Level 2 Vertical Garage Diagnostic Workbench
+    if (Math.abs(relX + 43.8) < 3.0 && Math.abs(relZ + 35.2) < 2.4 && relY >= 4.2 && relY <= 7.8) {
+      return { id: 'garageDoor', label: 'Vertical Garage Bay & Armor Terminal', prompt: `Press [E] to ${this.garageShutterOpen ? 'Lower' : 'Raise'} All 4 Garage Bay Shutters` };
     }
 
     // --- BASEMENT INTERACTIONS ---
@@ -3114,7 +4074,7 @@ export class ApartmentBuilding {
     ctx.fillText('● RAILWAY DISPATCH: ACTIVE [TRACKS F1-B3 ONLINE]', 20, 80);
     ctx.fillText('● UTILITY WATER RESERVES: 12,500 L NOMINAL', 20, 115);
     ctx.fillText('● DIESEL BACKUP GENERATOR: STANDBY READY', 20, 150);
-    ctx.fillText('● DEFENSE SENTRIES: DUAL 30MM CANNONS ARMED', 20, 185);
+    ctx.fillText('● DEFENSE SENTRIES: 20 ARMED · HOSTILE ONLY', 20, 185);
 
     // Ticker
     ctx.fillStyle = '#0369a1';
@@ -3165,11 +4125,11 @@ export class ApartmentBuilding {
     ctx.fillText('Day-Tank Fuel: 420 L (93%)', 28, 250);
     ctx.fillText('Potable Water: 12,500 L', 28, 280);
     ctx.fillText('Filtration Plant: 4.2 BAR', 28, 310);
-    ctx.fillText('Garage Vehicles: 5 READY', 28, 340);
-    ctx.fillText('  - Aegis Enforcer SUV', 28, 370);
-    ctx.fillText('  - Vanguard GT Sedan', 28, 395);
-    ctx.fillText('  - Predator Quad ATV', 28, 420);
-    ctx.fillText('  - Phantom Enduro 650', 28, 445);
+    ctx.fillText('Garage Vehicles: 4 READY', 28, 340);
+    ctx.fillText('  - Aegis Armored SUV', 28, 370);
+    ctx.fillText('  - Phantom Enduro Motorcycle', 28, 395);
+    ctx.fillText('  - RidgeLine Mountain Bicycle', 28, 420);
+    ctx.fillText('  - Military Enforcement Vehicle', 28, 445);
 
     // Right Panel: Turret Telemetry
     ctx.strokeRect(w - 266, 68, 250, 410);
@@ -3178,24 +4138,28 @@ export class ApartmentBuilding {
     ctx.fillText('DEFENSIVE TURRETS', w - 254, 96);
 
     const telemetry = this.turrets?.getTurretsTelemetry() || [];
-    const tL = telemetry.find(t => t.id === 'turret_left') || { ammo: 485, maxAmmo: 500, killsCount: 4, isLockedOn: false };
-    const tR = telemetry.find(t => t.id === 'turret_right') || { ammo: 492, maxAmmo: 500, killsCount: 7, isLockedOn: false };
+    const totalAmmo = telemetry.reduce((sum,t)=>sum+t.ammo,0);
+    const maxAmmo = telemetry.reduce((sum,t)=>sum+t.maxAmmo,0);
+    const totalKills = telemetry.reduce((sum,t)=>sum+t.killsCount,0);
+    const locked = telemetry.filter(t=>t.isLockedOn).length;
+    const operational = telemetry.filter(t=>t.health>0).length;
 
     ctx.fillStyle = '#cbd5e1';
     ctx.font = '13px monospace';
-    ctx.fillText('Sentry Alpha (West):', w - 254, 130);
-    ctx.fillText(`  Ammo: ${tL.ammo}/${tL.maxAmmo}`, w - 254, 155);
-    ctx.fillText(`  Kills: ${tL.killsCount}  Lock: ${tL.isLockedOn ? 'YES' : 'NO'}`, w - 254, 180);
+    ctx.fillText(`Armed Sentries: ${operational}/20 ONLINE`, w - 254, 130);
+    ctx.fillText(`  Ammunition: ${totalAmmo}/${maxAmmo}`, w - 254, 155);
+    ctx.fillText(`  Confirmed Neutralizations: ${totalKills}`, w - 254, 180);
+    ctx.fillText(`  Active Hostile Locks: ${locked}`, w - 254, 205);
+    ctx.fillText('Target Policy: HOSTILE ONLY', w - 254, 230);
+    ctx.fillText('Player / Friendly / Neutral: SAFE', w - 254, 255);
 
-    ctx.fillText('Sentry Bravo (East):', w - 254, 220);
-    ctx.fillText(`  Ammo: ${tR.ammo}/${tR.maxAmmo}`, w - 254, 245);
-    ctx.fillText(`  Kills: ${tR.killsCount}  Lock: ${tR.isLockedOn ? 'YES' : 'NO'}`, w - 254, 270);
-
-    ctx.fillText('Gate Status:', w - 254, 320);
-    ctx.fillText(`  Main Gate: ${this.compoundGateOpen ? 'OPEN' : 'CLOSED'}`, w - 254, 345);
-    ctx.fillText(`  Garage: ${this.garageShutterOpen ? 'RAISED' : 'LOWERED'}`, w - 254, 370);
-    ctx.fillText(`  Front Door: ${this.state.doorOpen ? 'OPEN' : 'CLOSED'}`, w - 254, 395);
-    ctx.fillText(`  Rear Patio: ${this.patioDoorOpen ? 'OPEN' : 'CLOSED'}`, w - 254, 420);
+    ctx.fillText('Five-Gate Status:', w - 254, 300);
+    ctx.fillText(`  Main: ${this.compoundGateOpen ? 'OPEN' : 'CLOSED'}`, w - 254, 325);
+    ctx.fillText(`  West Ped: ${this.compoundPedestrianDoorsOpen[0] ? 'OPEN' : 'CLOSED'}`, w - 254, 350);
+    ctx.fillText(`  East Ped: ${this.compoundPedestrianDoorsOpen[1] ? 'OPEN' : 'CLOSED'}`, w - 254, 375);
+    ctx.fillText(`  South Vehicle: ${this.vehicleGateOpen ? 'OPEN' : 'CLOSED'}`, w - 254, 400);
+    ctx.fillText(`  North Vehicle: ${this.vehicleGate2Open ? 'OPEN' : 'CLOSED'}`, w - 254, 425);
+    ctx.fillText(`  Garage Shutters: ${this.garageShutterOpen ? 'RAISED' : 'LOWERED'}`, w - 254, 450);
 
     // Centre 5km Radar Display (Radius 180px)
     const rcx = w / 2;
@@ -3280,8 +4244,8 @@ export class ApartmentBuilding {
 
     ctx.fillStyle = '#94a3b8';
     ctx.font = '12px monospace';
-    ctx.fillText('[08:32:00] Dual 30mm Perimeter Sentries ONLINE. RoE: HOSTILE ENGAGEMENT.', 28, 530);
-    ctx.fillText('[08:34:15] Potable water filtration manifolds pressurised at 4.2 bar. All 5 garage vehicles operational.', 28, 548);
+    ctx.fillText('[08:32:00] 20 Armed Perimeter Sentries ONLINE. ROE: HOSTILE NPC / ENEMY FACTION ONLY.', 28, 530);
+    ctx.fillText('[08:34:15] Potable water filtration manifolds pressurised at 4.2 bar. 4 garage bays & 2 pad vehicles operational.', 28, 548);
   }
 
   public toggleTV(forceState?: boolean, isEmergency: boolean = false): boolean {
@@ -3329,11 +4293,12 @@ export class ApartmentBuilding {
   }
 
   public toggleCompoundPedestrianDoor(side: 'left' | 'right'): boolean {
-    if (side === 'right') return false;
-    const index = 0;
+    const index = side === 'left' ? 0 : 1;
     this.compoundPedestrianDoorsOpen[index] = !this.compoundPedestrianDoorsOpen[index];
     const hinge = side === 'left' ? this.compoundPedestrianDoorLeft : this.compoundPedestrianDoorRight;
-    if (hinge) hinge.rotation.y = this.compoundPedestrianDoorsOpen[index] ? (side === 'left' ? -Math.PI / 2 : Math.PI / 2) : 0;
+    if (hinge) hinge.rotation.y = this.compoundPedestrianDoorsOpen[index]
+      ? (side === 'left' ? 0 : 0)
+      : (side === 'left' ? Math.PI / 2 : -Math.PI / 2);
     UnifiedPhysicsManager.getInstance()?.setDoorOpenState(`apt_compound_door_${side}`, this.compoundPedestrianDoorsOpen[index]);
     soundEngine.playGateToggle(this.compoundPedestrianDoorsOpen[index]);
     return this.compoundPedestrianDoorsOpen[index];
@@ -3344,8 +4309,11 @@ export class ApartmentBuilding {
     const ox = this.origin.x;
     const oz = this.origin.z;
     const points: THREE.Vector3[] = [];
-    if (this.compoundGateOpen) points.push(new THREE.Vector3(ox, 0, oz - 22));
-    if (this.compoundPedestrianDoorsOpen[0]) points.push(new THREE.Vector3(ox - 12, 0, oz - 22));
+    if (this.compoundGateOpen) points.push(new THREE.Vector3(ox, 0, oz - 75.5));
+    if (this.compoundPedestrianDoorsOpen[0]) points.push(new THREE.Vector3(ox - 82, 0, oz));
+    if (this.compoundPedestrianDoorsOpen[1]) points.push(new THREE.Vector3(ox + 18, 0, oz - 24));
+    if (this.vehicleGateOpen) points.push(new THREE.Vector3(ox - 48, 0, oz - 75.5));
+    if (this.vehicleGate2Open) points.push(new THREE.Vector3(ox - 24, 0, oz + 51.0));
     return points;
   }
 
@@ -3405,18 +4373,39 @@ export class ApartmentBuilding {
       return new THREE.Vector3(ox, Math.max(0, getTerrainHeight(ox, fromInBuilding ? outsideZ : insideZ)), fromInBuilding ? outsideZ : insideZ);
     }
 
-    const boundaryZ = oz - 22;
-    const fromInsideCompound = from.z > boundaryZ;
-    const toInsideCompound = to.z > boundaryZ;
+    const isInsideCompound = (p: THREE.Vector3) =>
+      p.x > ox - 82 && p.x < ox + 18 && p.z > oz - 75.5 && p.z < oz + 51.0;
+    const fromInsideCompound = isInsideCompound(from);
+    const toInsideCompound = isInsideCompound(to);
     if (fromInsideCompound !== toInsideCompound) {
       const openPoints = this.getOpenCompoundAccessPoints();
       if (openPoints.length === 0) return null;
       openPoints.sort((a, b) => Math.hypot(a.x - from.x, a.z - from.z) - Math.hypot(b.x - from.x, b.z - from.z));
       const access = openPoints[0];
-      const crossZ = boundaryZ + (fromInsideCompound ? -1.1 : 1.1);
-      return new THREE.Vector3(access.x, getTerrainHeight(access.x, crossZ), crossZ);
+      // Route through whichever of the five open gates is nearest, including the north vehicle gate.
+      let outwardX = 0, outwardZ = 0;
+      if (Math.abs(access.x - (ox - 82)) < 1.5) outwardX = -1;
+      else if (Math.abs(access.x - (ox + 18)) < 1.5) outwardX = 1;
+      else if (Math.abs(access.z - (oz - 75.5)) < 1.5) outwardZ = -1;
+      else outwardZ = 1;
+      const direction = fromInsideCompound ? 1 : -1;
+      const crossX = access.x + outwardX * 1.1 * direction;
+      const crossZ = access.z + outwardZ * 1.1 * direction;
+      return new THREE.Vector3(crossX, getTerrainHeight(crossX, crossZ), crossZ);
     }
     return null;
+  }
+
+  /** Operates the 8-floor command-centre lift and returns the player's destination. */
+  public cycleCommandElevator(): THREE.Vector3 {
+    this.commandElevatorFloor = (this.commandElevatorFloor + 1) % 8;
+    const localY = 0.78 + this.commandElevatorFloor * 3.45;
+    if (this.commandElevatorPlatform) this.commandElevatorPlatform.position.y = localY;
+    UnifiedPhysicsManager.getInstance()?.updateColliderPosition(
+      'rebirth_command_elevator_platform',
+      [this.origin.x - 55.2, localY, this.origin.z + 22.8]
+    );
+    return new THREE.Vector3(this.origin.x - 55.2, 1.05 + this.commandElevatorFloor * 3.45, this.origin.z + 22.8);
   }
 
   public toggleGarageShutter(): boolean {
@@ -3427,17 +4416,78 @@ export class ApartmentBuilding {
     return this.garageShutterOpen;
   }
 
+  public toggleVehicleGate(): boolean {
+    this.vehicleGateOpen = !this.vehicleGateOpen;
+    if (this.vehicleGateGroup) this.vehicleGateGroup.position.y = this.vehicleGateOpen ? 5.0 : 0;
+    UnifiedPhysicsManager.getInstance()?.setDoorOpenState('apt_vehicle_gate', this.vehicleGateOpen);
+    soundEngine.playGateToggle(this.vehicleGateOpen);
+    return this.vehicleGateOpen;
+  }
+
+  public toggleSecondVehicleGate(): boolean {
+    this.vehicleGate2Open = !this.vehicleGate2Open;
+    if (this.vehicleGate2Group) this.vehicleGate2Group.position.y = this.vehicleGate2Open ? 5.0 : 0;
+    UnifiedPhysicsManager.getInstance()?.setDoorOpenState('apt_vehicle_gate_2', this.vehicleGate2Open);
+    soundEngine.playGateToggle(this.vehicleGate2Open);
+    return this.vehicleGate2Open;
+  }
+
+  /** Enemy-faction NPC systems register only explicitly hostile, living actors here. */
+  public registerHostileFactionTarget(target: HostileFactionTurretTarget): boolean {
+    return this.turrets?.registerHostileFactionTarget(target) ?? false;
+  }
+
+  public unregisterFactionTarget(id: string): void {
+    this.turrets?.unregisterFactionTarget(id);
+  }
+
+  public exportCompoundState(): CompoundSecuritySaveData {
+    return {
+      version: 1,
+      mainGateOpen: this.compoundGateOpen,
+      pedestrianGatesOpen: [this.compoundPedestrianDoorsOpen[0], this.compoundPedestrianDoorsOpen[1]],
+      vehicleGatesOpen: [this.vehicleGateOpen, this.vehicleGate2Open],
+      garageShutterOpen: this.garageShutterOpen,
+      turrets: this.turrets?.exportSaveData() ?? [],
+    };
+  }
+
+  public restoreCompoundState(saved?: CompoundSecuritySaveData): void {
+    if (!saved || saved.version !== 1) return;
+    this.compoundGateOpen = !!saved.mainGateOpen;
+    this.compoundPedestrianDoorsOpen = [!!saved.pedestrianGatesOpen?.[0], !!saved.pedestrianGatesOpen?.[1]];
+    this.vehicleGateOpen = !!saved.vehicleGatesOpen?.[0];
+    this.vehicleGate2Open = !!saved.vehicleGatesOpen?.[1];
+    this.garageShutterOpen = !!saved.garageShutterOpen;
+
+    if (this.compoundGateLeftLeaf && this.compoundGateRightLeaf) {
+      this.compoundGateLeftLeaf.rotation.y = this.compoundGateOpen ? -Math.PI / 2 : 0;
+      this.compoundGateRightLeaf.rotation.y = this.compoundGateOpen ? Math.PI / 2 : 0;
+    }
+    if (this.compoundPedestrianDoorLeft) this.compoundPedestrianDoorLeft.rotation.y = this.compoundPedestrianDoorsOpen[0] ? 0 : Math.PI / 2;
+    if (this.compoundPedestrianDoorRight) this.compoundPedestrianDoorRight.rotation.y = this.compoundPedestrianDoorsOpen[1] ? 0 : -Math.PI / 2;
+    if (this.vehicleGateGroup) this.vehicleGateGroup.position.y = this.vehicleGateOpen ? 5.0 : 0;
+    if (this.vehicleGate2Group) this.vehicleGate2Group.position.y = this.vehicleGate2Open ? 5.0 : 0;
+    if (this.garageShutterGroup) this.garageShutterGroup.position.y = this.garageShutterOpen ? 2.65 : 0;
+
+    const physics = UnifiedPhysicsManager.getInstance();
+    physics?.setDoorOpenState('apt_compound_gate', this.compoundGateOpen);
+    physics?.setDoorOpenState('apt_compound_door_left', this.compoundPedestrianDoorsOpen[0]);
+    physics?.setDoorOpenState('apt_compound_door_right', this.compoundPedestrianDoorsOpen[1]);
+    physics?.setDoorOpenState('apt_vehicle_gate', this.vehicleGateOpen);
+    physics?.setDoorOpenState('apt_vehicle_gate_2', this.vehicleGate2Open);
+    physics?.setDoorOpenState('apt_garage_shutter', this.garageShutterOpen);
+    this.turrets?.importSaveData(saved.turrets as TurretSaveRecord[] | undefined);
+  }
+
   public isCompoundGateOpen(): boolean { return this.compoundGateOpen; }
   public isFrontDoorOpen(): boolean { return this.state.doorOpen; }
 
   public checkPlayerInPool(playerPos: THREE.Vector3): boolean {
-    // Rooftop is a solid dry terrace; only the backyard pool is swimmable.
-    const inRoofPool = playerPos.x >= this.origin.x - 5.5 && playerPos.x <= this.origin.x + 0.5 && playerPos.z >= this.origin.z - 2.8 && playerPos.z <= this.origin.z + 2.8 && playerPos.y >= 11.2 && playerPos.y <= 14.0;
-    const backyard = this.backyardPoolBounds;
-    const inBackyardPool = playerPos.x >= this.origin.x + backyard.minX && playerPos.x <= this.origin.x + backyard.maxX &&
-      playerPos.z >= this.origin.z + backyard.minZ && playerPos.z <= this.origin.z + backyard.maxZ &&
-      playerPos.y >= backyard.minY && playerPos.y <= backyard.maxY + 1.2;
-    return inRoofPool || inBackyardPool;
+    // The redesigned compound uses the rooftop infinity pool; the former backyard pool is removed.
+    return playerPos.x >= this.origin.x - 5.5 && playerPos.x <= this.origin.x + 0.5 &&
+      playerPos.z >= this.origin.z - 2.8 && playerPos.z <= this.origin.z + 2.8 &&
+      playerPos.y >= 11.2 && playerPos.y <= 14.0;
   }
 
   // ==========================================
@@ -3468,7 +4518,9 @@ export class ApartmentBuilding {
       this.patioDoorOpen
     );
     physMgr.registerBoxCollider('apt_wall_east', 'wall', [ox + 7.8, 6.4, oz], 0.6, 12.8, 14.0);
-    physMgr.registerBoxCollider('apt_wall_west', 'wall', [ox - 7.8, 6.4, oz], 0.6, 12.8, 14.0);
+    // West wall split at Z=-1.8 so Floors 1-4 connect openly into the explorable West Wing
+    physMgr.registerBoxCollider('apt_wall_west_s', 'wall', [ox - 7.8, 6.4, oz - 4.9], 0.6, 12.8, 4.2);
+    physMgr.registerBoxCollider('apt_wall_west_n', 'wall', [ox - 7.8, 6.4, oz + 3.1], 0.6, 12.8, 7.8);
     physMgr.registerBoxCollider('apt_wall_south_l', 'wall', [ox - 4.5, 6.4, oz - 6.8], 7.0, 12.8, 0.6);
     physMgr.registerBoxCollider('apt_wall_south_r', 'wall', [ox + 4.5, 6.4, oz - 6.8], 7.0, 12.8, 0.6);
 
@@ -3483,21 +4535,6 @@ export class ApartmentBuilding {
       0,
       this.state.doorOpen
     );
-    // Backyard private garage solid walls and roll-up shutter
-    physMgr.registerBoxCollider('apt_garage_wall_w', 'wall', [ox - 16.7, 1.5, oz + 14.5], 0.25, 3.0, 9.5);
-    physMgr.registerBoxCollider('apt_garage_wall_e', 'wall', [ox - 8.3, 1.5, oz + 14.5], 0.25, 3.0, 9.5);
-    physMgr.registerBoxCollider('apt_garage_wall_n', 'wall', [ox - 12.5, 1.5, oz + 19.2], 8.5, 3.0, 0.25);
-    physMgr.registerBoxCollider(
-      'apt_garage_shutter',
-      'wall',
-      [ox - 12.5, 1.35, oz + 9.8],
-      5.1,
-      2.55,
-      0.18,
-      0,
-      this.garageShutterOpen
-    );
-
     // 2. Rooftop pool basin walls. The water surface is a swim zone;
     // the dry deck remains supported at y=9.9 by PlayerController.
     physMgr.registerBoxCollider('apt_pool_rim_n', 'wall', [ox - 2.5, 12.2, oz - 2.92], 6.0, 1.9, 0.22);
@@ -3520,25 +4557,77 @@ export class ApartmentBuilding {
     physMgr.registerBoxCollider('apt_roof_lounger_ne', 'prop', [ox + 5.6, 13.14, oz + 5.0], 0.78, 0.22, 1.8);
     physMgr.registerBoxCollider('apt_roof_lounger_w', 'prop', [ox - 5.8, 13.14, oz], 1.8, 0.22, 0.78);
 
-    // 3. Fully enclosed residential compound. The front wall has a 5.1m double-gate opening.
-    physMgr.registerBoxCollider('apt_compound_wall_west', 'wall', [ox - 19.0, 1.9, oz + 5.0], 0.9, 3.8, 54.8);
-    physMgr.registerBoxCollider('apt_compound_wall_east', 'wall', [ox + 19.0, 1.9, oz + 5.0], 0.9, 3.8, 54.8);
-    physMgr.registerBoxCollider('apt_compound_wall_rear', 'wall', [ox, 1.9, oz + 32.0], 39.2, 3.8, 0.9);
-    physMgr.registerBoxCollider('apt_compound_wall_front_left_outer', 'wall', [ox - 15.86, 1.9, oz - 22.0], 6.6, 3.8, 0.9);
-    physMgr.registerBoxCollider('apt_compound_wall_front_left_inner', 'wall', [ox - 6.915, 1.9, oz - 22.0], 9.0, 3.8, 0.9);
-    physMgr.registerBoxCollider('apt_compound_wall_front_right_inner', 'wall', [ox + 6.915, 1.9, oz - 22.0], 9.0, 3.8, 0.9);
-    physMgr.registerBoxCollider('apt_compound_wall_front_right_outer', 'wall', [ox + 15.86, 1.9, oz - 22.0], 6.6, 3.8, 0.9);
-    physMgr.registerBoxCollider('apt_compound_gate', 'wall', [ox, 1.65, oz - 22.0], 5.1, 3.15, 0.28, 0, this.compoundGateOpen);
-    // One operable pedestrian opening remains; the east-side former opening is a solid wall.
-    physMgr.registerBoxCollider('apt_compound_door_left', 'wall', [ox - 12.0, 1.55, oz - 22.0], 1.55, 3.0, 0.24, 0, this.compoundPedestrianDoorsOpen[0]);
-    physMgr.registerBoxCollider('apt_compound_wall_front_east_pedestrian_closure', 'wall', [ox + 12.07, 1.9, oz - 22.0], 1.58, 3.8, 0.9);
+    // Four-bay garage shutter collision (Building 3 at local -48, -32); one command controls the four coordinated bay panels.
+    physMgr.registerBoxCollider('apt_garage_shutter', 'wall', [ox - 48, 1.65, oz - 39.08], 20, 3.3, 0.18, 0, this.garageShutterOpen);
 
-    // Backyard pool edge blockers. The water surface remains open for swimming.
-    physMgr.registerBoxCollider('apt_backyard_pool_n', 'wall', [ox, 0.42, oz + 17.05], 11.2, 0.7, 0.45);
-    physMgr.registerBoxCollider('apt_backyard_pool_s_l', 'wall', [ox - 3.4, 0.42, oz + 25.95], 4.5, 0.7, 0.45);
-    physMgr.registerBoxCollider('apt_backyard_pool_s_r', 'wall', [ox + 3.4, 0.42, oz + 25.95], 4.5, 0.7, 0.45);
-    physMgr.registerBoxCollider('apt_backyard_pool_w', 'wall', [ox - 5.55, 0.42, oz + 21.5], 0.45, 0.7, 8.9);
-    physMgr.registerBoxCollider('apt_backyard_pool_e', 'wall', [ox + 5.55, 0.42, oz + 21.5], 0.45, 0.7, 8.9);
+    // Expanded five-times-area compound: 100 x 126.5 m (12,650 m2), 6 m walls and exactly five gates.
+    // Local bounds: X in [-82, +18], Z in [-75.5, +51.0] (World X: [-108, -8], Z: [-37.5, +89.0]).
+    const perimeterWalls: Array<[string, number, number, number, number]> = [
+      ['rebirth_west_south', -82, -38.25, 0.9, 74.5], ['rebirth_west_north', -82, 26.0, 0.9, 50.0],
+      ['rebirth_east_south', 18, -50.25, 0.9, 50.5], ['rebirth_east_north', 18, 14.0, 0.9, 74.0],
+      ['rebirth_north_west', -55.0, 51.0, 54.0, 0.9], ['rebirth_north_east', -1.0, 51.0, 38.0, 0.9],
+      ['rebirth_south_west', -67.0, -75.5, 30.0, 0.9], ['rebirth_south_middle', -25.0, -75.5, 38.0, 0.9],
+      ['rebirth_south_east', 12.0, -75.5, 12.0, 0.9],
+    ];
+    for (const [id, x, z, w, d] of perimeterWalls) physMgr.registerBoxCollider(`apt_${id}`, 'wall', [ox + x, 3.0, oz + z], w, 6, d);
+    const westTowerZ = [-69, -56, -43, -30, -17, -6, 6, 20, 34, 46];
+    const eastTowerZ = [-69, -56, -43, -30, -18, -6, 6, 20, 34, 46];
+    westTowerZ.forEach((z, i) => physMgr.registerBoxCollider(`rebirth_tower_left_${i + 1}`, 'wall', [ox - 82, 4.55, oz + z], 2.15, 8, 2.15));
+    eastTowerZ.forEach((z, i) => physMgr.registerBoxCollider(`rebirth_tower_right_${i + 1}`, 'wall', [ox + 18, 4.55, oz + z], 2.15, 8, 2.15));
+    physMgr.registerBoxCollider('apt_compound_gate', 'wall', [ox, 2.4, oz - 75.5], 12, 4.8, 0.3, 0, this.compoundGateOpen);
+    physMgr.registerBoxCollider('apt_compound_door_left', 'wall', [ox - 82, 1.7, oz], 2, 3.4, 0.2, Math.PI / 2, this.compoundPedestrianDoorsOpen[0]);
+    physMgr.registerBoxCollider('apt_compound_door_right', 'wall', [ox + 18, 1.7, oz - 24], 2, 3.4, 0.2, -Math.PI / 2, this.compoundPedestrianDoorsOpen[1]);
+    physMgr.registerBoxCollider('apt_vehicle_gate', 'wall', [ox - 48, 2.4, oz - 75.5], 8, 4.8, 0.3, 0, this.vehicleGateOpen);
+    physMgr.registerBoxCollider('apt_vehicle_gate_2', 'wall', [ox - 24, 2.4, oz + 51.0], 8, 4.8, 0.3, 0, this.vehicleGate2Open);
+    // Explorable Mansion West & East Wings (perimeter-only walls with open South glass doors)
+    for (const side of [-1, 1] as const) {
+      const tag = side < 0 ? 'west' : 'east';
+      const wx = ox + side * 11.5;
+      physMgr.registerBoxCollider(`rebirth_wing_${tag}_outer`, 'wall', [ox + side * 14.92, 6.5, oz], 0.36, 13.0, 24.0);
+      physMgr.registerBoxCollider(`rebirth_wing_${tag}_north`, 'wall', [wx, 6.5, oz + 11.86], 7.0, 13.0, 0.3);
+      physMgr.registerBoxCollider(`rebirth_wing_${tag}_south_l`, 'wall', [wx - 2.35, 6.5, oz - 11.86], 2.1, 13.0, 0.3);
+      physMgr.registerBoxCollider(`rebirth_wing_${tag}_south_r`, 'wall', [wx + 2.35, 6.5, oz - 11.86], 2.1, 13.0, 0.3);
+      physMgr.registerBoxCollider(`rebirth_wing_${tag}_south_upper`, 'wall', [wx, 8.0, oz - 11.86], 2.6, 9.6, 0.3);
+    }
+
+    // Building 2: 8-storey Neo-Tactical Railway Command Centre at local (-48, 0, 24)
+    physMgr.registerBoxCollider('rebirth_command_west_wall', 'wall', [ox - 58.92, 14.2, oz + 24], 0.36, 28.4, 18);
+    physMgr.registerBoxCollider('rebirth_command_east_wall', 'wall', [ox - 37.08, 14.2, oz + 24], 0.36, 28.4, 18);
+    physMgr.registerBoxCollider('rebirth_command_north_wall', 'wall', [ox - 48, 14.2, oz + 32.82], 22, 28.4, 0.36);
+    physMgr.registerBoxCollider('rebirth_command_south_wall_left', 'wall', [ox - 54.6, 14.2, oz + 15.18], 8.8, 28.4, 0.36);
+    physMgr.registerBoxCollider('rebirth_command_south_wall_right', 'wall', [ox - 41.4, 14.2, oz + 15.18], 8.8, 28.4, 0.36);
+    for (let f = 1; f < 8; f++) {
+      physMgr.registerBoxCollider(`rebirth_command_south_upper_${f}`, 'wall', [ox - 48, 0.65 + f * 3.45 + 1.72, oz + 15.18], 22, 3.28, 0.36);
+    }
+    for (let f = 0; f < 8; f++) {
+      const fy = 0.65 + f * 3.45;
+      if (f === 0) {
+        physMgr.registerBoxCollider('rebirth_command_f1_desk', 'prop', [ox - 48.8, fy + 0.58, oz + 26.25], 3.4, 0.95, 0.95);
+      } else if (f <= 2) {
+        for (const dx of [-4.0, -0.8, 2.4]) {
+          if (f === 2 && dx > 0) continue;
+          physMgr.registerBoxCollider(`rebirth_command_desk_${f}_${dx}`, 'prop', [ox - 48 + dx, fy + 0.52, oz + 26.25], 2.35, 0.85, 0.9);
+        }
+      } else if (f <= 5) {
+        physMgr.registerBoxCollider(`rebirth_command_desk_${f}`, 'prop', [ox - 48.8, fy + 0.52, oz + 26.25], 2.8, 0.85, 0.95);
+      } else if (f === 6) {
+        physMgr.registerBoxCollider('rebirth_command_holo_table', 'prop', [ox - 50.0, fy + 0.54, oz + 25.5], 4.2, 0.88, 2.0);
+      } else {
+        physMgr.registerBoxCollider('rebirth_command_exec_desk', 'prop', [ox - 50.0, fy + 0.54, oz + 25.5], 3.4, 0.88, 1.1);
+      }
+    }
+
+    // Building 3: 3-level Neo-Tactical Vertical Security Garage at local (-48, 0, -32)
+    physMgr.registerBoxCollider('rebirth_garage_back_wall', 'wall', [ox - 48, 4.55, oz - 25.18], 20, 9.0, 0.35);
+    physMgr.registerBoxCollider('rebirth_garage_west_wall', 'wall', [ox - 57.82, 4.55, oz - 32], 0.35, 9.0, 14);
+    physMgr.registerBoxCollider('rebirth_garage_east_wall', 'wall', [ox - 38.18, 4.55, oz - 32], 0.35, 9.0, 14);
+    physMgr.registerBoxCollider('rebirth_garage_front_upper', 'wall', [ox - 48, 6.75, oz - 38.82], 20, 4.4, 0.35);
+    for (const [i, x] of [-9.7, -4.9, 0, 4.9, 9.7].entries()) {
+      physMgr.registerBoxCollider(`rebirth_garage_front_pier_${i}`, 'wall', [ox - 48 + x, 1.85, oz - 38.82], x === -9.7 || x === 9.7 ? 0.6 : 0.8, 3.3, 0.35);
+    }
+    physMgr.registerBoxCollider('rebirth_garage_workshop', 'prop', [ox - 40.8, 1.2, oz - 27.0], 5.0, 2.2, 3.2);
+    physMgr.registerBoxCollider('rebirth_garage_l2_bench', 'prop', [ox - 43.8, 5.1, oz - 35.2], 3.6, 0.92, 1.1);
+    physMgr.registerBoxCollider('rebirth_garage_l2_rack', 'prop', [ox - 55.6, 5.8, oz - 34.5], 1.1, 2.3, 3.2);
 
     // 3. Solid interior furniture and bathroom suite on Floor 1.
     physMgr.registerBoxCollider('apt_bed', 'prop', [ox - 5.5, 0.45, oz + 3.8], 2.4, 0.9, 2.8);
@@ -3646,6 +4735,7 @@ export class ApartmentBuilding {
   public dispose() {
     this.turrets?.dispose();
     this.basementRoom?.dispose();
+    this.commandScreens?.dispose();
     this.group.traverse((o) => {
       if (o instanceof THREE.Mesh) {
         o.geometry.dispose();

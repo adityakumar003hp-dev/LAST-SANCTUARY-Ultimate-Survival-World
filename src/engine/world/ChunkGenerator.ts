@@ -14,6 +14,7 @@ import { RailwayNetworkGenerator } from './RailwayNetworkGenerator';
 import { VegetationGenerator } from './VegetationGenerator';
 import { isProtectedSpawnZone } from './ProtectedSpawnZones';
 import { LODManager } from './LODManager';
+import { RealEarthBuildings, EnterableBuildingDef } from './RealEarthBuildings';
 import {
   getGrassPBR,
   getGrassTuftAlphaTexture,
@@ -59,6 +60,7 @@ export interface GeneratedChunk {
   roadMesh: THREE.Mesh | null;
   resourceMeshes: Map<string, THREE.Group>;
   poiMeshes: Map<string, THREE.Group>;
+  enterableBuildings: EnterableBuildingDef[];
   dispose: () => void;
 }
 
@@ -342,6 +344,21 @@ export class ChunkGenerator {
       group.add(pMesh);
     }
 
+    // 5b. High-Density Real Earth Neighborhoods, OSM Geometry & Enterable Buildings
+    const district = RealEarthBuildings.buildChunkDistrict(
+      coord.cx,
+      coord.cz,
+      worldSeed,
+      biomeDef.id,
+      quality,
+      lootedPoiIds,
+      apocalypticSeverity,
+      pois
+    );
+    if (district.group.children.length > 0) {
+      group.add(district.group);
+    }
+
     const chunkData: ChunkData = {
       coord,
       key,
@@ -399,6 +416,7 @@ export class ChunkGenerator {
       roadMesh,
       resourceMeshes,
       poiMeshes,
+      enterableBuildings: district.enterableBuildings,
       dispose,
     };
   }

@@ -97,10 +97,23 @@ export class TerrainGenerator {
       height = Math.max(-0.6, Math.min(height, 1.8));
     }
 
+    // Smooth rectangular clearing blend for the expanded 5x Compound and Oakridge Town
+    const compoundEdgeDist = Math.max(
+      -110 - x, x - (-6),
+      -39 - z, z - 91,
+      0
+    );
+    const townEdgeDist = Math.max(
+      -50 - x, x - 48,
+      -68 - z, z - 60,
+      0
+    );
+    const urbanClearBlend = Math.min(1.0, Math.min(compoundEdgeDist, townEdgeDist) / 16);
+
     if (isProtectedSpawnZone(x, z)) {
-      return Math.max(-0.5, Math.min(2.5, height * militaryFlatten * clearingFactor));
+      return 0;
     }
-    return height * (0.2 + 0.8 * militaryFlatten);
+    return height * (0.2 + 0.8 * militaryFlatten) * urbanClearBlend;
   }
 
   /**

@@ -104,6 +104,22 @@ export const REAL_WORLD_START_REGIONS: readonly EarthOrigin[] = [
     lon: 151.2093,
   },
   {
+    id: 'jaipur',
+    name: 'Jaipur — Aravalli Pink City',
+    country: 'India',
+    continent: 'Asia',
+    lat: 26.9124,
+    lon: 75.7873,
+  },
+  {
+    id: 'dubai',
+    name: 'Dubai — Arabian Gulf Coast',
+    country: 'United Arab Emirates',
+    continent: 'Asia',
+    lat: 25.2048,
+    lon: 55.2708,
+  },
+  {
     id: 'kathmandu',
     name: 'Kathmandu — Himalayan Foothills',
     country: 'Nepal',

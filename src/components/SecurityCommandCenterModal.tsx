@@ -26,6 +26,10 @@ export interface SecurityCommandCenterModalProps {
   // Gate states
   compoundGateOpen: boolean;
   onToggleCompoundGate: () => void;
+  vehicleGateOpen?: boolean;
+  onToggleVehicleGate?: () => void;
+  vehicleGate2Open?: boolean;
+  onToggleVehicleGate2?: () => void;
   garageShutterOpen: boolean;
   onToggleGarageShutter: () => void;
   frontDoorOpen: boolean;
@@ -66,6 +70,10 @@ export const SecurityCommandCenterModal: React.FC<SecurityCommandCenterModalProp
   onClose,
   compoundGateOpen,
   onToggleCompoundGate,
+  vehicleGateOpen = false,
+  onToggleVehicleGate,
+  vehicleGate2Open = false,
+  onToggleVehicleGate2,
   garageShutterOpen,
   onToggleGarageShutter,
   frontDoorOpen,
@@ -76,10 +84,7 @@ export const SecurityCommandCenterModal: React.FC<SecurityCommandCenterModalProp
   onToggleWestPedestrianDoor,
   eastPedestrianDoorOpen = false,
   onToggleEastPedestrianDoor,
-  turrets = [
-    { id: 'turret_left', name: 'West Flank Sentry Alpha', ammo: 485, maxAmmo: 500, health: 1000, maxHealth: 1000, isReloading: false, targetType: null, killsCount: 4, isLockedOn: false },
-    { id: 'turret_right', name: 'East Flank Sentry Bravo', ammo: 492, maxAmmo: 500, health: 1000, maxHealth: 1000, isReloading: false, targetType: null, killsCount: 7, isLockedOn: false }
-  ],
+  turrets = [],
   radarEntities = [],
   playerPosition = [-26, 0.25, 38]
 }) => {
@@ -138,7 +143,7 @@ export const SecurityCommandCenterModal: React.FC<SecurityCommandCenterModalProp
         </div>
 
         {/* Top Panel: Entrances & Gate States */}
-        <div className="border-b border-slate-800 bg-slate-900/40 px-4 py-2.5 grid grid-cols-2 sm:grid-cols-6 gap-2 text-xs">
+        <div className="border-b border-slate-800 bg-slate-900/40 px-4 py-2.5 grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
           {/* Compound Main Gate */}
           <div className="flex items-center justify-between rounded-lg bg-slate-950/80 p-2 border border-slate-800">
             <div>
@@ -152,6 +157,22 @@ export const SecurityCommandCenterModal: React.FC<SecurityCommandCenterModalProp
               className={`p-1.5 rounded text-xs font-bold ${compoundGateOpen ? 'bg-amber-600/30 text-amber-300 hover:bg-amber-600/50' : 'bg-emerald-600/30 text-emerald-300 hover:bg-emerald-600/50'}`}
             >
               {compoundGateOpen ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+
+          {/* Independent Vehicle Gate */}
+          <div className="flex items-center justify-between rounded-lg bg-slate-950/80 p-2 border border-slate-800">
+            <div>
+              <div className="text-[10px] font-mono text-slate-400">GATE 4 • VEHICLE ACCESS</div>
+              <div className={`font-bold ${vehicleGateOpen ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {vehicleGateOpen ? 'OPEN' : 'SECURED'}
+              </div>
+            </div>
+            <button
+              onClick={onToggleVehicleGate}
+              className={`p-1.5 rounded text-xs font-bold ${vehicleGateOpen ? 'bg-amber-600/30 text-amber-300' : 'bg-emerald-600/30 text-emerald-300'}`}
+            >
+              {vehicleGateOpen ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
             </button>
           </div>
 
@@ -187,6 +208,22 @@ export const SecurityCommandCenterModal: React.FC<SecurityCommandCenterModalProp
             </button>
           </div>
 
+          {/* Independent North Vehicle Gate (Gate 5) */}
+          <div className="flex items-center justify-between rounded-lg bg-slate-950/80 p-2 border border-slate-800">
+            <div>
+              <div className="text-[10px] font-mono text-slate-400">GATE 5 • NORTH VEHICLE</div>
+              <div className={`font-bold ${vehicleGate2Open ? 'text-amber-400' : 'text-emerald-400'}`}>
+                {vehicleGate2Open ? 'OPEN' : 'SECURED'}
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={onToggleVehicleGate2}
+              className={`p-1.5 rounded text-xs font-bold ${vehicleGate2Open ? 'bg-amber-600/30 text-amber-300' : 'bg-emerald-600/30 text-emerald-300'}`}
+            >
+              {vehicleGate2Open ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
+            </button>
+          </div>
           {/* Garage Shutter */}
           <div className="flex items-center justify-between rounded-lg bg-slate-950/80 p-2 border border-slate-800">
             <div>
@@ -254,8 +291,8 @@ export const SecurityCommandCenterModal: React.FC<SecurityCommandCenterModalProp
                 <div className="h-full w-full bg-emerald-500 rounded-full" />
               </div>
               <div className="mt-2 text-[10px] text-slate-400 flex justify-between">
-                <span>Perimeter Barrier</span>
-                <span className="text-emerald-400 font-mono">INTECT</span>
+                <span>Perimeter Barrier (100×126.5 m)</span>
+                <span className="text-emerald-400 font-mono">INTACT</span>
               </div>
             </div>
 
@@ -474,9 +511,12 @@ export const SecurityCommandCenterModal: React.FC<SecurityCommandCenterModalProp
           {/* RIGHT PANEL: DEFENSIVE TURRETS TELEMETRY (3 cols) */}
           <div className="lg:col-span-3 flex flex-col gap-3">
             <div className="text-xs font-bold font-mono tracking-wider text-cyan-400 flex items-center gap-1.5">
-              <Crosshair className="h-4 w-4" /> DUAL 30MM SENTRY TURRETS
+              <Crosshair className="h-4 w-4" /> 20 ARMED PERIMETER TURRETS
             </div>
 
+            <div className="rounded-lg border border-emerald-900/60 bg-emerald-950/30 px-3 py-2 text-[11px] text-emerald-200">
+              HOSTILE-ONLY TARGETING: hostile NPCs and explicitly hostile factions only. Player, friendly and neutral entities are protected; unknown allegiance is never engaged.
+            </div>
             {turrets.map((turret) => {
               const ammoPercent = Math.round((turret.ammo / turret.maxAmmo) * 100);
               const healthPercent = Math.round((turret.health / turret.maxHealth) * 100);
@@ -530,7 +570,7 @@ export const SecurityCommandCenterModal: React.FC<SecurityCommandCenterModalProp
             <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-3 space-y-1.5 text-xs text-slate-300">
               <div className="text-[10px] font-mono font-bold text-slate-400 uppercase">ENGAGEMENT DIRECTIVE</div>
               <p className="text-[11px] text-slate-400 leading-relaxed">
-                Rules of Engagement: Autonomous lethal interception authorised against all infected entities and feral apex predators within 32m perimeter cone. Zero friendly fire.
+                Rules of Engagement: Autonomous lethal interception authorised only against explicitly hostile NPCs and registered enemy-faction actors within range. Player, friendly NPCs, neutral entities and wildlife are never targeted.
               </p>
             </div>
           </div>
@@ -540,9 +580,9 @@ export const SecurityCommandCenterModal: React.FC<SecurityCommandCenterModalProp
         <div className="border-t border-slate-800 bg-slate-900/80 px-4 py-2 text-xs flex items-center justify-between">
           <div className="flex items-center gap-2 overflow-x-auto text-[11px] font-mono text-slate-300">
             <span className="text-cyan-400 font-bold">[LOG 08:42:15]</span>
-            <span className="text-emerald-400">● Perimeter perimeter secure.</span>
+            <span className="text-emerald-400">● Compound perimeter secure (5× expansion).</span>
             <span className="text-slate-500">|</span>
-            <span className="text-amber-400">▲ Sentry Alpha tracking 0 infected beyond gate.</span>
+            <span className="text-amber-400">▲ HOSTILE-ONLY AUTO DEFENCE · 20 SENTRIES ONLINE</span>
             <span className="text-slate-500">|</span>
             <span className="text-cyan-300">■ Water plant pressure nominal at 4.2 bar.</span>
           </div>

@@ -8,15 +8,15 @@ The Apartment Compound and Military Starter Base are protected, authored spaces.
 
 The protected-zone predicate must be consulted by every relevant spawn path: chunk scatter, vegetation, POI/building placement, wildlife spawning and wildlife wandering. The existing `src/engine/world/ProtectedSpawnZones.ts` defines the protected world-space footprints; keep those coordinates synchronized with the final authored compound footprints.
 
-## 2. One gate structure with two doors
+## 2. Player compound: exactly five gates
 
-Each compound has exactly **one gate structure** in its otherwise continuous solid perimeter wall. That one gate contains **two door leaves** (a double-leaf gate), not two separate gates. Both leaves open and close as one gate interaction. When closed, the gate blocks player, infected and vehicle movement with physical collision. When open, the entrance is passable. Do not add a second gate or a second entrance opening.
+The Player Mansion / Rebirth Compound has exactly **five independent perimeter gates** in its otherwise continuous wall: **one main vehicle gate, two pedestrian gates and two vehicle gates**. Each gate is animated, collidable while closed, passable while open, independently interactive and included in the security console and save state. Do not add any sixth entrance or an un-gated wall opening.
 
-The apartment implementation already models a hinged double-leaf gate in `src/engine/prologue/ApartmentBuilding.ts`. Apply the same one-gate/two-leaf principle to the Military Starter Base perimeter.
+The separate Military Starter Base retains its existing one double-leaf gate; this five-gate requirement applies to the Player Mansion / Rebirth Compound only.
 
 ## 3. Solid perimeter walls
 
-Both compounds require continuous, visibly modeled solid perimeter walls. Wall sections must meet without gaps except at the single double-leaf gate opening. Physical colliders must match the visible wall geometry. Player, infected, wildlife and vehicles must not pass through, clip through, or walk over the walls. Gate collision must update correctly as the two leaves open and close.
+Both compounds require continuous, visibly modeled solid perimeter walls. The Player Mansion / Rebirth Compound has only the five specified gate openings; the Military Starter Base retains its single double-leaf opening. Physical colliders must match visible wall geometry. Player, infected, wildlife and vehicles must not pass through, clip through, or walk over the walls. Each gate collider must update correctly as its leaves or lift panel open and close.
 
 ## 4. Solid, visible architecture in every explorable structure
 
@@ -51,8 +51,9 @@ Every visible wheel on every locomotive and coach/bogie rotates with actual trai
 ## 7. Validation checklist
 
 - [ ] No procedural spawn inside either protected compound or inside its structures.
-- [ ] Each compound has continuous solid walls and exactly one gate structure with two door leaves.
-- [ ] Closed gate blocks passage; open gate allows passage; no invisible extra entrances.
+- [ ] Player Mansion / Rebirth Compound has continuous walls and exactly five gates (1 main, 2 pedestrian, 2 vehicle).
+- [ ] Military Starter Base retains its single double-leaf gate.
+- [ ] Every gate blocks passage while closed and allows passage while open; no invisible extra entrances.
 - [ ] Apartment and Starter Base rooms/floors have visible solid surfaces and matching collision.
 - [ ] Every explorable station/platform/coach has solid visible floors and walls.
 - [ ] Exterior view from an interior is only through modeled windows/doors/openings.
@@ -62,4 +63,4 @@ Every visible wheel on every locomotive and coach/bogie rotates with actual trai
 
 ## Implementation status note
 
-The supplied project source already contains protected spawn-zone checks in chunk, vegetation, POI and wildlife paths; an apartment double-leaf compound gate; visible train coach floors/walls/windows; station concourse walls/floors; platform geometry; and train wheel meshes. This update corrects AI wheel rotation during station dwell and reverse-direction wheel rotation. The complete military-base perimeter gate and a full audit of every explorable structure still require runtime inspection and testing; this document records the required target behaviour, not a claim that those remaining items have passed QA.
+The current Player Mansion / Rebirth Compound source now defines a 100 m × 126.5 m footprint (exactly five times the documented 44 m × 57.5 m baseline), five independently controlled gates, 20 perimeter towers and 20 armed sentries. The Military Starter Base gate remains unchanged. Source-level checks pass, but a full dependency install, production build and in-browser collision/navigation test remain required before runtime acceptance.

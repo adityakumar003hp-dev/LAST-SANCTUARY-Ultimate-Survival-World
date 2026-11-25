@@ -8,9 +8,11 @@
 export type ProtectedSpawnZone = { id: string; minX: number; maxX: number; minZ: number; maxZ: number };
 
 export const PROTECTED_SPAWN_ZONES: readonly ProtectedSpawnZone[] = [
-  // Player residence / future mansion compound, including building, courtyard,
-  // garden and garage. Keep a clear perimeter buffer for all procedural objects.
-  { id: 'player-mansion-compound', minX: -56, maxX: 4, minZ: 4, maxZ: 76 },
+  // Expanded 5x Player Mansion Compound (100 x 126.5 m: X in [-108, -8], Z in [-37.5, 89.0])
+  // plus a 4 m perimeter clearing buffer (stops cleanly south of Railway Station at Z = 94).
+  { id: 'player-mansion-compound', minX: -112, maxX: -4, minZ: -41, maxZ: 93 },
+  // Oakridge Town District (Main Avenue, Cross Street, Civic & Commercial buildings)
+  { id: 'oakridge-town-district', minX: -52, maxX: 50, minZ: -70, maxZ: 62 },
   // Military Starter Base at (954, 22) with reinforced perimeter clearing.
   // Nothing unrelated (trees, stone, scrap) can spawn inside or within boundary.
   { id: 'military-starter-base', minX: 915, maxX: 995, minZ: -18, maxZ: 62 },

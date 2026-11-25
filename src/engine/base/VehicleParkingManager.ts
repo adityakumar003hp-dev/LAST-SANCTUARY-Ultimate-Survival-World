@@ -6,6 +6,7 @@
 import * as THREE from 'three';
 import { VehicleState, VehicleType } from '../../types/game';
 import { TerrainGenerator } from '../world/TerrainGenerator';
+import { UnifiedPhysicsManager } from '../physics/UnifiedPhysicsManager';
 
 export interface VehicleDefinition {
   id: string;
@@ -97,16 +98,15 @@ export class VehicleParkingManager {
   }
 
   private initFleet() {
-    // Backyard Garage & Driveway coordinates (Apartment origin: -26, 0, 38)
-    // Garage is located in backyard at local (-12.5, 0, 14.5) -> World (-38.5, 0, 52.5)
+    // 4-Bay Security Garage at World (-74, 0, 6) + Compound Parking Apron (-54, 0, -10)
     const definitions: VehicleDefinition[] = [
-      // 1. Armored Tactical Enforcer SUV (Inside Garage Bay 1 - Left)
+      // 1. Armored Tactical Enforcer SUV (Inside Garage Bay 1)
       {
         id: 'veh_enforce_01',
         name: 'Aegis Enforcer Tactical Armored SUV',
         type: 'enforce',
-        defaultPos: [-40.2, 0.45, 52.8],
-        rotationY: 0,
+        defaultPos: [-81.35, 0.45, 6.0],
+        rotationY: Math.PI,
         maxSpeed: 24.0,     // ~86 km/h
         accel: 11.5,
         drag: 3.8,
@@ -114,13 +114,13 @@ export class VehicleParkingManager {
         fuelType: 'gasoline',
         batteryOrFuel: 98,
       },
-      // 2. Modern Executive Sports Sedan (Inside Garage Bay 2 - Right)
+      // 2. Modern Executive Sports Sedan (Compound Outdoor Parking Pad 1)
       {
         id: 'veh_sedan_01',
         name: 'Vanguard GT Executive Sports Sedan',
         type: 'car',
-        defaultPos: [-36.8, 0.42, 52.8],
-        rotationY: 0,
+        defaultPos: [-56.0, 0.42, -10.0],
+        rotationY: Math.PI,
         maxSpeed: 29.0,     // ~104 km/h
         accel: 13.5,
         drag: 3.2,
@@ -128,13 +128,13 @@ export class VehicleParkingManager {
         fuelType: 'gasoline',
         batteryOrFuel: 92,
       },
-      // 3. High-Torque Quad ATV (Garage Driveway Bay 3 - Left Front)
+      // 3. High-Torque Quad ATV (Compound Outdoor Parking Pad 2)
       {
         id: 'veh_atv_01',
         name: 'Predator 450 Off-Road Quad ATV',
         type: 'atv',
-        defaultPos: [-40.2, 0.42, 46.5],
-        rotationY: 0,
+        defaultPos: [-51.0, 0.42, -10.0],
+        rotationY: Math.PI,
         maxSpeed: 19.5,     // ~70 km/h
         accel: 15.0,
         drag: 4.2,
@@ -142,13 +142,13 @@ export class VehicleParkingManager {
         fuelType: 'gasoline',
         batteryOrFuel: 88,
       },
-      // 4. Enduro Dual-Sport Motorcycle (Garage Driveway Bay 4 - Right Front)
+      // 4. Enduro Dual-Sport Motorcycle (Inside Garage Bay 2)
       {
         id: 'veh_motorbike_01',
         name: 'Phantom 650cc Enduro Motorbike',
         type: 'motorbike',
-        defaultPos: [-36.8, 0.42, 46.5],
-        rotationY: 0,
+        defaultPos: [-76.45, 0.42, 6.0],
+        rotationY: Math.PI,
         maxSpeed: 32.0,     // ~115 km/h
         accel: 17.5,
         drag: 3.0,
@@ -156,13 +156,13 @@ export class VehicleParkingManager {
         fuelType: 'gasoline',
         batteryOrFuel: 95,
       },
-      // 5. Mountain Expedition Bicycle (Patio Walkway Stand)
+      // 5. Mountain Expedition Bicycle (Inside Garage Bay 3)
       {
         id: 'veh_bicycle_01',
         name: 'RidgeLine Mountain Expedition Bicycle',
         type: 'bicycle',
-        defaultPos: [-33.2, 0.38, 45.2],
-        rotationY: 0.15,
+        defaultPos: [-71.55, 0.38, 6.0],
+        rotationY: Math.PI,
         maxSpeed: 9.8,      // ~35 km/h
         accel: 6.5,
         drag: 2.5,
@@ -170,13 +170,13 @@ export class VehicleParkingManager {
         fuelType: 'pedal',
         batteryOrFuel: 100, // infinite pedal power
       },
-      // 6. Heavy Armored Hauler Truck (Driveway Outer Apron)
+      // 6. Heavy Armored Hauler Truck (Inside Garage Bay 4)
       {
         id: 'veh_truck_01',
-        name: 'Titan MK-IV Armored Utility Truck',
+        name: 'Military Enforcement Vehicle — Armored Gun Carrier',
         type: 'armored_truck',
-        defaultPos: [-44.5, 0.45, 48.0],
-        rotationY: 0.08,
+        defaultPos: [-66.65, 0.45, 6.0],
+        rotationY: Math.PI,
         maxSpeed: 21.0,     // ~75 km/h high ramming mass
         accel: 9.5,
         drag: 4.5,
@@ -274,8 +274,24 @@ export class VehicleParkingManager {
         return this.createMotorbikeMesh();
       case 'bicycle':
         return this.createBicycleMesh();
-      case 'armored_truck':
-        return this.createArmoredTruckMesh();
+      case 'armored_truck': {
+        const truck = this.createArmoredTruckMesh();
+        const mount = new THREE.Group();
+        mount.name = 'military_enforcement_remote_weapon_station';
+        mount.position.set(0, 2.45, -0.9);
+        const armor = new THREE.MeshStandardMaterial({ color: 0x202a31, metalness: 0.82, roughness: 0.38 });
+        const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.62, 0.7, 0.22, 12), armor);
+        ring.position.y = 0.12;
+        const turretBody = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.48, 0.95), armor);
+        turretBody.position.y = 0.46;
+        const barrel = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 1.65, 10), armor);
+        barrel.rotation.x = Math.PI / 2;
+        barrel.position.set(0, 0.5, 1.05);
+        mount.add(ring, turretBody, barrel);
+        mount.userData = { weaponClass: 'game_only_stabilized_autocannon', playerOperated: true, enabled: true };
+        truck.add(mount);
+        return truck;
+      }
       case 'motorboat':
         return this.createMotorboatMesh();
       default:
@@ -353,6 +369,34 @@ export class VehicleParkingManager {
     addWheel(1.25, 1.5, 'wheel_fr');
     addWheel(-1.25, -1.5, 'wheel_rl');
     addWheel(1.25, -1.5, 'wheel_rr');
+
+    // Tactical Armor Plating (Side Skirts, Sloped Hood Louver, Headlight Brush Cage)
+    const skirtL = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.42, 3.8), darkMat);
+    skirtL.position.set(-1.21, 0.72, 0);
+    const skirtR = skirtL.clone();
+    skirtR.position.x = 1.21;
+    const hoodArmor = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.08, 1.05), darkMat);
+    hoodArmor.position.set(0, 1.26, 1.78);
+    const grilleCage = new THREE.Mesh(new THREE.BoxGeometry(2.36, 0.36, 0.08), chromeMat);
+    grilleCage.position.set(0, 1.08, 2.52);
+    g.add(skirtL, skirtR, hoodArmor, grilleCage);
+
+    // Roof-Mounted Armed Tactical Turret Pod (Dual Barrel + Cyan Optical Sensor)
+    const turretBase = new THREE.Mesh(new THREE.CylinderGeometry(0.42, 0.48, 0.16, 12), darkMat);
+    turretBase.position.set(0, 2.2, -0.75);
+    const turretHead = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.3, 0.62), armorMat);
+    turretHead.position.set(0, 2.42, -0.75);
+    const barrelL = new THREE.Mesh(new THREE.CylinderGeometry(0.032, 0.035, 0.92, 8), darkMat);
+    barrelL.rotation.x = Math.PI / 2;
+    barrelL.position.set(-0.1, 2.44, -0.18);
+    const barrelR = barrelL.clone();
+    barrelR.position.x = 0.1;
+    const sensorPod = new THREE.Mesh(
+      new THREE.BoxGeometry(0.18, 0.14, 0.16),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
+    );
+    sensorPod.position.set(0.24, 2.45, -0.42);
+    g.add(turretBase, turretHead, barrelL, barrelR, sensorPod);
 
     // Dual Projector Headlights
     for (const x of [-0.85, 0.85]) {
@@ -667,6 +711,48 @@ export class VehicleParkingManager {
     plow.position.set(0, 0.65, 3.0);
     g.add(chassis, cab, bed, plow);
 
+    // Heavy Composite Side Armor Plates & Cab Windshield Blast Visor
+    const steelMat = new THREE.MeshStandardMaterial({ color: 0x222933, roughness: 0.5, metalness: 0.85 });
+    const glassSlitMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.2, metalness: 0.9 });
+    for (const side of [-1, 1]) {
+      const sideArmor = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.18, 4.9), steelMat);
+      sideArmor.position.set(side * 1.28, 1.48, -0.35);
+      sideArmor.castShadow = true;
+      g.add(sideArmor);
+      for (const pz of [-2.1, -1.15, -0.2]) {
+        const gunPort = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.16, 0.24), darkMat);
+        gunPort.position.set(side * 1.3, 1.78, pz);
+        g.add(gunPort);
+      }
+    }
+    const visor = new THREE.Mesh(new THREE.BoxGeometry(2.15, 0.42, 0.12), steelMat);
+    visor.position.set(0, 1.98, 2.54);
+    const slitL = new THREE.Mesh(new THREE.BoxGeometry(0.75, 0.14, 0.14), glassSlitMat);
+    slitL.position.set(-0.55, 1.96, 2.55);
+    const slitR = slitL.clone();
+    slitR.position.x = 0.55;
+    g.add(visor, slitL, slitR);
+
+    // 360° Roof-Mounted Armored Heavy Autocannon Turret Station
+    const ring = new THREE.Mesh(new THREE.CylinderGeometry(0.68, 0.76, 0.22, 16), steelMat);
+    ring.position.set(0, 2.52, -0.8);
+    const cupola = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.48, 1.05), bodyMat);
+    cupola.position.set(0, 2.84, -0.8);
+    cupola.castShadow = true;
+    const gunShield = new THREE.Mesh(new THREE.BoxGeometry(0.86, 0.44, 0.12), steelMat);
+    gunShield.position.set(0, 2.86, -0.22);
+    const cannonL = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.055, 1.45, 10), darkMat);
+    cannonL.rotation.x = Math.PI / 2;
+    cannonL.position.set(-0.16, 2.86, 0.35);
+    const cannonR = cannonL.clone();
+    cannonR.position.x = 0.16;
+    const optic = new THREE.Mesh(
+      new THREE.BoxGeometry(0.22, 0.16, 0.2),
+      new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
+    );
+    optic.position.set(0.32, 3.12, -0.5);
+    g.add(ring, cupola, gunShield, cannonL, cannonR, optic);
+
     const wGeo = new THREE.CylinderGeometry(0.48, 0.48, 0.36, 14);
     wGeo.rotateZ(Math.PI / 2);
     for (const [wx, wz] of [[-1.25, 1.85], [1.25, 1.85], [-1.25, -0.7], [1.25, -0.7], [-1.25, -2.1], [1.25, -2.1]]) {
@@ -841,14 +927,32 @@ export class VehicleParkingManager {
       }
     }
 
-    // Position integration along forward heading vector
+    // Position integration along forward heading vector with solid collider check
     const moveDist = v.currentSpeed * delta;
-    v.state.position[0] += Math.sin(v.state.rotationY) * moveDist;
-    v.state.position[2] += Math.cos(v.state.rotationY) * moveDist;
+    const prevX = v.state.position[0];
+    const prevZ = v.state.position[2];
+    const desiredX = prevX + Math.sin(v.state.rotationY) * moveDist;
+    const desiredZ = prevZ + Math.cos(v.state.rotationY) * moveDist;
+
+    const physMgr = UnifiedPhysicsManager.getInstance();
+    if (physMgr && v.def.type !== 'motorboat') {
+      const radius = v.def.type === 'bicycle' || v.def.type === 'motorbike' ? 0.65 : 1.35;
+      const curVec = new THREE.Vector3(prevX, 0.35, prevZ);
+      const nextVec = new THREE.Vector3(desiredX, 0.35, desiredZ);
+      const res = physMgr.resolveMovement(curVec, nextVec, radius, 1.9);
+      v.state.position[0] = res.resolvedPos.x;
+      v.state.position[2] = res.resolvedPos.z;
+      if (res.collided) {
+        v.currentSpeed *= 0.25;
+      }
+    } else {
+      v.state.position[0] = desiredX;
+      v.state.position[2] = desiredZ;
+    }
 
     // Real-Life Odometer Accumulation (1 km = 1000m)
     if (!v.state.odometerKm) v.state.odometerKm = 0;
-    v.state.odometerKm += Math.abs(moveDist) / 1000;
+    v.state.odometerKm += Math.hypot(v.state.position[0] - prevX, v.state.position[2] - prevZ) / 1000;
 
     // Follow terrain or water surface smoothly (motorboat floats at water level y >= 0.1)
     const groundY = TerrainGenerator.getHeight(v.state.position[0], v.state.position[2], worldSeed);

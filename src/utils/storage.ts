@@ -9,6 +9,16 @@ export const CURRENT_SAVE_VERSION = 3;
 
 // Serialize writes per slot so an older checkpoint can never overtake a newer one.
 const slotWriteQueues = new Map<string, Promise<void>>();
+
+/** Wait until the newest queued checkpoint for a slot is committed before reading it. */
+async function waitForSlotWrites(slotId: string): Promise<void> {
+  const pending = slotWriteQueues.get(slotId);
+  if (pending) await pending.catch(() => undefined);
+}
+
+async function waitForAllSlotWrites(): Promise<void> {
+  await Promise.all(Array.from(slotWriteQueues.values(), (pending) => pending.catch(() => undefined)));
+}
 const backupKey = (slotId: string) => `lsr_save_backup_${slotId}`;
 const stagingKey = (slotId: string) => `lsr_save_staging_${slotId}`;
 
@@ -160,6 +170,9 @@ export async function saveGameToSlot(saveData: FullGameSave): Promise<void> {
 }
 
 export async function loadGameFromSlot(slotId: string): Promise<FullGameSave | null> {
+  // A Load Game action can happen while an autosave is still committing.
+  // Wait for that slot's queue so the menu never restores an older snapshot.
+  await waitForSlotWrites(slotId);
   let idbSave: FullGameSave | null = null;
   try {
     const db = await openDatabase();
@@ -181,6 +194,8 @@ export async function loadGameFromSlot(slotId: string): Promise<FullGameSave | n
 }
 
 export async function getAllSaveSlots(): Promise<SaveSlotMetadata[]> {
+  // Include saves whose writes were started just before the menu was opened.
+  await waitForAllSlotWrites();
   const merged = new Map<string, SaveSlotMetadata>();
 
   try {
@@ -204,15 +219,19 @@ export async function getAllSaveSlots(): Promise<SaveSlotMetadata[]> {
     if (typeof localStorage !== 'undefined') {
       for (let i = 0; i < localStorage.length; i++) {
         const key = localStorage.key(i);
-        if (!key || !key.startsWith('lsr_save_')) continue;
+        if (!key || !(key.startsWith('lsr_save_') || key.startsWith('lsr_save_backup_') || key.startsWith('lsr_save_staging_'))) continue;
         const raw = localStorage.getItem(key);
         if (!raw) continue;
-        const parsed = JSON.parse(raw) as Partial<FullGameSave>;
-        if (parsed?.metadata?.id) {
-          const existing = merged.get(parsed.metadata.id);
-          if (!existing || parsed.metadata.timestamp > existing.timestamp) {
-            merged.set(parsed.metadata.id, parsed.metadata);
-          }
+        // Validate each primary/backup/staging copy. A damaged primary must not
+        // hide a recoverable checkpoint from the Load Game list.
+        let candidateId = '';
+        try { candidateId = (JSON.parse(raw) as FullGameSave)?.metadata?.id ?? ''; } catch { continue; }
+        if (!candidateId) continue;
+        const parsed = parseSave(raw, candidateId);
+        if (!parsed) continue;
+        const existing = merged.get(candidateId);
+        if (!existing || parsed.metadata.timestamp > existing.timestamp) {
+          merged.set(candidateId, parsed.metadata);
         }
       }
     }

@@ -47,6 +47,7 @@ import { GlobalOutbreakSimulator } from './world/GlobalOutbreakSimulator';
 import { DEFAULT_EARTH_ORIGIN, EarthProjection, METERS_PER_DEG_LAT, normalizeLon } from './geo/EarthProjection';
 import { RealEarthDataset } from './geo/RealEarthDataset';
 import { RealWorldCities } from './geo/RealWorldCities';
+import { InteriorStreamingManager, InteriorInteractResult } from './world/InteriorStreamingManager';
 
 export interface GameEngineCallbacks {
   onStatsChange: (stats: PlayerStats) => void;
@@ -144,6 +145,7 @@ export class GameEngine {
   public combatEffects: TacticalCombatEffects;
   public worldEventsManager: WorldEventsManager;
   public globalOutbreakSimulator: GlobalOutbreakSimulator;
+  public interiorStreamingManager: InteriorStreamingManager;
   public earthOrigin: EarthOriginConfig = { ...DEFAULT_EARTH_ORIGIN };
 
   // Environment, Lights & Post-Processing
@@ -465,6 +467,8 @@ export class GameEngine {
     this.worldPersistence = new WorldPersistence();
     if (initialSave) this.worldPersistence.importSaveData({ discoveredChunks: initialSave.discoveredChunks, waypoints: initialSave.waypoints, chunkModifications: initialSave.chunkModifications });
     this.chunkManager = new ChunkManager(this.scene, seed, 'medium', this.worldPersistence);
+    this.interiorStreamingManager = new InteriorStreamingManager(this.scene, this.physicsManager, this.worldPersistence);
+    this.player.interiorStreamingManager = this.interiorStreamingManager;
     this.wildlifeManager = new WildlifeManager(this.scene, seed);
     this.rescueManager = new SurvivorRescueManager(this.scene, seed);
     this.npcSettlementManager = new NPCSettlementManager(this.scene);
@@ -554,6 +558,9 @@ export class GameEngine {
     // Register solid world colliders with physics manager
     this.prologueManager.townMgr.registerColliders(this.physicsManager);
     this.prologueManager.companionMgr.registerColliders(this.physicsManager);
+    if (initialSave?.compoundState) {
+      this.prologueManager.townMgr.apartmentBuilding.restoreCompoundState(initialSave.compoundState);
+    }
 
     // Storyline Checkpoint Manager (Handles all 70 missions and exact checkpoint restoration)
     this.storylineManager = new StorylineCheckpointManager(this);
@@ -938,6 +945,9 @@ export class GameEngine {
         this.chunkManager.updatePlayerPosition(this.player.position, true, true);
       }
     }
+    this.globalOutbreakSimulator?.setPopulationBudget(
+      effective.chunkQuality === 'low' ? 12 : effective.chunkQuality === 'medium' ? 18 : 28
+    );
   }
 
   public setQualityMode(mode: GraphicsQualityMode | 'auto') {
@@ -1520,6 +1530,13 @@ export class GameEngine {
       this.zombieMgr
     );
     this.chunkManager.setApocalypticSeverity(this.globalOutbreakSimulator.apocalypticSeverity);
+    this.interiorStreamingManager.update(
+      delta,
+      this.player.position,
+      this.chunkManager.getActiveEnterableBuildings(),
+      this.globalOutbreakSimulator.powerGridStability,
+      this.activeLocalLightLimit
+    );
     if (this.prologueManager?.townMgr) {
       this.prologueManager.townMgr.gridPowerFactor = this.globalOutbreakSimulator.powerGridStability;
     }
@@ -2286,9 +2303,46 @@ export class GameEngine {
     }
   }
 
+  private applyInteriorInteractResult(res: InteriorInteractResult): boolean {
+    if (!res.handled) return false;
+    if (res.teleportTarget) {
+      this.player.position.copy(res.teleportTarget);
+      this.player.velocity.set(0, 0, 0);
+      this.player.avatarGroup.position.copy(res.teleportTarget);
+      if (res.teleportYaw !== undefined) {
+        this.player.yaw = res.teleportYaw;
+      }
+      soundEngine.playFootstep();
+    }
+    if (res.collectedItems && res.collectedItems.length > 0) {
+      for (const item of res.collectedItems) {
+        this.callbacks.onItemCollected(item.id, item.qty);
+      }
+      soundEngine.playBuildSnap();
+      this.addXP(20);
+    }
+    if (res.rested) {
+      this.playerStats.stamina = Math.min(this.playerStats.maxStamina, this.playerStats.stamina + 30);
+      this.playerStats.health = Math.min(this.playerStats.maxHealth, this.playerStats.health + 15);
+      this.callbacks.onStatsChange({ ...this.playerStats });
+      soundEngine.playDawnVictoryChime();
+    }
+    if (res.message) {
+      this.callbacks.onInteractionPrompt(res.message);
+    }
+    return true;
+  }
+
   public handleInteractKey() {
     // E Key interaction
     const range = 3.8;
+
+    // -1.5 If inside a streamed Real-Earth building interior, prioritize interior loot/rest/exit
+    if (this.interiorStreamingManager.isInsideInterior(this.player.position.y)) {
+      if (this.applyInteriorInteractResult(this.interiorStreamingManager.handleInteract(this.player.position))) {
+        return;
+      }
+    }
 
     // -1. If currently inside train -> Check Pilot Observer Seat / Passenger Seat / Exit
     if (this.aiTrainManager?.activePassengerTrain) {
@@ -2445,7 +2499,29 @@ export class GameEngine {
         return;
       } else if (aptInteraction.id === 'compoundGate') {
         const isOpen = apt.toggleCompoundGate();
-        this.callbacks.onInteractionPrompt(isOpen ? 'Residential compound gate: Open' : 'Residential compound gate: Closed');
+        this.callbacks.onInteractionPrompt(isOpen ? 'Main 12 m compound gate: OPEN' : 'Main 12 m compound gate: CLOSED');
+        return;
+      } else if (aptInteraction.id === 'compoundDoorLeft') {
+        const isOpen = apt.toggleWestPedestrianDoor();
+        this.callbacks.onInteractionPrompt(isOpen ? 'Gate 2 west pedestrian access: OPEN' : 'Gate 2 west pedestrian access: LOCKED');
+        return;
+      } else if (aptInteraction.id === 'compoundDoorRight') {
+        const isOpen = apt.toggleEastPedestrianDoor();
+        this.callbacks.onInteractionPrompt(isOpen ? 'Gate 3 east emergency exit: OPEN' : 'Gate 3 east emergency exit: LOCKED');
+        return;
+      } else if (aptInteraction.id === 'vehicleGate') {
+        const isOpen = apt.toggleVehicleGate();
+        this.callbacks.onInteractionPrompt(isOpen ? 'Gate 4 independent vehicle entrance: OPEN' : 'Gate 4 independent vehicle entrance: CLOSED');
+        return;
+      } else if (aptInteraction.id === 'vehicleGate2') {
+        const isOpen = apt.toggleSecondVehicleGate();
+        this.callbacks.onInteractionPrompt(isOpen ? 'Gate 5 north vehicle entrance: OPEN' : 'Gate 5 north vehicle entrance: CLOSED');
+        return;
+      } else if (aptInteraction.id === 'commandElevator') {
+        const destination = apt.cycleCommandElevator();
+        this.player.position.copy(destination);
+        this.player.velocity.set(0, 0, 0);
+        this.callbacks.onInteractionPrompt('Railway Command Elevator: arrived at the next floor.');
         return;
       } else if (aptInteraction.id === 'fridge') {
         soundEngine.playUIClick();
@@ -2634,7 +2710,7 @@ export class GameEngine {
         return;
       } else if (aptInteraction.id === 'garageDoor') {
         const isOpen = apt.toggleGarageShutter();
-        this.callbacks.onInteractionPrompt(isOpen ? 'Backyard Garage: Roll-Up Shutter Raised [OPEN]' : 'Backyard Garage: Roll-Up Shutter Lowered [CLOSED]');
+        this.callbacks.onInteractionPrompt(isOpen ? 'Four-Bay Garage Doors: OPEN' : 'Four-Bay Garage Doors: CLOSED');
         return;
       } else if (aptInteraction.id === 'turret') {
         soundEngine.playUIClick();
@@ -2723,6 +2799,31 @@ export class GameEngine {
         text: line,
         duration: 4.5,
       });
+      return;
+    }
+
+    // Regional Earth Pedestrian Conversation & Aid
+    const regNpc = this.globalOutbreakSimulator.getNearestInteractivePedestrian(this.player.position, 3.5);
+    if (regNpc) {
+      const talk = this.globalOutbreakSimulator.interactWithPedestrian(regNpc.id, this.zombieMgr.isOutbreakActive);
+      if (talk) {
+        soundEngine.playUIClick();
+        this.callbacks.onPrologueSubtitle?.({
+          speaker: talk.speaker,
+          role: talk.role,
+          text: talk.text,
+          duration: 4.5,
+        });
+        if (talk.giftItem) {
+          this.callbacks.onItemCollected(talk.giftItem.id, talk.giftItem.qty);
+          this.callbacks.onInteractionPrompt(`${talk.speaker} shared +${talk.giftItem.qty} ${talk.giftItem.id.replace(/_/g, ' ')}.`);
+        }
+        return;
+      }
+    }
+
+    // Streamed Real-Earth & Regional Building Doorways
+    if (this.applyInteriorInteractResult(this.interiorStreamingManager.handleInteract(this.player.position))) {
       return;
     }
 
@@ -3276,10 +3377,35 @@ export class GameEngine {
       return;
     }
 
+    // If currently inside a streamed building interior, only evaluate interior exit/loot/rest prompts
+    if (this.interiorStreamingManager.isInsideInterior(this.player.position.y)) {
+      const intPrompt = this.interiorStreamingManager.getNearbyPrompt(this.player.position);
+      this.callbacks.onInteractionPrompt(intPrompt);
+      return;
+    }
+
     // Town Citizen Prompt
     const nearbyCitizen = this.prologueManager.townMgr.getNearestCitizen(this.player.position, 3.5);
     if (nearbyCitizen) {
       this.callbacks.onInteractionPrompt(`[E] Talk to ${nearbyCitizen.name} (${nearbyCitizen.role})`);
+      return;
+    }
+
+    // Regional Earth Pedestrian Prompt
+    const nearbyRegNpc = this.globalOutbreakSimulator.getNearestInteractivePedestrian(this.player.position, 3.5);
+    if (nearbyRegNpc) {
+      const stageTag =
+        nearbyRegNpc.infectionStage === 'stunned'
+          ? `TURNING IN ${Math.ceil(nearbyRegNpc.infectionTimer)}s`
+          : nearbyRegNpc.role;
+      this.callbacks.onInteractionPrompt(`[E] Talk to ${nearbyRegNpc.name} (${stageTag})`);
+      return;
+    }
+
+    // Streamed Real-Earth Building Doorway Prompt
+    const doorPrompt = this.interiorStreamingManager.getNearbyPrompt(this.player.position);
+    if (doorPrompt) {
+      this.callbacks.onInteractionPrompt(doorPrompt);
       return;
     }
 
@@ -4020,6 +4146,7 @@ export class GameEngine {
     WorldCoordinates.setWorldOrigin(this.earthOrigin);
 
     this.chunkManager.clearLoadedChunks();
+    this.interiorStreamingManager.disposeActiveSession();
     this.globalOutbreakSimulator.clearLocalPedestrians();
     this.zombieMgr.clearAllZombies();
 
@@ -4121,6 +4248,7 @@ export class GameEngine {
         trainSaveState: this.aiTrainManager?.getTrainSaveState(),
         railwayNPCSaveState: this.aiTrainManager?.npcManager.getSaveState(),
         activeRailwayTicket: this.activeRailwayTicket,
+        compoundState: this.prologueManager?.townMgr?.apartmentBuilding?.exportCompoundState(),
       };
     };
 
@@ -4191,6 +4319,7 @@ export class GameEngine {
     this.combatEffects?.dispose();
     this.worldEventsManager?.dispose();
     this.aiTrainManager?.dispose();
+    this.interiorStreamingManager?.dispose();
     this.globalOutbreakSimulator?.dispose();
     try {
       this.atmosphericSky?.dispose();

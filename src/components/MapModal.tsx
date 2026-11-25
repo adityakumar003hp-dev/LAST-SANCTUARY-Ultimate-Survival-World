@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { PlacedStructure, ZombieEntity, HarvestableResource, MapWaypoint } from '../types/game';
 import { BiomeGenerator } from '../engine/world/BiomeGenerator';
-import { getContinentDisplayPolygons } from '../engine/geo/RealEarthDataset';
+import { getContinentDisplayPolygons, REAL_EARTH_DATA_SOURCES } from '../engine/geo/RealEarthDataset';
 import { REAL_WORLD_CITIES } from '../engine/geo/RealWorldCities';
 import { EarthProjection } from '../engine/geo/EarthProjection';
 import {
@@ -30,6 +30,7 @@ import {
   OutbreakDangerLevel,
 } from '../engine/world/GlobalOutbreakSimulator';
 import { soundEngine } from '../utils/audio';
+import { BiomeOutbreakTrackerD3 } from './BiomeOutbreakTrackerD3';
 
 interface MapModalProps {
   isOpen: boolean;
@@ -80,6 +81,7 @@ export const MapModal: React.FC<MapModalProps> = ({
   playerYaw,
   safeZoneCenter,
   safeZoneRadius,
+  zombies = [],
   waypoints = [],
   onAddWaypoint,
   onRemoveWaypoint,
@@ -94,7 +96,7 @@ export const MapModal: React.FC<MapModalProps> = ({
   globalMetrics,
   onTravelToGeoCoordinate,
 }) => {
-  const [activeTab, setActiveTab] = useState<'local' | 'atlas'>('local');
+  const [activeTab, setActiveTab] = useState<'local' | 'atlas' | 'biomes'>('local');
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [panOffset, setPanOffset] = useState<{ x: number; z: number }>({ x: 0, z: 0 });
   const [cityFilter, setCityFilter] = useState('');
@@ -195,12 +197,22 @@ export const MapModal: React.FC<MapModalProps> = ({
         <div className="flex flex-wrap items-center justify-between gap-3 border-b border-neutral-800 px-5 py-3.5 bg-neutral-900/40">
           <div className="flex items-center gap-3">
             <div className="rounded-lg bg-amber-500/10 p-2 border border-amber-500/20 text-amber-400">
-              {activeTab === 'atlas' ? <Globe className="h-5 w-5 text-sky-400" /> : <Compass className="h-5 w-5" />}
+              {activeTab === 'atlas' ? (
+                <Globe className="h-5 w-5 text-sky-400" />
+              ) : activeTab === 'biomes' ? (
+                <Activity className="h-5 w-5 text-rose-400" />
+              ) : (
+                <Compass className="h-5 w-5" />
+              )}
             </div>
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base font-bold tracking-wide">
-                  {activeTab === 'atlas' ? 'Real Earth Global Atlas & Outbreak Telemetry' : 'Topographical World Cartography'}
+                  {activeTab === 'atlas'
+                    ? 'Real Earth Global Atlas & Outbreak Telemetry'
+                    : activeTab === 'biomes'
+                      ? 'Global Outbreak Tracker — 37 Biomes (D3 Live Telemetry)'
+                      : 'Topographical World Cartography'}
                 </h2>
                 <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs font-mono text-emerald-400 border border-neutral-700">
                   {currentBiome.name}
@@ -214,7 +226,7 @@ export const MapModal: React.FC<MapModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Dual Tab Toggle */}
+            {/* Triple Tab Toggle */}
             <div className="flex rounded-xl border border-neutral-800 bg-neutral-900 p-0.5 text-xs font-semibold">
               <button
                 type="button"
@@ -235,6 +247,16 @@ export const MapModal: React.FC<MapModalProps> = ({
               >
                 <Globe className="h-3.5 w-3.5" />
                 <span>Earth Atlas</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab('biomes')}
+                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 cursor-pointer transition-colors ${
+                  activeTab === 'biomes' ? 'bg-rose-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
+                }`}
+              >
+                <Activity className="h-3.5 w-3.5" />
+                <span>Global Outbreak Tracker</span>
               </button>
             </div>
 
@@ -383,6 +405,15 @@ export const MapModal: React.FC<MapModalProps> = ({
               </div>
             </div>
           </div>
+        ) : activeTab === 'biomes' ? (
+          <div className="flex-1 flex overflow-hidden bg-neutral-950">
+            <BiomeOutbreakTrackerD3
+              currentBiomeId={currentBiome.id}
+              zombies={zombies}
+              globalMetrics={globalMetrics}
+              globalCities={citiesList}
+            />
+          </div>
         ) : (
           /* Real Earth Global Atlas Tab */
           <div className="flex-1 flex flex-col lg:flex-row overflow-hidden bg-neutral-950">
@@ -493,6 +524,15 @@ export const MapModal: React.FC<MapModalProps> = ({
                   <span className="text-amber-400">● Alert</span>
                   <span className="text-rose-400">● Overrun</span>
                 </div>
+              </div>
+
+              <div className="rounded-xl border border-neutral-800/80 bg-neutral-900/50 px-3 py-1.5 text-[10px] font-mono text-neutral-400 flex flex-wrap items-center justify-between gap-2">
+                <span className="text-neutral-300 font-semibold">
+                  GIS Sources: {REAL_EARTH_DATA_SOURCES.map((s) => s.layer).join(' · ')}
+                </span>
+                <span className="text-neutral-500">
+                  Embedded Natural Earth + SRTM/HydroSHEDS offline model · Optional OpenStreetMap Overpass cache
+                </span>
               </div>
             </div>
 

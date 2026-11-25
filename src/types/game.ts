@@ -320,7 +320,7 @@ export interface Quest {
 }
 
 export type GraphicsQuality = 'low' | 'medium' | 'high' | 'ultra';
-export type GraphicsQualityMode = 'performance' | 'balanced' | 'quality' | 'ultra_5x';
+export type GraphicsQualityMode = 'performance' | 'balanced' | 'quality' | 'ultra_5x' | 'absolute_realism';
 export type GraphicsTargetFps = 30 | 60;
 export type GraphicsGovernorState = 'optimal' | 'adapting_down' | 'stabilized' | 'recovering' | 'manual';
 
@@ -661,6 +661,15 @@ export interface GlobalOutbreakSaveData {
   cityStates: GlobalOutbreakCitySave[];
 }
 
+export interface CompoundSecuritySaveData {
+  version: 1;
+  mainGateOpen: boolean;
+  pedestrianGatesOpen: [boolean, boolean];
+  vehicleGatesOpen: [boolean, boolean];
+  garageShutterOpen: boolean;
+  turrets: Array<{ id: string; ammo: number; health: number; killsCount: number }>;
+}
+
 export interface FullGameSave {
   saveVersion?: number;
   earthOrigin?: EarthOriginConfig;
@@ -703,6 +712,7 @@ export interface FullGameSave {
   trainSaveState?: TrainSaveState;
   railwayNPCSaveState?: RailwayNPCSaveRecord[];
   activeRailwayTicket?: RailwayTicket;
+  compoundState?: CompoundSecuritySaveData;
 }
 
 export type RailwayPassengerClass =

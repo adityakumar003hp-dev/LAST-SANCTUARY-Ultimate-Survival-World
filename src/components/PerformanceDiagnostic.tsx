@@ -20,6 +20,7 @@ const MODE_LABELS: { id: GraphicsQualityMode; label: string }[] = [
   { id: 'balanced', label: 'Balanced' },
   { id: 'quality', label: 'Ultra 4K' },
   { id: 'ultra_5x', label: 'Ultra 5x' },
+  { id: 'absolute_realism', label: 'Realism Max' },
 ];
 
 export const PerformanceDiagnostic: React.FC<PerformanceDiagnosticProps> = ({
@@ -186,14 +187,14 @@ export const PerformanceDiagnostic: React.FC<PerformanceDiagnosticProps> = ({
           <span>Picture Quality Mode</span>
           <span className="font-bold text-cyan-400 uppercase">{qualityMode.replace('_', ' ')}</span>
         </div>
-        <div className="grid grid-cols-4 gap-1">
+        <div className="grid grid-cols-5 gap-1">
           {MODE_LABELS.map((mode) => (
             <button
               key={mode.id}
               onClick={() => onSelectQualityMode(mode.id)}
               className={`py-1.5 text-[10px] font-bold uppercase rounded-lg border transition-all cursor-pointer whitespace-nowrap ${
                 qualityMode === mode.id
-                  ? mode.id === 'ultra_5x'
+                  ? (mode.id === 'ultra_5x' || mode.id === 'absolute_realism')
                     ? 'bg-amber-500/25 border-amber-400 text-amber-300 shadow-sm'
                     : 'bg-cyan-500/20 border-cyan-400 text-cyan-300 shadow-sm'
                   : 'bg-neutral-900/80 border-neutral-800 text-neutral-400 hover:text-white'

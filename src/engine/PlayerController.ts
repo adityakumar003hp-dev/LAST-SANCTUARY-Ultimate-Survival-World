@@ -7,6 +7,7 @@ import { STRUCTURES } from '../data/structures';
 import { UnifiedPhysicsManager } from './physics/UnifiedPhysicsManager';
 import { buildRealisticHumanoid } from './rendering/RealisticHumanoidBuilder';
 import { getWoodPBR, getMetalPBR, getFabricPBR, getSkinPBR } from '../utils/proceduralTextures';
+import type { InteriorStreamingManager } from './world/InteriorStreamingManager';
 
 export class PlayerController {
   private static readonly _tmpDesiredPos = new THREE.Vector3();
@@ -67,6 +68,7 @@ export class PlayerController {
   private swingDuration: number = 0.28;
   public worldSeed: number = 42;
   public aiTrainManager?: any;
+  public interiorStreamingManager?: InteriorStreamingManager;
 
   constructor(scene: THREE.Scene, camera: THREE.PerspectiveCamera, worldSeed: number = 42) {
     this.scene = scene;
@@ -474,16 +476,45 @@ export class PlayerController {
       effectiveGroundY = -4.5;
     }
 
-    // Five-floor apartment compound with retained basement (-26, 0, 38)
+    // Building 1: Option A 4-floor Player Apartment + Rooftop Pool + Explorable Side Wings (-26, 0, 38)
     let inApartmentPool = false;
     let waterSurfaceY = 0.0;
-    const isInsideApartmentFootprint =
-      this.position.x >= -34.8 &&
-      this.position.x <= -17.2 &&
-      this.position.z >= 30.2 &&
-      this.position.z <= 45.8;
+    const isInsideApartmentCore =
+      this.position.x >= -34.0 &&
+      this.position.x <= -18.0 &&
+      this.position.z >= 31.0 &&
+      this.position.z <= 45.0;
+    const isInsideApartmentWings =
+      !isInsideApartmentCore &&
+      this.position.x >= -41.2 &&
+      this.position.x <= -10.8 &&
+      this.position.z >= 25.8 &&
+      this.position.z <= 50.2;
 
-    if (isInsideApartmentFootprint) {
+    if (isInsideApartmentWings) {
+      const inEastWingStairs =
+        this.position.x >= -13.6 &&
+        this.position.x <= -11.6 &&
+        this.position.z >= 34.3 &&
+        this.position.z <= 39.7;
+      if (inEastWingStairs && this.position.y >= -0.2 && this.position.y < 10.2) {
+        const wFloor = THREE.MathUtils.clamp(Math.floor(Math.max(0, this.position.y - 0.25) / 3.2), 0, 2);
+        const wp = THREE.MathUtils.clamp((this.position.z - 34.5) / 5.0, 0, 1);
+        effectiveGroundY = 0.245 + wFloor * 3.2 + wp * 3.2;
+      } else if (this.position.y >= 11.8) {
+        effectiveGroundY = 13.06; // Wing roof terrace
+      } else if (this.position.y >= 9.2) {
+        effectiveGroundY = 9.845; // Wing Floor 4
+      } else if (this.position.y >= 6.0) {
+        effectiveGroundY = 6.645; // Wing Floor 3
+      } else if (this.position.y >= 3.0) {
+        effectiveGroundY = 3.445; // Wing Floor 2
+      } else {
+        effectiveGroundY = 0.245; // Wing Floor 1
+      }
+    }
+
+    if (isInsideApartmentCore) {
       // Rooftop basin occupies the south-west portion of the roof.
       // Only the basin volume is water; all surrounding terrace tiles stay dry.
       inApartmentPool =
@@ -507,12 +538,6 @@ export class PlayerController {
         this.position.z >= 33.4 && this.position.z <= 39.8;
 
       if (isInStairwell) {
-        // Switchback staircase:
-        // West lane (X < -20.0): Flight 0 (F1 -> F2, rises forward Z: 34.5 -> 38.7, Y: 0.245 -> 3.445)
-        //                        Flight 2 (F3 -> F4, rises forward Z: 34.5 -> 38.7, Y: 6.645 -> 9.845)
-        // East lane (X >= -20.0): Flight 1 (F2 -> F3, rises reverse Z: 38.7 -> 34.5, Y: 3.445 -> 6.645)
-        //                         Flight 3 (F4 -> F5 roof, rises reverse Z: 38.7 -> 34.5, Y: 9.845 -> 13.045)
-        //                         Basement flight (F1 -> B, descends forward Z: 34.5 -> 38.7, Y: 0.245 -> -2.955)
         const progressForward = Math.max(0, Math.min(1, (this.position.z - 34.5) / 4.2));
         const progressReverse = 1.0 - progressForward;
         const onRearLanding = this.position.z >= 38.2;
@@ -520,7 +545,6 @@ export class PlayerController {
         const isWestLane = this.position.x < -20.0;
 
         if (onRearLanding) {
-          // Rear landing joins Flight 0 and Flight 1 at F2 (3.445), Flight 2 and Flight 3 at F4 (9.845), or basement
           if (this.position.y < -1.0) {
             effectiveGroundY = -2.955;
           } else if (this.position.y >= 8.2) {
@@ -531,7 +555,6 @@ export class PlayerController {
             effectiveGroundY = 0.245;
           }
         } else if (onFrontLanding) {
-          // Front landing joins F1 (0.245), F3 (6.645), and F5 Roof (13.045 / 13.1)
           if (this.position.y >= 11.2) {
             effectiveGroundY = 13.1;
           } else if (this.position.y >= 5.0) {
@@ -540,44 +563,91 @@ export class PlayerController {
             effectiveGroundY = 0.245;
           }
         } else {
-          // On the stair flight itself
           if (isWestLane) {
             if (this.position.y >= 5.0) {
-              // Flight 2: F3 -> F4
               effectiveGroundY = 6.645 + progressForward * 3.2;
             } else {
-              // Flight 0: F1 -> F2
               effectiveGroundY = 0.245 + progressForward * 3.2;
             }
           } else {
-            // East Lane
             if (this.position.y < 1.0) {
-              // Basement flight descending forward
               effectiveGroundY = 0.245 - progressForward * 3.2;
             } else if (this.position.y >= 8.2) {
-              // Flight 3: F4 -> Roof
               effectiveGroundY = 9.845 + progressReverse * 3.2;
             } else {
-              // Flight 1: F2 -> F3
               effectiveGroundY = 3.445 + progressReverse * 3.2;
             }
           }
         }
       } else {
-        // The rooftop is a dry terrace, not a swimming pool.
         if (inApartmentPool) {
-          effectiveGroundY = 11.55; // rooftop pool basin floor
+          effectiveGroundY = 11.55;
         } else if (this.position.y >= 11.8) {
-          effectiveGroundY = 13.1; // Floor 5 rooftop terrace
+          effectiveGroundY = 13.1;
         } else if (this.position.y >= 9.2) {
-          effectiveGroundY = 9.845; // Floor 4 survival farm
+          effectiveGroundY = 9.845;
         } else if (this.position.y >= 6.0) {
-          effectiveGroundY = 6.645; // Floor 3 armory
+          effectiveGroundY = 6.645;
         } else if (this.position.y >= 3.0) {
-          effectiveGroundY = 3.445; // Floor 2 medical centre
+          effectiveGroundY = 3.445;
         } else {
           effectiveGroundY = 0.245;
         }
+      }
+    }
+
+    // Building 2: 8-Floor Railway Command Centre + Roof Helipad (World center (-74, 0, 62), X: [-85.2, -62.8], Z: [52.8, 71.2])
+    const inCommandCentre =
+      this.position.x >= -85.2 &&
+      this.position.x <= -62.8 &&
+      this.position.z >= 52.8 &&
+      this.position.z <= 71.2;
+    if (inCommandCentre) {
+      const cmdLocalX = this.position.x - (-74);
+      const cmdLocalZ = this.position.z - 62;
+      const onCmdStairs =
+        cmdLocalX >= 6.2 && cmdLocalX <= 9.1 &&
+        cmdLocalZ >= -5.2 && cmdLocalZ <= 6.2;
+
+      if (onCmdStairs) {
+        const stairFloor = THREE.MathUtils.clamp(Math.floor(Math.max(0, this.position.y - 0.76) / 3.45), 0, 7);
+        if (cmdLocalZ >= 4.0 && this.position.y >= 0.76 + stairFloor * 3.45 + 1.8) {
+          effectiveGroundY = 0.76 + (stairFloor + 1) * 3.45;
+        } else {
+          const p = THREE.MathUtils.clamp((cmdLocalZ + 5.0) / 9.3, 0, 1);
+          effectiveGroundY = 0.76 + stairFloor * 3.45 + p * 3.45;
+        }
+      } else if (this.position.y >= 27.1) {
+        effectiveGroundY = 28.44; // Roof Helipad Deck
+      } else {
+        const fl = THREE.MathUtils.clamp(Math.floor((this.position.y + 0.55 - 0.76) / 3.45), 0, 7);
+        effectiveGroundY = 0.76 + fl * 3.45;
+      }
+    }
+
+    // Building 3: 3-Level Vertical Security Garage (World center (-74, 0, 6), X: [-84.3, -63.7], Z: [-1.3, 13.3])
+    const inSecurityGarage =
+      this.position.x >= -84.3 &&
+      this.position.x <= -63.7 &&
+      this.position.z >= -1.3 &&
+      this.position.z <= 13.3;
+    if (inSecurityGarage) {
+      const gLocalX = this.position.x - (-74);
+      const gLocalZ = this.position.z - 6;
+      const inRearStairCorridor = gLocalZ >= 4.4 && gLocalZ <= 6.4;
+
+      if (inRearStairCorridor && gLocalX >= -8.7 && gLocalX <= -0.8 && this.position.y < 4.9) {
+        const p1 = THREE.MathUtils.clamp((gLocalX + 8.4) / 7.2, 0, 1);
+        effectiveGroundY = 0.36 + p1 * 4.31;
+      } else if (inRearStairCorridor && gLocalX >= -0.7 && gLocalX <= 7.1 && this.position.y >= 4.1) {
+        const p2 = THREE.MathUtils.clamp((gLocalX + 0.4) / 7.2, 0, 1);
+        effectiveGroundY = 4.67 + p2 * 4.48;
+      } else if (this.position.y >= 8.2) {
+        effectiveGroundY = 9.15; // Level 3 Roof Drone Pad
+      } else if (this.position.y >= 4.1) {
+        effectiveGroundY = 4.67; // Level 2 Mezzanine Workshop
+      } else {
+        effectiveGroundY = Math.max(effectiveGroundY, 0.36); // Level 1 4-Bay Hangar
       }
     }
 
@@ -757,12 +827,12 @@ export class PlayerController {
       }
     }
 
-    // Backyard paved stone patio and garage driveway (-45.0 to -15.0, Z: 44.8 to 60.0)
+    // Rear mansion patio terrace (-35 to -17, Z: 44.8 to 51.0)
     const isInBackyardPatio =
-      this.position.x >= -45.0 &&
-      this.position.x <= -15.0 &&
+      this.position.x >= -35.0 &&
+      this.position.x <= -17.0 &&
       this.position.z >= 44.8 &&
-      this.position.z <= 60.0;
+      this.position.z <= 51.0;
     if (isInBackyardPatio && this.position.y <= 0.8) {
       effectiveGroundY = Math.max(effectiveGroundY, 0.245);
     }
@@ -784,9 +854,23 @@ export class PlayerController {
       }
     }
 
+    // Streamed Earth building interiors (Y <= -35)
+    let inStreamedInterior = false;
+    if (this.interiorStreamingManager && this.interiorStreamingManager.isInsideInterior(this.position.y)) {
+      const intFloor = this.interiorStreamingManager.getFloorElevationAt(
+        this.position.x,
+        this.position.y,
+        this.position.z
+      );
+      if (intFloor !== null) {
+        effectiveGroundY = intFloor;
+        inStreamedInterior = true;
+      }
+    }
+
     // Water level check: natural water and the bounded rooftop swimming pool.
     const naturalWaterDepth = 0.0 - terrainY;
-    const inNaturalWater = naturalWaterDepth > 1.6 && this.position.y < 0.2 && effectiveGroundY >= terrainY;
+    const inNaturalWater = !inStreamedInterior && naturalWaterDepth > 1.6 && this.position.y < 0.2 && effectiveGroundY >= terrainY;
     const inWaterZone = inApartmentPool || inNaturalWater;
     if (!inApartmentPool) waterSurfaceY = 0.0;
 
@@ -1242,15 +1326,23 @@ export class PlayerController {
         const testY = headY + dirY * testDist;
         const testZ = headZ + dirZ * testDist;
 
-        // Ground terrain check
-        const groundHeight = getTerrainHeight(testX, testZ) + 0.4;
-        if (testY <= groundHeight) {
-          safeDistance = Math.max(1.2, testDist - 0.3);
-          break;
+        // Ground terrain check (skipped inside streamed building interiors below ground level)
+        if (!inStreamedInterior) {
+          const groundHeight = getTerrainHeight(testX, testZ) + 0.4;
+          if (testY <= groundHeight) {
+            safeDistance = Math.max(1.2, testDist - 0.3);
+            break;
+          }
+        } else if (this.interiorStreamingManager) {
+          const ceilY = this.interiorStreamingManager.getInteriorCeilingY();
+          if (testY >= ceilY - 0.35 || testY <= effectiveGroundY + 0.3) {
+            safeDistance = Math.max(1.2, testDist - 0.3);
+            break;
+          }
         }
 
         // Placed structure collision check
-        if (hasStructures) {
+        if (hasStructures && !inStreamedInterior) {
           let hitStructure = false;
           for (const s of buildingMgr.structures) {
             const sdx = Math.abs(s.position[0] - testX);
@@ -1273,12 +1365,20 @@ export class PlayerController {
         }
       }
 
+      if (inStreamedInterior) {
+        safeDistance = Math.min(safeDistance, 2.85);
+      }
+
       // Smooth camera distance pull-in
       this.currentCamDistance = THREE.MathUtils.damp(this.currentCamDistance, safeDistance, 18, delta);
 
       let targetX = headX + dirX * this.currentCamDistance;
       let targetY = headY + dirY * this.currentCamDistance;
       let targetZ = headZ + dirZ * this.currentCamDistance;
+      if (inStreamedInterior && this.interiorStreamingManager) {
+        const ceilY = this.interiorStreamingManager.getInteriorCeilingY();
+        targetY = Math.min(targetY, ceilY - 0.35);
+      }
 
       // Camera Shake decay and offset
       if (this.shakeIntensity > 0) {

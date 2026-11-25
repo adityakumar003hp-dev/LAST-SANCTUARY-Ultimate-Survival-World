@@ -4,11 +4,11 @@ import { WildlifeManager } from '../WildlifeManager';
 import { soundEngine } from '../../utils/audio';
 
 export interface SentryTurretState {
-  id: 'turret_left' | 'turret_right';
+  id: string;
   name: string;
   worldPosition: THREE.Vector3;
   targetId: string | null;
-  targetType: 'zombie' | 'creature' | null;
+  targetType: 'zombie' | 'faction' | null;
   currentYaw: number;
   currentPitch: number;
   burstCooldown: number;
@@ -33,14 +33,38 @@ export interface TurretProjectile {
   distanceRemaining: number;
   damage: number;
   targetId: string | null;
-  targetType: 'zombie' | 'creature' | null;
+  targetType: 'zombie' | 'faction' | null;
   life: number;
+}
+
+/**
+ * External NPC/faction adapter. A turret will engage this target only when its
+ * allegiance is explicitly 'hostile'. Unknown, neutral and friendly entities
+ * are rejected by default; the player can never be registered as a target.
+ */
+export interface HostileFactionTurretTarget {
+  id: string;
+  factionId: string;
+  allegiance: 'hostile' | 'friendly' | 'neutral' | 'unknown';
+  position: THREE.Vector3;
+  health: number;
+  isAlive: boolean;
+  isPlayer: boolean;
+  damage: (amount: number) => void;
+}
+
+export interface TurretSaveRecord {
+  id: string;
+  ammo: number;
+  health: number;
+  killsCount: number;
 }
 
 export class ApartmentTurrets {
   public group: THREE.Group;
   private projectileGroup: THREE.Group;
   private activeProjectiles: TurretProjectile[] = [];
+  private hostileFactionTargets = new Map<string, HostileFactionTurretTarget>();
   private tracerGeo: THREE.CylinderGeometry;
   private tracerMat: THREE.MeshBasicMaterial;
 
@@ -57,6 +81,7 @@ export class ApartmentTurrets {
     muzzleFlashR: THREE.Mesh;
     muzzleLight: THREE.PointLight;
     flashTimer: number;
+    homeYaw: number;
   }> = [];
 
   private parentOrigin: THREE.Vector3;
@@ -79,13 +104,31 @@ export class ApartmentTurrets {
       opacity: 0.95,
     });
 
-    // Two AI Turrets flanking the main compound double gate at local z = -22.0
-    // Left turret at x = -3.85, Right turret at x = +3.85
-    this.createTurret('turret_left', new THREE.Vector3(-3.85, 0, -22.0), Math.PI);
-    this.createTurret('turret_right', new THREE.Vector3(3.85, 0, -22.0), Math.PI);
+    // Exactly 20 armed AI sentries mounted across the expanded 100 x 126.5 m perimeter:
+    // two flanking each of the five gates (10) plus ten along the 20 perimeter towers/walls.
+    const perimeter = [
+      // Gate 1: main 12 m vehicle entrance (south wall, local X=0, Z=-75.5).
+      [-7.0, 8.0, -74.5, Math.PI], [7.0, 8.0, -74.5, Math.PI],
+      // Gate 2: west pedestrian entrance (west wall, local X=-82, Z=0).
+      [-82.0, 8.0, -3.0, Math.PI / 2], [-82.0, 8.0, 3.0, Math.PI / 2],
+      // Gate 3: east emergency pedestrian entrance (east wall, local X=+18, Z=-24).
+      [18.0, 8.0, -27.0, -Math.PI / 2], [18.0, 8.0, -21.0, -Math.PI / 2],
+      // Gate 4: south vehicle entrance straight to Garage (south wall, local X=-48, Z=-75.5).
+      [-53.0, 8.0, -74.5, Math.PI], [-43.0, 8.0, -74.5, Math.PI],
+      // Gate 5: north vehicle entrance (north wall, local X=-24, Z=+51.0).
+      [-29.0, 8.0, 50.0, 0], [-19.0, 8.0, 50.0, 0],
+      // Remaining ten sentries distributed on perimeter towers and walls.
+      [-68.0, 6.0, 50.0, 0], [8.0, 6.0, 50.0, 0],
+      [-70.0, 6.0, -74.5, Math.PI], [-25.0, 6.0, -74.5, Math.PI], [14.0, 6.0, -74.5, Math.PI],
+      [-82.0, 8.8, -43.0, Math.PI / 2], [-82.0, 8.8, 34.0, Math.PI / 2],
+      [18.0, 8.8, -43.0, -Math.PI / 2], [18.0, 8.8, 6.0, -Math.PI / 2], [18.0, 8.8, 34.0, -Math.PI / 2],
+    ] as const;
+    perimeter.forEach(([x, y, z, yaw], index) => {
+      this.createTurret(`turret_compound_${String(index + 1).padStart(2, '0')}`, new THREE.Vector3(x, y, z), yaw);
+    });
   }
 
-  private createTurret(id: 'turret_left' | 'turret_right', localPos: THREE.Vector3, defaultYaw: number) {
+  private createTurret(id: string, localPos: THREE.Vector3, defaultYaw: number) {
     const turretRoot = new THREE.Group();
     turretRoot.name = id;
     turretRoot.position.copy(localPos);
@@ -262,7 +305,7 @@ export class ApartmentTurrets {
     this.turrets.push({
       state: {
         id,
-        name: id === 'turret_left' ? 'West Flank Sentry Alpha' : 'East Flank Sentry Bravo',
+        name: `Perimeter Sentry ${id.slice(-2)}`, 
         worldPosition: worldPos,
         targetId: null,
         targetType: null,
@@ -292,13 +335,14 @@ export class ApartmentTurrets {
       muzzleFlashR,
       muzzleLight,
       flashTimer: 0,
+      homeYaw: defaultYaw,
     });
   }
 
   public update(
     delta: number,
     zombieMgr: ZombieManager | null,
-    wildlifeMgr: WildlifeManager | null,
+    _wildlifeMgr: WildlifeManager | null,
     playerPos: THREE.Vector3
   ) {
     const range = 32.0;
@@ -317,46 +361,45 @@ export class ApartmentTurrets {
         }
       }
 
-      // Step 1: Scan for Nearest Hostile Threat (Zombies & Dangerous Carnivores)
+      // Step 1: Acquire only explicitly hostile NPCs and hostile factions.
+      // Zombies are the game's existing hostile NPC class. Neutral wildlife is
+      // intentionally not a valid target for compound security.
       let nearestTargetPos: THREE.Vector3 | null = null;
       let targetDist = Infinity;
       let foundZombieId: string | null = null;
-      let foundCreatureId: string | null = null;
+      let foundFactionTarget: HostileFactionTurretTarget | null = null;
 
-      // A. Check Zombies
-      if (zombieMgr && zombieMgr.zombies) {
+      if (zombieMgr?.zombies) {
         for (const z of zombieMgr.zombies) {
-          if (z.state === 'dead') continue;
+          if (z.state === 'dead' || z.health <= 0) continue;
           const zPos = new THREE.Vector3(z.position[0], z.position[1] + 1.2, z.position[2]);
           const d = st.worldPosition.distanceTo(zPos);
           if (d < range && d < targetDist) {
             targetDist = d;
             nearestTargetPos = zPos;
             foundZombieId = z.id;
-            foundCreatureId = null;
+            foundFactionTarget = null;
           }
         }
       }
 
-      // B. Check Aggressive Wildlife Predators (rex, raptor, lion, tiger, wolf, bear)
-      if (wildlifeMgr) {
-        const beast = wildlifeMgr.getNearestHostileThreat(st.worldPosition, range);
-        if (beast && beast.state !== 'dead') {
-          const bPos = beast.group.position.clone().add(new THREE.Vector3(0, 1.2, 0));
-          const d = st.worldPosition.distanceTo(bPos);
-          if (d < targetDist) {
-            targetDist = d;
-            nearestTargetPos = bPos;
-            foundZombieId = null;
-            foundCreatureId = beast.id;
-          }
+      for (const candidate of this.hostileFactionTargets.values()) {
+        // Fail closed: only a living, explicitly hostile, non-player target may be engaged.
+        if (!candidate.id || !candidate.factionId?.trim() || (candidate.id.toLowerCase() === 'player' || candidate.id.toLowerCase().startsWith('player_')) || candidate.isPlayer ||
+            candidate.allegiance !== 'hostile' || !candidate.isAlive || candidate.health <= 0) continue;
+        const d = st.worldPosition.distanceTo(candidate.position);
+        if (d < range && d < targetDist) {
+          targetDist = d;
+          nearestTargetPos = candidate.position.clone();
+          foundZombieId = null;
+          foundFactionTarget = candidate;
         }
       }
 
       // Step 2: Aiming & Target Acquisition
       if (nearestTargetPos) {
-        st.targetId = foundZombieId || foundCreatureId;
-        st.targetType = foundZombieId ? 'zombie' : 'creature';
+        st.targetId = foundZombieId || foundFactionTarget?.id || null;
+        st.targetType = foundZombieId ? 'zombie' : 'faction';
 
         // Calculate world aim vector from turret head to target
         const turretHeadPos = new THREE.Vector3(
@@ -438,7 +481,7 @@ export class ApartmentTurrets {
                 st.ammo = Math.max(0, st.ammo - 1);
 
                 // Execute Shot & spawn 3D projectile tracer
-                this.fireTurretRound(turret, playerPos, nearestTargetPos, foundZombieId, foundCreatureId);
+                this.fireTurretRound(turret, playerPos, nearestTargetPos, foundZombieId, foundFactionTarget?.id ?? null);
 
                 // Direct authoritative hit
                 if (foundZombieId && zombieMgr) {
@@ -447,11 +490,17 @@ export class ApartmentTurrets {
                     st.killsCount++;
                     st.targetId = null;
                   }
-                } else if (foundCreatureId && wildlifeMgr) {
-                  const killed = wildlifeMgr.damageCreature(foundCreatureId, 42);
-                  if (killed) {
+                } else if (foundFactionTarget &&
+                    foundFactionTarget.allegiance === 'hostile' &&
+                    foundFactionTarget.isAlive && !foundFactionTarget.isPlayer &&
+                    foundFactionTarget.id.toLowerCase() !== 'player' && !foundFactionTarget.id.toLowerCase().startsWith('player_')) {
+                  // Re-check allegiance immediately before damage to prevent stale locks
+                  // from hurting a survivor whose faction changed during the firing cycle.
+                  foundFactionTarget.damage(42);
+                  if (!foundFactionTarget.isAlive || foundFactionTarget.health <= 0) {
                     st.killsCount++;
                     st.targetId = null;
+                    this.hostileFactionTargets.delete(foundFactionTarget.id);
                   }
                 }
 
@@ -488,7 +537,7 @@ export class ApartmentTurrets {
         turret.laserMat.opacity = 0.35;
 
         // Smooth 60-degree back-and-forth sweep overlooking street approach
-        const baseYaw = turret.state.id === 'turret_left' ? Math.PI + 0.18 : Math.PI - 0.18;
+        const baseYaw = turret.homeYaw;
         const sweepYaw = baseYaw + Math.sin(st.scanTime * 0.95) * 0.52;
         st.currentYaw = THREE.MathUtils.damp(st.currentYaw, sweepYaw, 4.0, delta);
         st.currentPitch = THREE.MathUtils.damp(st.currentPitch, 0.08, 4.0, delta);
@@ -503,13 +552,13 @@ export class ApartmentTurrets {
     }
 
     // Update active 3D projectile tracers
-    this.updateProjectiles(delta, zombieMgr, wildlifeMgr);
+    this.updateProjectiles(delta, zombieMgr, _wildlifeMgr);
   }
 
   private updateProjectiles(
     delta: number,
-    zombieMgr: ZombieManager | null,
-    wildlifeMgr: WildlifeManager | null
+    _zombieMgr: ZombieManager | null,
+    _wildlifeMgr: WildlifeManager | null
   ) {
     for (let i = this.activeProjectiles.length - 1; i >= 0; i--) {
       const p = this.activeProjectiles[i];
@@ -521,15 +570,8 @@ export class ApartmentTurrets {
       p.mesh.position.copy(p.position);
 
       if (p.distanceRemaining <= 0 || p.life > 0.8) {
-        // Projectile reached target or expired
-        if (p.targetId && p.distanceRemaining <= 0) {
-          if (p.targetType === 'zombie' && zombieMgr) {
-            zombieMgr.damageZombie(p.targetId, p.damage, 1.5);
-          } else if (p.targetType === 'creature' && wildlifeMgr) {
-            wildlifeMgr.damageCreature(p.targetId, p.damage);
-          }
-        }
-
+        // Damage is applied once by the authoritative target check at firing time;
+        // this tracer is visual-only and must never double-apply damage.
         this.projectileGroup.remove(p.mesh);
         p.mesh.geometry.dispose();
         this.activeProjectiles.splice(i, 1);
@@ -542,7 +584,7 @@ export class ApartmentTurrets {
     playerPos: THREE.Vector3,
     targetPos: THREE.Vector3,
     targetZombieId: string | null = null,
-    targetCreatureId: string | null = null
+    targetFactionId: string | null = null
   ) {
     // Visual muzzle flash
     turret.muzzleFlashL.visible = true;
@@ -582,10 +624,48 @@ export class ApartmentTurrets {
       targetPos: targetPos.clone(),
       distanceRemaining: totalDist,
       damage: 42,
-      targetId: targetZombieId || targetCreatureId,
-      targetType: targetZombieId ? 'zombie' : 'creature',
+      targetId: targetZombieId || targetFactionId,
+      targetType: targetZombieId ? 'zombie' : targetFactionId ? 'faction' : null,
       life: 0,
     });
+  }
+
+  /** Register or refresh an NPC from an explicitly hostile faction. */
+  public registerHostileFactionTarget(target: HostileFactionTurretTarget): boolean {
+    if (!target || !target.id || !target.factionId?.trim() || (target.id.toLowerCase() === 'player' || target.id.toLowerCase().startsWith('player_')) || target.isPlayer ||
+        target.allegiance !== 'hostile' || !target.isAlive || target.health <= 0) return false;
+    this.hostileFactionTargets.set(target.id, target);
+    return true;
+  }
+
+  public unregisterFactionTarget(id: string): void {
+    this.hostileFactionTargets.delete(id);
+    for (const turret of this.turrets) {
+      if (turret.state.targetId === id) {
+        turret.state.targetId = null;
+        turret.state.targetType = null;
+        turret.state.isLockedOn = false;
+        turret.state.shotsRemainingInBurst = 0;
+      }
+    }
+  }
+
+  public exportSaveData(): TurretSaveRecord[] {
+    return this.turrets.map(({ state }) => ({
+      id: state.id, ammo: state.ammo, health: state.health, killsCount: state.killsCount,
+    }));
+  }
+
+  public importSaveData(records: TurretSaveRecord[] | undefined): void {
+    if (!Array.isArray(records)) return;
+    const byId = new Map(records.map((record) => [record.id, record]));
+    for (const turret of this.turrets) {
+      const saved = byId.get(turret.state.id);
+      if (!saved) continue;
+      turret.state.ammo = THREE.MathUtils.clamp(Number(saved.ammo) || 0, 0, turret.state.maxAmmo);
+      turret.state.health = THREE.MathUtils.clamp(Number(saved.health) || 0, 0, turret.state.maxHealth);
+      turret.state.killsCount = Math.max(0, Math.floor(Number(saved.killsCount) || 0));
+    }
   }
 
   public getInteraction(pos: THREE.Vector3): {
@@ -625,6 +705,7 @@ export class ApartmentTurrets {
       p.mesh.geometry.dispose();
     });
     this.activeProjectiles = [];
+    this.hostileFactionTargets.clear();
     this.turrets = [];
   }
 }

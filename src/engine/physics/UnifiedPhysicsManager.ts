@@ -252,22 +252,39 @@ export class UnifiedPhysicsManager {
 
   // --- Surface Material & Profile Detection ---
   public getSurfaceProfileAt(x: number, z: number): SurfacePhysicsProfile {
-    // Check if player is on road/sidewalk
-    // Main Avenue (x between -6 and 6, z between -55 and 45)
-    if (Math.abs(x) <= 3.8 && z >= -50 && z <= 40) {
+    // Main Avenue (x between -6 and 6, z between -75 and 45)
+    if (Math.abs(x) <= 3.8 && z >= -75 && z <= 45) {
       return this.surfaceProfiles.asphalt;
     }
-    if (Math.abs(x) <= 6.2 && z >= -50 && z <= 40) {
+    if (Math.abs(x) <= 6.2 && z >= -75 && z <= 45) {
       return this.surfaceProfiles.concrete; // Sidewalk
     }
-    // Cross Street (z between -3.5 and 3.5, x between -55 and 55)
-    if (Math.abs(z) <= 3.5 && x >= -50 && x <= 50) {
+    // Cross Street (east from Main Ave: z between -3.5 and 3.5, x between -6 and 50)
+    if (Math.abs(z) <= 3.5 && x >= -6 && x <= 50) {
       return this.surfaceProfiles.asphalt;
     }
 
-    // Apartment Interior
-    if (x >= -33 && x <= -19 && z >= 31 && z <= 45) {
-      return this.surfaceProfiles.wood;
+    // Building 1 Mansion Interior (core + wings)
+    if (x >= -41 && x <= -11 && z >= 26 && z <= 50) {
+      return x >= -34 && x <= -18 && z >= 31 && z <= 45
+        ? this.surfaceProfiles.wood
+        : this.surfaceProfiles.concrete;
+    }
+
+    // Building 2 Railway Command Centre (World X: [-85, -63], Z: [53, 71])
+    if (x >= -85.5 && x <= -62.5 && z >= 52.5 && z <= 71.5) {
+      return this.surfaceProfiles.concrete;
+    }
+
+    // Building 3 Four-Bay Garage (World X: [-84, -64], Z: [-1, 13]) & Driveway
+    if (x >= -84.5 && x <= -63.5 && z >= -37.5 && z <= 13.5) {
+      return z >= -1 ? this.surfaceProfiles.concrete : this.surfaceProfiles.asphalt;
+    }
+
+    // Compound Main Gate Approach & Courtyard Plaza
+    if (x >= -108 && x <= -8 && z >= -37.5 && z <= 89.0) {
+      if (Math.abs(x + 26) <= 4.5 && z <= 31) return this.surfaceProfiles.asphalt;
+      if (Math.hypot(x + 56, z - 36) <= 10.5) return this.surfaceProfiles.concrete;
     }
 
     // Base Compound (around 0, 0)
@@ -281,9 +298,17 @@ export class UnifiedPhysicsManager {
 
   // --- Environmental Wind Force ---
   public getEnvironmentalWind(playerPos: THREE.Vector3, weatherType: string): THREE.Vector3 {
-    // Sheltered check (inside apartment or starter cabin)
-    if (playerPos.x >= -33 && playerPos.x <= -19 && playerPos.z >= 31 && playerPos.z <= 45 && playerPos.y < 3.2) {
-      return new THREE.Vector3(0, 0, 0); // Completely sheltered indoors
+    // Sheltered check: Building 1 Mansion floors 1-4
+    if (playerPos.x >= -41 && playerPos.x <= -11 && playerPos.z >= 26 && playerPos.z <= 50 && playerPos.y < 12.6) {
+      return new THREE.Vector3(0, 0, 0);
+    }
+    // Sheltered check: Building 2 Railway Command Centre floors 1-8
+    if (playerPos.x >= -85 && playerPos.x <= -63 && playerPos.z >= 53 && playerPos.z <= 71 && playerPos.y < 28.2) {
+      return new THREE.Vector3(0, 0, 0);
+    }
+    // Sheltered check: Building 3 Vertical Garage levels 1-2
+    if (playerPos.x >= -84 && playerPos.x <= -64 && playerPos.z >= -1 && playerPos.z <= 13 && playerPos.y < 9.0) {
+      return new THREE.Vector3(0, 0, 0);
     }
     if (Math.abs(playerPos.x) <= 4.0 && Math.abs(playerPos.z) <= 3.5 && playerPos.y < 3.0) {
       return new THREE.Vector3(0, 0, 0); // Inside starter cabin

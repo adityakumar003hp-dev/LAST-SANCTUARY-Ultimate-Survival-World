@@ -63,12 +63,14 @@ export function getPresetGraphicsConfig(
   preset: GraphicsQualityMode,
   caps: Pick<GraphicsHardwareCapabilities, 'isMobile' | 'isSoftwareGl' | 'deviceMemoryGb'>
 ): GraphicsManagerConfig {
-  const lowMem = caps.deviceMemoryGb > 0 && caps.deviceMemoryGb <= 4;
+  // Unknown memory is treated conservatively. Several mobile browsers do not
+  // expose deviceMemory, and assuming 8 GB caused high presets to OOM on phones.
+  const lowMem = caps.deviceMemoryGb <= 4;
   const baseTargetFps: GraphicsTargetFps = caps.isSoftwareGl ? 30 : 60;
 
   if (caps.isSoftwareGl || preset === 'performance') {
     return {
-      preset: caps.isSoftwareGl && preset === 'ultra_5x' ? 'performance' : preset,
+      preset: caps.isSoftwareGl && (preset === 'ultra_5x' || preset === 'absolute_realism') ? 'performance' : preset,
       autoGovernor: true,
       targetFps: baseTargetFps,
       renderScale: null,
@@ -89,8 +91,8 @@ export function getPresetGraphicsConfig(
       autoGovernor: true,
       targetFps: 60,
       renderScale: null,
-      shadowsEnabled: true,
-      shadowResolution: caps.isMobile || lowMem ? 1024 : 2048,
+      shadowsEnabled: !caps.isMobile && !lowMem,
+      shadowResolution: caps.isMobile || lowMem ? 0 : 2048,
       postProcessingEnabled: !caps.isMobile && !lowMem,
       bloomEnabled: false,
       anisotropyLevel: 4,
@@ -106,14 +108,34 @@ export function getPresetGraphicsConfig(
       autoGovernor: true,
       targetFps: 60,
       renderScale: null,
-      shadowsEnabled: true,
-      shadowResolution: caps.isMobile ? 1024 : 2048,
-      postProcessingEnabled: true,
-      bloomEnabled: true,
-      anisotropyLevel: 8,
-      viewDistanceChunks: 3,
+      shadowsEnabled: !caps.isMobile && !lowMem,
+      shadowResolution: caps.isMobile || lowMem ? 0 : 2048,
+      postProcessingEnabled: !caps.isMobile && !lowMem,
+      bloomEnabled: !caps.isMobile && !lowMem,
+      anisotropyLevel: caps.isMobile || lowMem ? 4 : 8,
+      viewDistanceChunks: caps.isMobile || lowMem ? 2 : 3,
       particleDensity: 1.0,
-      maxLocalLights: 4,
+      maxLocalLights: caps.isMobile || lowMem ? 3 : 4,
+    };
+  }
+
+  // Highest current-engine fidelity. Mobile/low-memory devices receive a safe
+  // adaptive variant; desktop-class devices unlock the full available pipeline.
+  if (preset === 'absolute_realism') {
+    const constrained = caps.isMobile || lowMem;
+    return {
+      preset: 'absolute_realism',
+      autoGovernor: true,
+      targetFps: 60,
+      renderScale: null,
+      shadowsEnabled: !constrained,
+      shadowResolution: constrained ? 0 : 3072,
+      postProcessingEnabled: !constrained,
+      bloomEnabled: !constrained,
+      anisotropyLevel: constrained ? 4 : 16,
+      viewDistanceChunks: constrained ? 2 : 5,
+      particleDensity: constrained ? 0.75 : 1.0,
+      maxLocalLights: constrained ? 3 : 6,
     };
   }
 
@@ -123,14 +145,14 @@ export function getPresetGraphicsConfig(
     autoGovernor: true,
     targetFps: 60,
     renderScale: null,
-    shadowsEnabled: true,
-    shadowResolution: caps.isMobile ? 2048 : 3072,
-    postProcessingEnabled: true,
-    bloomEnabled: true,
-    anisotropyLevel: 16,
-    viewDistanceChunks: 4,
+    shadowsEnabled: !caps.isMobile && !lowMem,
+    shadowResolution: caps.isMobile || lowMem ? 0 : 2048,
+    postProcessingEnabled: !caps.isMobile && !lowMem,
+    bloomEnabled: !caps.isMobile && !lowMem,
+    anisotropyLevel: caps.isMobile || lowMem ? 4 : 8,
+    viewDistanceChunks: caps.isMobile || lowMem ? 2 : 3,
     particleDensity: 1.0,
-    maxLocalLights: 6,
+    maxLocalLights: caps.isMobile || lowMem ? 3 : 4,
   };
 }
 
@@ -149,10 +171,12 @@ export function loadStoredGraphicsConfig(
           parsed.preset === 'performance' ||
           parsed.preset === 'balanced' ||
           parsed.preset === 'quality' ||
-          parsed.preset === 'ultra_5x'
+          parsed.preset === 'ultra_5x' ||
+          parsed.preset === 'absolute_realism'
             ? parsed.preset
             : defaultPreset;
         const base = getPresetGraphicsConfig(preset, caps);
+        const constrainedDevice = caps.isMobile || caps.isSoftwareGl || caps.deviceMemoryGb <= 4;
         return {
           ...base,
           preset,
@@ -160,42 +184,46 @@ export function loadStoredGraphicsConfig(
           targetFps: parsed.targetFps === 30 || parsed.targetFps === 60 ? parsed.targetFps : base.targetFps,
           renderScale:
             typeof parsed.renderScale === 'number' && Number.isFinite(parsed.renderScale)
-              ? clampRenderScale(parsed.renderScale)
+              ? Math.min(clampRenderScale(parsed.renderScale), constrainedDevice ? 1.15 : 2.0)
               : null,
           shadowsEnabled:
-            typeof parsed.shadowsEnabled === 'boolean' ? parsed.shadowsEnabled : base.shadowsEnabled,
+            !constrainedDevice && typeof parsed.shadowsEnabled === 'boolean' ? parsed.shadowsEnabled : base.shadowsEnabled,
           shadowResolution:
             parsed.shadowResolution === 0 ||
             parsed.shadowResolution === 512 ||
             parsed.shadowResolution === 1024 ||
             parsed.shadowResolution === 2048 ||
             parsed.shadowResolution === 3072
-              ? parsed.shadowResolution
+              ? constrainedDevice && parsed.shadowResolution > 1024
+                ? 1024
+                : parsed.shadowResolution
               : base.shadowResolution,
           postProcessingEnabled:
             typeof parsed.postProcessingEnabled === 'boolean'
-              ? parsed.postProcessingEnabled
+              ? parsed.postProcessingEnabled && !constrainedDevice
               : base.postProcessingEnabled,
           bloomEnabled:
-            typeof parsed.bloomEnabled === 'boolean' ? parsed.bloomEnabled : base.bloomEnabled,
+            typeof parsed.bloomEnabled === 'boolean' ? parsed.bloomEnabled && !constrainedDevice : base.bloomEnabled,
           anisotropyLevel:
             parsed.anisotropyLevel === 1 ||
             parsed.anisotropyLevel === 4 ||
             parsed.anisotropyLevel === 8 ||
             parsed.anisotropyLevel === 16
-              ? parsed.anisotropyLevel
+              ? constrainedDevice && parsed.anisotropyLevel > 4
+                ? 4
+                : parsed.anisotropyLevel
               : base.anisotropyLevel,
           viewDistanceChunks:
             typeof parsed.viewDistanceChunks === 'number'
-              ? clampViewDistanceChunks(parsed.viewDistanceChunks)
+              ? Math.min(clampViewDistanceChunks(parsed.viewDistanceChunks), constrainedDevice ? 2 : 5)
               : base.viewDistanceChunks,
           particleDensity:
             typeof parsed.particleDensity === 'number'
-              ? clampParticleDensity(parsed.particleDensity)
+              ? Math.min(clampParticleDensity(parsed.particleDensity), constrainedDevice ? 0.75 : 1.0)
               : base.particleDensity,
           maxLocalLights:
             typeof parsed.maxLocalLights === 'number'
-              ? Math.max(2, Math.min(6, Math.round(parsed.maxLocalLights)))
+              ? Math.max(2, Math.min(constrainedDevice ? 3 : 6, Math.round(parsed.maxLocalLights)))
               : base.maxLocalLights,
         };
       }
@@ -205,7 +233,8 @@ export function loadStoredGraphicsConfig(
         legacyPreset === 'performance' ||
         legacyPreset === 'balanced' ||
         legacyPreset === 'quality' ||
-        legacyPreset === 'ultra_5x'
+        legacyPreset === 'ultra_5x' ||
+        legacyPreset === 'absolute_realism'
       ) {
         return getPresetGraphicsConfig(legacyPreset, caps);
       }
@@ -233,10 +262,12 @@ export function probeGraphicsHardware(): GraphicsHardwareCapabilities {
     typeof navigator !== 'undefined' &&
     typeof window !== 'undefined' &&
     (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || window.innerWidth <= 840);
-  const deviceMemoryGb =
-    typeof navigator !== 'undefined' && typeof (navigator as any).deviceMemory === 'number'
-      ? Number((navigator as any).deviceMemory)
-      : 8;
+  const reportedMemory = typeof navigator !== 'undefined'
+    ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory
+    : undefined;
+  const deviceMemoryGb = typeof reportedMemory === 'number' && Number.isFinite(reportedMemory)
+    ? reportedMemory
+    : 4;
 
   if (typeof document === 'undefined') {
     return {
@@ -271,7 +302,7 @@ export function probeGraphicsHardware(): GraphicsHardwareCapabilities {
     const ext = gl.getExtension('WEBGL_debug_renderer_info');
     const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
     const gpuRendererName = String(gl.getParameter(param) || 'WebGL GPU');
-    const isSoftwareGl = /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpuRendererName);
+    const isSoftwareGl = /SwiftShader|llvmpipe|softpipe|Software|Basic Render|Microsoft Basic Render/i.test(gpuRendererName);
     const maxRenderBufferDim = Math.min(8192, Number(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)) || 4096);
     const maxTextureDim = Math.min(8192, Number(gl.getParameter(gl.MAX_TEXTURE_SIZE)) || 4096);
     const anisoExt =
@@ -385,6 +416,22 @@ export class GraphicsManager {
       next.shadowsEnabled = false;
       next.postProcessingEnabled = false;
       next.bloomEnabled = false;
+      next.shadowResolution = 0;
+      next.anisotropyLevel = 1;
+      next.viewDistanceChunks = 1;
+      next.particleDensity = Math.min(next.particleDensity, 0.45);
+      next.maxLocalLights = 2;
+      next.renderScale = next.renderScale === null ? null : Math.min(next.renderScale, 1.0);
+    } else if (this.caps.isMobile || this.caps.deviceMemoryGb <= 4) {
+      next.shadowsEnabled = false;
+      next.shadowResolution = 0;
+      next.postProcessingEnabled = false;
+      next.bloomEnabled = false;
+      next.anisotropyLevel = next.anisotropyLevel > 4 ? 4 : next.anisotropyLevel;
+      next.viewDistanceChunks = Math.min(next.viewDistanceChunks, 2);
+      next.particleDensity = Math.min(next.particleDensity, 0.75);
+      next.maxLocalLights = Math.min(next.maxLocalLights, 3);
+      next.renderScale = next.renderScale === null ? null : Math.min(next.renderScale, 1.15);
     }
 
     this.config = next;
@@ -421,8 +468,15 @@ export class GraphicsManager {
     const h = Math.max(240, viewportHeight);
     const safeMaxDim = Math.min(4096, Math.floor(Math.min(this.caps.maxRenderBufferDim, this.caps.maxTextureDim) * 0.92));
     const maxDprForCanvas = Math.min(safeMaxDim / w, safeMaxDim / h);
+    const pixelBudget = this.caps.isMobile || this.caps.isSoftwareGl || this.caps.deviceMemoryGb <= 4
+      ? 2_500_000
+      : this.caps.deviceMemoryGb <= 8
+        ? 4_500_000
+        : 6_000_000;
+    const maxDprForPixelBudget = Math.sqrt(pixelBudget / (w * h));
     const scaled = desiredDpr * this.watchdogDprFactor;
-    return Math.max(0.6, Math.min(scaled, maxDprForCanvas));
+    // Never force a minimum DPR that exceeds the device's actual buffer limit.
+    return Math.max(0.35, Math.min(scaled, maxDprForCanvas, maxDprForPixelBudget));
   }
 
   /**
@@ -449,10 +503,12 @@ export class GraphicsManager {
     let postEnabled = this.config.postProcessingEnabled && !this.caps.isSoftwareGl && hasComposer;
     let bloomEnabled = this.config.bloomEnabled && postEnabled;
     let anisotropy = Math.min(this.caps.maxAnisotropy, this.config.anisotropyLevel);
-    let viewDistanceChunks = this.config.viewDistanceChunks;
-    let particleDensity = this.config.particleDensity;
-    let maxLocalLights = this.caps.isSoftwareGl || this.caps.isMobile
-      ? Math.min(3, this.config.maxLocalLights)
+    let viewDistanceChunks = this.caps.isSoftwareGl ? 1 : this.config.viewDistanceChunks;
+    let particleDensity = this.caps.isSoftwareGl ? Math.min(0.45, this.config.particleDensity) : this.config.particleDensity;
+    let maxLocalLights = this.caps.isSoftwareGl
+      ? 2
+      : this.caps.isMobile
+        ? Math.min(3, this.config.maxLocalLights)
       : this.config.maxLocalLights;
 
     if (this.governorLevel >= 1) {
@@ -503,25 +559,25 @@ export class GraphicsManager {
       watchdogDprFactor: dprFactor,
       shadowsEnabled,
       shadowResolution: shadowRes,
-      shadowFrustumExtent: preset === 'ultra_5x' ? 56 : preset === 'quality' ? 48 : 44,
-      shadowBias: preset === 'ultra_5x' ? -0.00018 : preset === 'quality' ? -0.00022 : -0.00025,
-      shadowNormalBias: preset === 'ultra_5x' ? 0.024 : preset === 'quality' ? 0.028 : 0.03,
+      shadowFrustumExtent: (preset === 'ultra_5x' || preset === 'absolute_realism') ? 64 : preset === 'quality' ? 48 : 44,
+      shadowBias: (preset === 'ultra_5x' || preset === 'absolute_realism') ? -0.00016 : preset === 'quality' ? -0.00022 : -0.00025,
+      shadowNormalBias: (preset === 'ultra_5x' || preset === 'absolute_realism') ? 0.022 : preset === 'quality' ? 0.028 : 0.03,
       postProcessingEnabled: postEnabled,
       bloomEnabled,
-      bloomStrength: preset === 'ultra_5x' ? 0.21 : 0.17,
-      bloomRadius: preset === 'ultra_5x' ? 0.42 : 0.36,
-      bloomThreshold: preset === 'ultra_5x' ? 0.88 : 0.91,
-      sunShaftIntensity: preset === 'ultra_5x' ? 0.24 : preset === 'quality' ? 0.18 : 0.10,
+      bloomStrength: (preset === 'ultra_5x' || preset === 'absolute_realism') ? 0.24 : 0.17,
+      bloomRadius: (preset === 'ultra_5x' || preset === 'absolute_realism') ? 0.45 : 0.36,
+      bloomThreshold: (preset === 'ultra_5x' || preset === 'absolute_realism') ? 0.86 : 0.91,
+      sunShaftIntensity: (preset === 'ultra_5x' || preset === 'absolute_realism') ? 0.28 : preset === 'quality' ? 0.18 : 0.10,
       anisotropy,
       viewDistanceChunks,
       particleDensity,
       maxLocalLights,
       envIntensityMultiplier:
-        preset === 'performance' ? 0.88 : preset === 'balanced' ? 0.98 : preset === 'quality' ? 1.05 : 1.18,
+        preset === 'performance' ? 0.88 : preset === 'balanced' ? 0.98 : preset === 'quality' ? 1.05 : preset === 'absolute_realism' ? 1.22 : 1.18,
       sunIntensityMultiplier:
-        preset === 'performance' ? 0.96 : preset === 'balanced' ? 1.0 : preset === 'quality' ? 1.04 : 1.12,
+        preset === 'performance' ? 0.96 : preset === 'balanced' ? 1.0 : preset === 'quality' ? 1.04 : preset === 'absolute_realism' ? 1.15 : 1.12,
       fogDensityMultiplier:
-        preset === 'performance' ? 1.12 : preset === 'balanced' ? 1.0 : preset === 'quality' ? 0.92 : 0.82,
+        preset === 'performance' ? 1.12 : preset === 'balanced' ? 1.0 : preset === 'quality' ? 0.92 : preset === 'absolute_realism' ? 0.78 : 0.82,
       toneMappingExposure:
         preset === 'performance' ? 1.05 : preset === 'balanced' ? 1.08 : preset === 'quality' ? 1.10 : 1.13,
       chunkQuality,

@@ -55,6 +55,10 @@ interface RegionalPedestrian {
   infectionStage: 'healthy' | 'stunned' | 'zombie';
   infectionTimer: number; // Counts down 60 -> 0 seconds while stunned
   cityId: string | null;
+  countryName: string;
+  cityName: string | null;
+  hasGiftedSupply?: boolean;
+  infectionRing?: THREE.Mesh | null;
   group: THREE.Group;
   leftArm?: THREE.Object3D | null;
   rightArm?: THREE.Object3D | null;
@@ -113,12 +117,16 @@ export class GlobalOutbreakSimulator {
   public apocalypticSeverity = 0; // 0 = pre-outbreak/peaceful, 1 = full collapse
   public powerGridStability = 1.0; // 1.0 = normal grid, 0.15 = global blackout
 
-  private readonly maxActivePedestrians = 12;
+  private maxActivePedestrians = 16;
 
   constructor(scene: THREE.Scene, worldSeed: number = 42) {
     this.scene = scene;
     this.worldSeed = worldSeed;
     this.initCities();
+  }
+
+  public setPopulationBudget(maxCount: number) {
+    this.maxActivePedestrians = Math.max(8, Math.min(32, Math.round(maxCount)));
   }
 
   private initCities() {
@@ -287,15 +295,15 @@ export class GlobalOutbreakSimulator {
     if (distFromOrigin < 240) return;
 
     const targetCount = cityHit
-      ? Math.max(4, Math.min(this.maxActivePedestrians, Math.round((1 - Math.min(0.75, this.apocalypticSeverity * 0.7)) * 10)))
-      : 2;
+      ? Math.max(5, Math.min(this.maxActivePedestrians, Math.round((1 - Math.min(0.72, this.apocalypticSeverity * 0.65)) * this.maxActivePedestrians)))
+      : Math.max(3, Math.round(this.maxActivePedestrians * 0.25));
 
     if (this.pedestrians.size >= targetCount) return;
 
-    const needed = Math.min(3, targetCount - this.pedestrians.size);
+    const needed = Math.min(4, targetCount - this.pedestrians.size);
     for (let i = 0; i < needed; i++) {
       const angle = Math.random() * Math.PI * 2;
-      const dist = 24 + Math.random() * 44;
+      const dist = 22 + Math.random() * 52;
       const sx = playerPos.x + Math.cos(angle) * dist;
       const sz = playerPos.z + Math.sin(angle) * dist;
       if (isProtectedSpawnZone(sx, sz) || RailwayNetworkGenerator.isProtectedRailwayZone(sx, sz)) {
@@ -311,7 +319,11 @@ export class GlobalOutbreakSimulator {
 
       const idSeed = this.nextPedId++;
       const name = names[(idSeed * 7 + Math.floor(Math.abs(sx))) % names.length];
-      const role = PEDESTRIAN_ROLES[(idSeed * 3) % PEDESTRIAN_ROLES.length];
+      const role = !cityHit && continentKey === 'Antarctica'
+        ? 'Polar Researcher'
+        : !cityHit
+          ? (idSeed % 2 === 0 ? 'Local Ranger' : 'Traveler')
+          : PEDESTRIAN_ROLES[(idSeed * 3) % PEDESTRIAN_ROLES.length];
       const shirtHex = SHIRT_PALETTE[(idSeed * 5) % SHIRT_PALETTE.length];
       const pantsHex = PANTS_PALETTE[(idSeed * 3) % PANTS_PALETTE.length];
       const skinHex = SKIN_PALETTE[(idSeed * 2) % SKIN_PALETTE.length];
@@ -324,7 +336,7 @@ export class GlobalOutbreakSimulator {
         hairColor: hairHex,
         hairStyle: idSeed % 5 === 0 ? 'beanie' : idSeed % 3 === 0 ? 'ponytail' : 'short',
         fabricStyle: role === 'Nurse' ? 'uniform' : 'wool',
-        hasBackpack: role === 'Courier' || isOutbreakActive,
+        hasBackpack: role === 'Courier' || role === 'Traveler' || isOutbreakActive,
         name: `regional_npc_${idSeed}`,
       });
       rig.group.position.set(sx, sy, sz);
@@ -360,6 +372,8 @@ export class GlobalOutbreakSimulator {
         infectionStage: 'healthy',
         infectionTimer: 60,
         cityId: cityHit?.city.id ?? null,
+        countryName: spawnSample.country,
+        cityName: cityHit?.city.name ?? null,
         group: rig.group,
         leftArm: rig.leftArm,
         rightArm: rig.rightArm,
@@ -389,6 +403,10 @@ export class GlobalOutbreakSimulator {
         const shiver = Math.sin(this.simClock * 20 + ped.walkPhase) * 0.1;
         ped.group.rotation.x = THREE.MathUtils.damp(ped.group.rotation.x, 0.25, 4, delta);
         ped.group.rotation.z = shiver * 0.85;
+        if (ped.infectionRing) {
+          ped.infectionRing.rotation.z += delta * 2.5;
+          ped.infectionRing.scale.setScalar(0.92 + Math.sin(this.simClock * 8) * 0.12);
+        }
         if (ped.leftArm && ped.rightArm) {
           ped.leftArm.rotation.x = THREE.MathUtils.damp(ped.leftArm.rotation.x, -0.55 + shiver, 6, delta);
           ped.rightArm.rotation.x = THREE.MathUtils.damp(ped.rightArm.rotation.x, -0.55 - shiver, 6, delta);
@@ -504,6 +522,17 @@ export class GlobalOutbreakSimulator {
     ped.infectionTimer = 60.0;
     ped.routine = 'panic';
 
+    if (!ped.infectionRing) {
+      const ring = new THREE.Mesh(
+        new THREE.RingGeometry(0.28, 0.42, 16),
+        new THREE.MeshBasicMaterial({ color: 0xef4444, side: THREE.DoubleSide })
+      );
+      ring.rotation.x = -Math.PI / 2;
+      ring.position.set(0, 2.05, 0);
+      ped.group.add(ring);
+      ped.infectionRing = ring;
+    }
+
     if (ped.cityId) {
       const cityState = this.cityStates.get(ped.cityId);
       if (cityState && cityState.healthyCount > 0) {
@@ -512,6 +541,76 @@ export class GlobalOutbreakSimulator {
       }
     }
     return true;
+  }
+
+  public getNearestInteractivePedestrian(
+    playerPos: THREE.Vector3,
+    maxRange: number = 3.4
+  ): { id: string; name: string; role: string; infectionStage: 'healthy' | 'stunned' | 'zombie'; infectionTimer: number } | null {
+    let best: RegionalPedestrian | null = null;
+    let bestDistSq = maxRange * maxRange;
+    this.pedestrians.forEach((ped) => {
+      if (ped.infectionStage === 'zombie') return;
+      const dx = ped.position[0] - playerPos.x;
+      const dz = ped.position[2] - playerPos.z;
+      const dSq = dx * dx + dz * dz;
+      if (dSq <= bestDistSq && Math.abs(ped.position[1] - playerPos.y) < 3.2) {
+        bestDistSq = dSq;
+        best = ped;
+      }
+    });
+    if (!best) return null;
+    const found = best as RegionalPedestrian;
+    return {
+      id: found.id,
+      name: found.name,
+      role: found.role,
+      infectionStage: found.infectionStage,
+      infectionTimer: found.infectionTimer,
+    };
+  }
+
+  public interactWithPedestrian(
+    pedestrianId: string,
+    isOutbreakActive: boolean
+  ): { speaker: string; role: string; text: string; giftItem?: { id: string; qty: number } } | null {
+    const ped = this.pedestrians.get(pedestrianId);
+    if (!ped) return null;
+
+    if (ped.infectionStage === 'stunned') {
+      return {
+        speaker: ped.name,
+        role: `${ped.role} · CRITICAL`,
+        text: `Bite exposure! Turning in ${Math.ceil(ped.infectionTimer)}s — clear the area!`,
+      };
+    }
+
+    const place = ped.cityName ? `${ped.cityName}, ${ped.countryName}` : ped.countryName;
+    const cityTelemetry = ped.cityId ? this.cityStates.get(ped.cityId) : undefined;
+    let text = `Greetings from ${place}. Roads are clear for now—stay sharp out there.`;
+    let giftItem: { id: string; qty: number } | undefined;
+
+    if (isOutbreakActive) {
+      const danger = cityTelemetry?.dangerLevel ?? 'Alert';
+      text = `Outbreak status in ${place}: ${danger}! Grid is at ${Math.round((cityTelemetry?.powerGridRatio ?? this.powerGridStability) * 100)}%. Check local clinics and rail hubs for supplies!`;
+      if (!ped.hasGiftedSupply && Math.random() < 0.45) {
+        ped.hasGiftedSupply = true;
+        giftItem = ped.role === 'Nurse'
+          ? { id: 'medical_bandage', qty: 1 }
+          : { id: 'clean_water', qty: 1 };
+      }
+    } else if (ped.role === 'Transit Worker') {
+      text = `${place} transit lines are running normally. Watch the station departures if trouble hits.`;
+    } else if (ped.role === 'Nurse') {
+      text = `Medical supplies are stocked inside the local clinics if you ever need bandages or rest.`;
+    }
+
+    return {
+      speaker: ped.name,
+      role: ped.role,
+      text,
+      giftItem,
+    };
   }
 
   private convertPedestrianToZombie(ped: RegionalPedestrian, zombieMgr?: ZombieManager) {

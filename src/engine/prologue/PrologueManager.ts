@@ -279,10 +279,10 @@ export class PrologueManager {
 
       // EVENT 04: MORNING IN THE CITY
       case 'D1_E04_CITY_MORNING': {
-        // Approaching Corner Roast Café at (-14, 0, 22)
+        // Approaching Corner Roast Café at (-14, 0, -60)
         const distToCafe = Math.hypot(
           this.engine.player.position.x - (-14),
-          this.engine.player.position.z - 22
+          this.engine.player.position.z - (-60)
         );
         if (distToCafe < 6.5) {
           this.startEvent('D1_E05_CAFE_MEETING');
@@ -690,7 +690,7 @@ export class PrologueManager {
           title: 'MEETING THE CREW',
           instruction: 'Leave the apartment and meet your three friends at Corner Roast Café.',
           destinationName: 'Corner Roast Café',
-          position: [-14, 0.2, 22],
+          position: [-14, 0.2, -60],
           arrivalRadius: 5.5,
         });
         break;
@@ -716,7 +716,7 @@ export class PrologueManager {
           title: 'TO THE CAFÉ',
           instruction: 'Walk down Main Avenue to Corner Roast Café.',
           destinationName: 'Corner Roast Café',
-          position: [-14, 0.2, 22],
+          position: [-14, 0.2, -60],
           arrivalRadius: 4.5,
         });
         break;
@@ -739,7 +739,7 @@ export class PrologueManager {
           title: 'TALK TO MARCUS',
           instruction: 'Join your friends at the outdoor patio table.',
           destinationName: 'Café Patio Table',
-          position: [-10, 0.2, 17],
+          position: [-9.2, 0.2, -57],
           arrivalRadius: 3.5,
         });
         break;
@@ -1279,7 +1279,7 @@ export class PrologueManager {
         this.setSubtitle({
           speaker: 'AI Defense Sentry',
           role: 'Compound Security',
-          text: 'Dual 30mm Autonomous Gate Sentries ONLINE. Threat engagement protocol active against all approaching infected and hostile predators.',
+          text: 'Twenty armed compound sentries ONLINE. Threat engagement protocol active against explicitly hostile infected NPCs and enemy factions only. Player, friendly and neutral entities are protected.',
           duration: 4.5,
         });
         return true;
@@ -1519,7 +1519,7 @@ export class PrologueManager {
           title: 'MEETING THE CREW',
           instruction: 'Leave the apartment and meet your three friends at Corner Roast Café.',
           destinationName: 'Corner Roast Café',
-          position: [-14, 0.2, 22],
+          position: [-14, 0.2, -60],
           arrivalRadius: 5.5,
         });
         break;
@@ -1530,7 +1530,7 @@ export class PrologueManager {
           title: 'TO THE CAFÉ',
           instruction: 'Walk down Main Avenue to Corner Roast Café.',
           destinationName: 'Corner Roast Café',
-          position: [-14, 0.2, 22],
+          position: [-14, 0.2, -60],
           arrivalRadius: 4.5,
         });
         break;
@@ -1541,7 +1541,7 @@ export class PrologueManager {
           title: 'TALK TO MARCUS',
           instruction: 'Join your friends at the outdoor patio table.',
           destinationName: 'Café Patio Table',
-          position: [-10, 0.2, 17],
+          position: [-9.2, 0.2, -57],
           arrivalRadius: 3.5,
         });
         break;

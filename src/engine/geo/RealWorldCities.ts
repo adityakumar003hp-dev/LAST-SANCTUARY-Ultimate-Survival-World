@@ -89,6 +89,7 @@ export const REAL_WORLD_CITIES: ReadonlyArray<RealWorldCity> = [
 
   // Asia
   { id: 'in_delhi', name: 'New Delhi', country: 'India', continent: 'Asia', lat: 28.6139, lon: 77.209, tier: 'megacity', population: 32941000, footprintRadiusKm: 28.0, hasMetro: true, hasAirport: true, isSeaport: false, landmarkName: 'Kartavya Arch & New Delhi Central Rail Terminal' },
+  { id: 'in_jaipur', name: 'Jaipur', country: 'India', continent: 'Asia', lat: 26.9124, lon: 75.7873, tier: 'metropolis', population: 4207000, footprintRadiusKm: 16.5, hasMetro: true, hasAirport: true, isSeaport: false, landmarkName: 'Hawa Mahal Sandstone Facade & Amer Hill Fort' },
   { id: 'in_mumbai', name: 'Mumbai', country: 'India', continent: 'Asia', lat: 19.076, lon: 72.8777, tier: 'megacity', population: 21297000, footprintRadiusKm: 24.0, hasMetro: true, hasAirport: true, isSeaport: true, landmarkName: 'Marine Drive Harbor & Gateway Arch' },
   { id: 'in_bengaluru', name: 'Bengaluru', country: 'India', continent: 'Asia', lat: 12.9716, lon: 77.5946, tier: 'megacity', population: 13608000, footprintRadiusKm: 21.0, hasMetro: true, hasAirport: true, isSeaport: false },
   { id: 'in_kolkata', name: 'Kolkata', country: 'India', continent: 'Asia', lat: 22.5726, lon: 88.3639, tier: 'megacity', population: 15333000, footprintRadiusKm: 20.0, hasMetro: true, hasAirport: true, isSeaport: true },
@@ -116,9 +117,77 @@ export const REAL_WORLD_CITIES: ReadonlyArray<RealWorldCity> = [
   { id: 'nz_auckland', name: 'Auckland', country: 'New Zealand', continent: 'Australia & Oceania', lat: -36.8485, lon: 174.7633, tier: 'city', population: 1657200, footprintRadiusKm: 11.0, hasMetro: false, hasAirport: true, isSeaport: true },
   { id: 'nz_queenstown', name: 'Queenstown', country: 'New Zealand', continent: 'Australia & Oceania', lat: -45.0312, lon: 168.6626, tier: 'village', population: 16600, footprintRadiusKm: 2.2, hasMetro: false, hasAirport: true, isSeaport: false },
 
+  // Additional North America, Central America & Caribbean
+  { id: 'us_boston', name: 'Boston', country: 'United States', continent: 'North America', lat: 42.3601, lon: -71.0589, tier: 'metropolis', population: 654776, footprintRadiusKm: 11.0, hasMetro: true, hasAirport: true, isSeaport: true },
+  { id: 'us_dallas', name: 'Dallas', country: 'United States', continent: 'North America', lat: 32.7767, lon: -96.797, tier: 'megacity', population: 1304379, footprintRadiusKm: 18.0, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'us_phoenix', name: 'Phoenix', country: 'United States', continent: 'North America', lat: 33.4484, lon: -112.074, tier: 'megacity', population: 1644409, footprintRadiusKm: 19.0, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'us_anchorage', name: 'Anchorage', country: 'United States', continent: 'North America', lat: 61.2181, lon: -149.9003, tier: 'city', population: 287145, footprintRadiusKm: 9.0, hasMetro: false, hasAirport: true, isSeaport: true },
+  { id: 'us_honolulu', name: 'Honolulu', country: 'United States', continent: 'North America', lat: 21.3069, lon: -157.8583, tier: 'city', population: 345510, footprintRadiusKm: 8.5, hasMetro: true, hasAirport: true, isSeaport: true },
+  { id: 'pa_panama', name: 'Panama City', country: 'Panama', continent: 'North America', lat: 8.9824, lon: -79.5199, tier: 'metropolis', population: 1938000, footprintRadiusKm: 12.0, hasMetro: true, hasAirport: true, isSeaport: true },
+
+  // Additional South America
+  { id: 'ec_quito', name: 'Quito', country: 'Ecuador', continent: 'South America', lat: -0.1807, lon: -78.4678, tier: 'metropolis', population: 2011388, footprintRadiusKm: 11.0, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'bo_lapaz', name: 'La Paz', country: 'Bolivia', continent: 'South America', lat: -16.4897, lon: -68.1193, tier: 'city', population: 816044, footprintRadiusKm: 9.0, hasMetro: false, hasAirport: true, isSeaport: false },
+  { id: 'uy_montevideo', name: 'Montevideo', country: 'Uruguay', continent: 'South America', lat: -34.9011, lon: -56.1645, tier: 'metropolis', population: 1381000, footprintRadiusKm: 11.5, hasMetro: false, hasAirport: true, isSeaport: true },
+
+  // Additional Europe
+  { id: 'fr_lyon', name: 'Lyon', country: 'France', continent: 'Europe', lat: 45.764, lon: 4.8357, tier: 'city', population: 522250, footprintRadiusKm: 9.5, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'de_munich', name: 'Munich', country: 'Germany', continent: 'Europe', lat: 48.1351, lon: 11.582, tier: 'metropolis', population: 1512491, footprintRadiusKm: 14.0, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'pl_warsaw', name: 'Warsaw', country: 'Poland', continent: 'Europe', lat: 52.2297, lon: 21.0122, tier: 'metropolis', population: 1861975, footprintRadiusKm: 15.0, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'se_stockholm', name: 'Stockholm', country: 'Sweden', continent: 'Europe', lat: 59.3293, lon: 18.0686, tier: 'metropolis', population: 984748, footprintRadiusKm: 12.0, hasMetro: true, hasAirport: true, isSeaport: true },
+  { id: 'pt_lisbon', name: 'Lisbon', country: 'Portugal', continent: 'Europe', lat: 38.7223, lon: -9.1393, tier: 'city', population: 545796, footprintRadiusKm: 9.5, hasMetro: true, hasAirport: true, isSeaport: true },
+  { id: 'at_vienna', name: 'Vienna', country: 'Austria', continent: 'Europe', lat: 48.2082, lon: 16.3738, tier: 'metropolis', population: 1982097, footprintRadiusKm: 14.5, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'ua_kyiv', name: 'Kyiv', country: 'Ukraine', continent: 'Europe', lat: 50.4501, lon: 30.5234, tier: 'metropolis', population: 2952301, footprintRadiusKm: 16.5, hasMetro: true, hasAirport: true, isSeaport: false },
+
+  // Additional Africa
+  { id: 'tz_daressalaam', name: 'Dar es Salaam', country: 'Tanzania', continent: 'Africa', lat: -6.7924, lon: 39.2083, tier: 'megacity', population: 7776000, footprintRadiusKm: 17.0, hasMetro: false, hasAirport: true, isSeaport: true },
+  { id: 'gh_accra', name: 'Accra', country: 'Ghana', continent: 'Africa', lat: 5.6037, lon: -0.187, tier: 'metropolis', population: 2660000, footprintRadiusKm: 14.0, hasMetro: false, hasAirport: true, isSeaport: true },
+  { id: 'dz_algiers', name: 'Algiers', country: 'Algeria', continent: 'Africa', lat: 36.7538, lon: 3.0588, tier: 'metropolis', population: 2988145, footprintRadiusKm: 14.0, hasMetro: true, hasAirport: true, isSeaport: true },
+  { id: 'cd_kinshasa', name: 'Kinshasa', country: 'DR Congo', continent: 'Africa', lat: -4.4419, lon: 15.2663, tier: 'megacity', population: 16316000, footprintRadiusKm: 23.0, hasMetro: false, hasAirport: true, isSeaport: false },
+
+  // Additional Asia & Middle East
+  { id: 'in_ahmedabad', name: 'Ahmedabad', country: 'India', continent: 'Asia', lat: 23.0225, lon: 72.5714, tier: 'megacity', population: 8650000, footprintRadiusKm: 18.0, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'in_pune', name: 'Pune', country: 'India', continent: 'Asia', lat: 18.5204, lon: 73.8567, tier: 'megacity', population: 7184000, footprintRadiusKm: 17.0, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'in_varanasi', name: 'Varanasi', country: 'India', continent: 'Asia', lat: 25.3176, lon: 82.9739, tier: 'city', population: 1740000, footprintRadiusKm: 10.5, hasMetro: false, hasAirport: true, isSeaport: false, landmarkName: 'Dashashwamedh Riverfront Ghats' },
+  { id: 'in_udaipur', name: 'Udaipur', country: 'India', continent: 'Asia', lat: 24.5854, lon: 73.7125, tier: 'city', population: 608000, footprintRadiusKm: 8.5, hasMetro: false, hasAirport: true, isSeaport: false, landmarkName: 'Pichola Lake Marble Palace' },
+  { id: 'pk_karachi', name: 'Karachi', country: 'Pakistan', continent: 'Asia', lat: 24.8607, lon: 67.0011, tier: 'megacity', population: 17236000, footprintRadiusKm: 24.0, hasMetro: true, hasAirport: true, isSeaport: true },
+  { id: 'bd_dhaka', name: 'Dhaka', country: 'Bangladesh', continent: 'Asia', lat: 23.8103, lon: 90.4125, tier: 'megacity', population: 23210000, footprintRadiusKm: 24.0, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'vn_hochiminh', name: 'Ho Chi Minh City', country: 'Vietnam', continent: 'Asia', lat: 10.8231, lon: 106.6297, tier: 'megacity', population: 9321000, footprintRadiusKm: 20.0, hasMetro: true, hasAirport: true, isSeaport: true },
+  { id: 'my_kualalumpur', name: 'Kuala Lumpur', country: 'Malaysia', continent: 'Asia', lat: 3.139, lon: 101.6869, tier: 'megacity', population: 8622000, footprintRadiusKm: 19.0, hasMetro: true, hasAirport: true, isSeaport: false, landmarkName: 'Petronas Twin Skybridge Towers' },
+  { id: 'tw_taipei', name: 'Taipei', country: 'Taiwan', continent: 'Asia', lat: 25.033, lon: 121.5654, tier: 'megacity', population: 2646204, footprintRadiusKm: 15.0, hasMetro: true, hasAirport: true, isSeaport: true, landmarkName: 'Taipei 101 Tiered Spire' },
+  { id: 'cn_chengdu', name: 'Chengdu', country: 'China', continent: 'Asia', lat: 30.5728, lon: 104.0668, tier: 'megacity', population: 21192000, footprintRadiusKm: 24.0, hasMetro: true, hasAirport: true, isSeaport: false },
+  { id: 'il_telaviv', name: 'Tel Aviv', country: 'Israel', continent: 'Asia', lat: 32.0853, lon: 34.7818, tier: 'metropolis', population: 467875, footprintRadiusKm: 10.5, hasMetro: false, hasAirport: true, isSeaport: true },
+  { id: 'qa_doha', name: 'Doha', country: 'Qatar', continent: 'Asia', lat: 25.2854, lon: 51.531, tier: 'metropolis', population: 2382000, footprintRadiusKm: 14.0, hasMetro: true, hasAirport: true, isSeaport: true },
+
+  // Additional Oceania
+  { id: 'au_brisbane', name: 'Brisbane', country: 'Australia', continent: 'Australia & Oceania', lat: -27.4705, lon: 153.026, tier: 'metropolis', population: 2628000, footprintRadiusKm: 16.0, hasMetro: true, hasAirport: true, isSeaport: true },
+  { id: 'nz_wellington', name: 'Wellington', country: 'New Zealand', continent: 'Australia & Oceania', lat: -41.2865, lon: 174.7762, tier: 'city', population: 418500, footprintRadiusKm: 8.5, hasMetro: false, hasAirport: true, isSeaport: true },
+
   // Antarctica Research Outposts
   { id: 'aq_mcmurdo', name: 'McMurdo Research Station', country: 'Antarctica', continent: 'Antarctica', lat: -77.8419, lon: 166.6863, tier: 'industrial', population: 850, footprintRadiusKm: 1.8, hasMetro: false, hasAirport: true, isSeaport: true },
+  { id: 'aq_amundsen', name: 'Amundsen-Scott Polar Outpost', country: 'Antarctica', continent: 'Antarctica', lat: -85.0, lon: 0.0, tier: 'industrial', population: 150, footprintRadiusKm: 1.2, hasMetro: false, hasAirport: true, isSeaport: false },
 ];
+
+export type RegionalArchStyle =
+  | 'south_asian'
+  | 'east_asian'
+  | 'european'
+  | 'mena_desert'
+  | 'north_american'
+  | 'latin_american'
+  | 'african'
+  | 'arctic';
+
+export interface RegionalArchPalette {
+  style: RegionalArchStyle;
+  wallPrimary: number;
+  wallSecondary: number;
+  trimHex: number;
+  roofHex: number;
+  glassHex: number;
+  accentHex: number;
+  maxStories: number;
+}
 
 export interface CityProximityResult {
   city: RealWorldCity;
@@ -127,6 +196,125 @@ export interface CityProximityResult {
 }
 
 export class RealWorldCities {
+  public static getRegionalArchitecturePalette(
+    lat: number,
+    lon: number,
+    country?: string,
+    continent?: string | null,
+    cityId?: string
+  ): RegionalArchPalette {
+    const c = (country || '').toLowerCase();
+    const cont = (continent || '').toLowerCase();
+
+    if (Math.abs(lat) > 64 || cont.includes('antarctica')) {
+      return {
+        style: 'arctic',
+        wallPrimary: 0xd8dee6,
+        wallSecondary: 0x9aa6b2,
+        trimHex: 0xd96b27,
+        roofHex: 0x475569,
+        glassHex: 0x38bdf8,
+        accentHex: 0xf59e0b,
+        maxStories: 2,
+      };
+    }
+    if (cityId === 'in_jaipur' || cityId === 'in_udaipur') {
+      return {
+        style: 'south_asian',
+        wallPrimary: 0xd68974,
+        wallSecondary: 0xe6b49c,
+        trimHex: 0xf4ece1,
+        roofHex: 0xb6604c,
+        glassHex: 0x2f4f5f,
+        accentHex: 0xe09f3e,
+        maxStories: 4,
+      };
+    }
+    if (c.includes('india') || c.includes('nepal') || c.includes('pakistan') || c.includes('bangladesh') || c.includes('sri lanka')) {
+      return {
+        style: 'south_asian',
+        wallPrimary: 0xd8cbb8,
+        wallSecondary: 0xc98c72,
+        trimHex: 0xf0ebe3,
+        roofHex: 0x7c6f64,
+        glassHex: 0x2c5266,
+        accentHex: 0xd97706,
+        maxStories: 6,
+      };
+    }
+    if (c.includes('japan') || c.includes('korea') || c.includes('china') || c.includes('taiwan') || c.includes('singapore') || c.includes('hong kong') || c.includes('malaysia') || c.includes('thailand') || c.includes('vietnam')) {
+      return {
+        style: 'east_asian',
+        wallPrimary: 0xc2c8d1,
+        wallSecondary: 0x4e5866,
+        trimHex: 0x2a313b,
+        roofHex: 0x334155,
+        glassHex: 0x2b6e8a,
+        accentHex: 0x0ea5e9,
+        maxStories: 9,
+      };
+    }
+    if (c.includes('egypt') || c.includes('united arab') || c.includes('saudi') || c.includes('qatar') || c.includes('morocco') || c.includes('algeria') || c.includes('israel')) {
+      return {
+        style: 'mena_desert',
+        wallPrimary: 0xe2cca8,
+        wallSecondary: 0xc7ad85,
+        trimHex: 0xf2e8d5,
+        roofHex: 0xb69970,
+        glassHex: 0x2c7a8c,
+        accentHex: 0xd4a346,
+        maxStories: cityId === 'ae_dubai' || cityId === 'qa_doha' ? 10 : 5,
+      };
+    }
+    if (cont.includes('europe') || c.includes('united kingdom') || c.includes('france') || c.includes('germany') || c.includes('italy') || c.includes('spain') || c.includes('russia')) {
+      return {
+        style: 'european',
+        wallPrimary: 0xd9cfb8,
+        wallSecondary: 0xb58670,
+        trimHex: 0xede7dc,
+        roofHex: 0x6f4338,
+        glassHex: 0x2e4a5c,
+        accentHex: 0xb45309,
+        maxStories: 5,
+      };
+    }
+    if (cont.includes('south america') || c.includes('mexico') || c.includes('cuba') || c.includes('panama')) {
+      return {
+        style: 'latin_american',
+        wallPrimary: 0xdfd0ba,
+        wallSecondary: 0xc87d65,
+        trimHex: 0xf3ece2,
+        roofHex: 0x9b4d38,
+        glassHex: 0x2f5f73,
+        accentHex: 0xeab308,
+        maxStories: 6,
+      };
+    }
+    if (cont.includes('africa')) {
+      return {
+        style: 'african',
+        wallPrimary: 0xcbb495,
+        wallSecondary: 0xa67454,
+        trimHex: 0xe7dccb,
+        roofHex: 0x6e4736,
+        glassHex: 0x2e5866,
+        accentHex: 0xd97706,
+        maxStories: 4,
+      };
+    }
+    // Default North America / Australia & Oceania
+    return {
+      style: 'north_american',
+      wallPrimary: 0x9ea5ad,
+      wallSecondary: 0x7c5848,
+      trimHex: 0xd4d8de,
+      roofHex: 0x3b424a,
+      glassHex: 0x2c6480,
+      accentHex: 0x38bdf8,
+      maxStories: 8,
+    };
+  }
+
   public static findNearestCity(lat: number, lon: number, maxKm: number = 2500): CityProximityResult | null {
     const nLon = normalizeLon(lon);
     let bestCity: RealWorldCity | null = null;

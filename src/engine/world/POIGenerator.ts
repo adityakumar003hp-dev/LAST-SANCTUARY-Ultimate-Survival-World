@@ -404,12 +404,111 @@ export class POIGenerator {
           group.add(craneMast, craneBoom);
         }
         if (poi.name.includes('—')) {
-          // Landmark silhouette spire / monument inside real landmark footprints
-          const spireBase = new THREE.Mesh(new THREE.CylinderGeometry(3.2, 4.6, 4.0, 8), stoneMat);
-          spireBase.position.set(22, 2.0, 0);
-          const spireMast = new THREE.Mesh(new THREE.ConeGeometry(2.2, 28, 6), metalMat);
-          spireMast.position.set(22, 18.0, 0);
-          group.add(spireBase, spireMast);
+          const n = poi.name;
+          if (n.includes('Hawa Mahal')) {
+            // Jaipur pink-terracotta tiered honeycomb facade + 3 chhatri domes
+            const terracotta = POIGenerator.getSharedMat('lm_terracotta', () => new THREE.MeshStandardMaterial({ color: 0xd67c65, roughness: 0.78 }));
+            const creamTrim = POIGenerator.getSharedMat('lm_cream', () => new THREE.MeshStandardMaterial({ color: 0xf4e8d8, roughness: 0.72 }));
+            for (let tier = 0; tier < 4; tier++) {
+              const tw = 16 - tier * 2.6;
+              const th = 3.2;
+              const tierMesh = new THREE.Mesh(new THREE.BoxGeometry(tw, th, 4.2 - tier * 0.4), terracotta);
+              tierMesh.position.set(22, 1.8 + tier * 3.1, 0);
+              group.add(tierMesh);
+              const cornice = new THREE.Mesh(new THREE.BoxGeometry(tw + 0.5, 0.25, 4.6 - tier * 0.4), creamTrim);
+              cornice.position.set(22, 3.4 + tier * 3.1, 0);
+              group.add(cornice);
+            }
+            for (const dx of [-3.2, 0, 3.2]) {
+              const dome = new THREE.Mesh(new THREE.SphereGeometry(1.15, 10, 8, 0, Math.PI * 2, 0, Math.PI * 0.5), creamTrim);
+              dome.position.set(22 + dx, 14.3, 0);
+              group.add(dome);
+            }
+          } else if (n.includes('Giza')) {
+            // Giza Great Pyramids trio
+            const sandstone = POIGenerator.getSharedMat('lm_giza', () => new THREE.MeshStandardMaterial({ color: 0xd8b882, roughness: 0.88 }));
+            const pyr1 = new THREE.Mesh(new THREE.ConeGeometry(16, 22, 4), sandstone);
+            pyr1.position.set(24, 11, -4);
+            pyr1.rotation.y = Math.PI / 4;
+            const pyr2 = new THREE.Mesh(new THREE.ConeGeometry(11, 16, 4), sandstone);
+            pyr2.position.set(42, 8, 12);
+            pyr2.rotation.y = Math.PI / 4;
+            const pyr3 = new THREE.Mesh(new THREE.ConeGeometry(7, 10, 4), sandstone);
+            pyr3.position.set(14, 5, 16);
+            pyr3.rotation.y = Math.PI / 4;
+            group.add(pyr1, pyr2, pyr3);
+          } else if (n.includes('Iron Lattice Tower')) {
+            // Paris Eiffel 4-leg tapered lattice tower + 3 observation decks
+            const iron = POIGenerator.getSharedMat('lm_iron', () => new THREE.MeshStandardMaterial({ color: 0x4c433b, roughness: 0.55, metalness: 0.72 }));
+            for (const [lx, lz] of [[-4.5, -4.5], [4.5, -4.5], [-4.5, 4.5], [4.5, 4.5]]) {
+              const leg = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 1.35, 12, 6), iron);
+              leg.position.set(24 + lx * 0.65, 6, lz * 0.65);
+              leg.rotation.z = lx > 0 ? 0.22 : -0.22;
+              leg.rotation.x = lz > 0 ? -0.22 : 0.22;
+              group.add(leg);
+            }
+            const deck1 = new THREE.Mesh(new THREE.BoxGeometry(7.5, 0.8, 7.5), iron);
+            deck1.position.set(24, 11.5, 0);
+            const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 2.8, 22, 4), iron);
+            shaft.position.set(24, 22.5, 0);
+            shaft.rotation.y = Math.PI / 4;
+            const deck2 = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.7, 4.2), iron);
+            deck2.position.set(24, 21.0, 0);
+            const antenna = new THREE.Mesh(new THREE.CylinderGeometry(0.1, 0.35, 7, 6), iron);
+            antenna.position.set(24, 36.5, 0);
+            group.add(deck1, shaft, deck2, antenna);
+          } else if (n.includes('Kartavya Arch')) {
+            // New Delhi Memorial Arch
+            const sandstone = POIGenerator.getSharedMat('lm_delhi_arch', () => new THREE.MeshStandardMaterial({ color: 0xd4b68c, roughness: 0.82 }));
+            const pillarL = new THREE.Mesh(new THREE.BoxGeometry(3.8, 18, 5.2), sandstone);
+            pillarL.position.set(19.5, 9, 0);
+            const pillarR = new THREE.Mesh(new THREE.BoxGeometry(3.8, 18, 5.2), sandstone);
+            pillarR.position.set(28.5, 9, 0);
+            const lintel = new THREE.Mesh(new THREE.BoxGeometry(14.5, 5.2, 5.8), sandstone);
+            lintel.position.set(24, 19.5, 0);
+            const cap = new THREE.Mesh(new THREE.BoxGeometry(10.5, 1.8, 4.5), sandstone);
+            cap.position.set(24, 23.0, 0);
+            group.add(pillarL, pillarR, lintel, cap);
+          } else if (n.includes('Westminster Clock Tower')) {
+            // London Elizabeth Tower (Big Ben)
+            const masonry = POIGenerator.getSharedMat('lm_bigben', () => new THREE.MeshStandardMaterial({ color: 0xc9b38c, roughness: 0.75 }));
+            const dialMat = POIGenerator.getSharedMat('lm_clock_face', () => new THREE.MeshStandardMaterial({ color: 0xfff3d1, emissive: 0xffd27d, emissiveIntensity: 0.65 }));
+            const body = new THREE.Mesh(new THREE.BoxGeometry(5.2, 24, 5.2), masonry);
+            body.position.set(22, 12, 0);
+            const dialBox = new THREE.Mesh(new THREE.BoxGeometry(5.6, 4.2, 5.6), dialMat);
+            dialBox.position.set(22, 22, 0);
+            const spire = new THREE.Mesh(new THREE.ConeGeometry(3.9, 9, 4), metalMat);
+            spire.position.set(22, 28.5, 0);
+            spire.rotation.y = Math.PI / 4;
+            group.add(body, dialBox, spire);
+          } else if (n.includes('Flavian Amphitheatre')) {
+            // Rome Colosseum stepped elliptical colonnade ring
+            const travertine = POIGenerator.getSharedMat('lm_rome', () => new THREE.MeshStandardMaterial({ color: 0xd6c2a2, roughness: 0.85 }));
+            const ring1 = new THREE.Mesh(new THREE.CylinderGeometry(14, 14.5, 8.5, 18, 1, true), travertine);
+            ring1.position.set(24, 4.25, 0);
+            const ring2 = new THREE.Mesh(new THREE.CylinderGeometry(12.2, 12.6, 6.2, 16, 1, true), travertine);
+            ring2.position.set(24, 3.1, 0);
+            group.add(ring1, ring2);
+          } else if (n.includes('Harbor Shells')) {
+            // Sydney Harbor parabolic white sail shells
+            const whiteSail = POIGenerator.getSharedMat('lm_sail', () => new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.35, metalness: 0.12 }));
+            for (let s = 0; s < 3; s++) {
+              const shell = new THREE.Mesh(new THREE.ConeGeometry(5.5 - s * 0.6, 11 - s * 1.2, 8), whiteSail);
+              shell.scale.set(0.75, 1.0, 1.35);
+              shell.rotation.x = 0.26;
+              shell.position.set(18 + s * 6.5, 5.0 - s * 0.5, 0);
+              group.add(shell);
+            }
+          } else {
+            // Modern Skyscraper / Empire / Skytree / Burj Landmark Spire
+            const spireBase = new THREE.Mesh(new THREE.BoxGeometry(8.5, 14.0, 8.5), stoneMat);
+            spireBase.position.set(22, 7.0, 0);
+            const midTier = new THREE.Mesh(new THREE.BoxGeometry(5.8, 14.0, 5.8), metalMat);
+            midTier.position.set(22, 21.0, 0);
+            const spireMast = new THREE.Mesh(new THREE.ConeGeometry(2.2, 18, 6), glass);
+            spireMast.position.set(22, 37.0, 0);
+            group.add(spireBase, midTier, spireMast);
+          }
         }
         if (poi.type === 'hospital' || poi.type === 'police_station' || poi.type === 'fire_station') {
           const sign = new THREE.Mesh(new THREE.BoxGeometry(5, 0.7, 0.25), accent);

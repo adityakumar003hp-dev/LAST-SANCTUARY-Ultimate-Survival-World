@@ -1,11 +1,11 @@
-# Delivery status — LAST SANCTUARY: REBIRTH
+# Delivery status
 
-- Original active root project and existing game systems retained.
-- Campaign Chronicle updated to 10 days and 70 missions, seven per day.
-- Campaign data includes sequential mission IDs and unlock dependencies.
-- Research POI geometry expanded into a multi-wing containment campus.
-- Campaign integration validation: 7/7 checks passed.
-- TypeScript syntax transpilation: 91 source files checked, zero syntax errors.
-- Full Vite production build was not verified in this environment because dependency installation timed out and `vite/client` type definitions were unavailable. Run `npm install` and `npm run build` after importing the project.
+The modified existing source project is packaged in this delivery. The latest Player Mansion / Rebirth Compound configuration is the five-gate design documented in `COMPOUND_IMPLEMENTATION_REPORT.md` and `FINAL_WORLD_STRUCTURE_AND_RAILWAY_REQUIREMENTS.md`.
 
-**Scope note:** the 70-mission catalogue and journal progression are integrated in the active source. Some mission objectives still depend on future gameplay scripting/interactions; the catalogue does not claim that every one of the 70 narrative objectives has a bespoke trigger/cutscene already implemented. The existing opening prologue and open-world survival systems remain intact.
+- Compound static validation: PASS (9/9)
+- Existing campaign/project validation: PASS (7/7)
+- TypeScript/TSX syntax transpilation: PASS (139 files, zero syntax errors)
+- Full TypeScript typecheck / Vite production build: BLOCKED because dependencies are not installed in this environment; `npm install` timed out.
+- Browser/runtime acceptance tests: NOT RUN.
+
+See `COMPOUND_IMPLEMENTATION_REPORT.md` for implementation details and the remaining faction-manager and vehicle-weapon integration limitations.

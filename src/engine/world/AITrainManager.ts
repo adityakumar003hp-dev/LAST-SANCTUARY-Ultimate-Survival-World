@@ -12,6 +12,7 @@ import {
   StationNearbyFacilityAction,
 } from './MegaStationArchitecture';
 import { stationPlacementValidator } from './StationPlacementValidator';
+import { getRailwayGradeY } from './RailwayGrade';
 
 /**
  * Six-Track Civilian Railway Transportation System — Ultimate Railway Network.
@@ -452,27 +453,9 @@ export class AITrainManager {
   }
 
   public trackSurfaceY(x: number, z: number): number {
-    const spacing = 128;
-    const x0 = Math.floor(x / spacing) * spacing;
-    const x1 = x0 + spacing;
-    const t = THREE.MathUtils.smoothstep((x - x0) / spacing, 0, 1);
-    const terrainGrade = THREE.MathUtils.lerp(
-      getTerrainHeight(x0, z, this.worldSeed),
-      getTerrainHeight(x1, z, this.worldSeed),
-      t
-    );
-
-    // Keep the complete station throat and platform stopping zone on one level,
-    // surveyed rail grade. This prevents terrain noise from making rails look
-    // kinked or causing a train to bob vertically while it is at the platform.
-    const stationIndex = Math.round(x / STATION_SPACING);
-    const stationCenterX = stationIndex * STATION_SPACING;
-    const stationDistance = Math.abs(x - stationCenterX);
-    if (stationDistance <= 84 && z >= 132 && z <= 228) {
-      return getTerrainHeight(stationCenterX, z, this.worldSeed) + 0.37;
-    }
-
-    return terrainGrade + 0.37;
+    // The train origin sits at the surveyed rail crown. This exact shared
+    // grade function is also used by both procedural track mesh builders.
+    return getRailwayGradeY(x, z, this.worldSeed) + 0.37;
   }
 
   // --- 3D Mesh Construction for Full Consist (5 Compartments) ---
@@ -1252,16 +1235,21 @@ export class AITrainManager {
 
     for (let x = minX; x < maxX; x += 16) {
       const segX = x + 8;
-      const ground = this.trackSurfaceY(segX, z) - 0.37;
+      const startY = getRailwayGradeY(x, z, this.worldSeed);
+      const endY = getRailwayGradeY(x + 16, z, this.worldSeed);
+      const centerY = (startY + endY) * 0.5;
+      const gradeAngle = Math.atan2(endY - startY, 16);
 
       const ballast = new THREE.Mesh(this.sharedBallastGeo, ballastMat);
-      ballast.position.set(segX, ground + 0.08, z);
+      ballast.position.set(segX, centerY + 0.02, z);
+      ballast.rotation.z = gradeAngle;
       ballast.receiveShadow = true;
       group.add(ballast);
 
       for (const side of [-1, 1]) {
         const rail = new THREE.Mesh(this.sharedRailGeo, this.railMaterial);
-        rail.position.set(segX, ground + 0.38, z + side * 0.88);
+        rail.position.set(segX, centerY + 0.36, z + side * 0.88);
+        rail.rotation.z = gradeAngle;
         group.add(rail);
       }
     }
@@ -1271,8 +1259,8 @@ export class AITrainManager {
     const matrix = new THREE.Matrix4();
     for (let i = 0; i < sleeperCount; i++) {
       const sx = minX + i * 2.8 + 1.4;
-      const ground = this.trackSurfaceY(sx, z) - 0.37;
-      matrix.makeTranslation(sx, ground + 0.15, z);
+      const ground = getRailwayGradeY(sx, z, this.worldSeed);
+      matrix.makeTranslation(sx, ground + 0.12, z);
       sleepers.setMatrixAt(i, matrix);
     }
     sleepers.instanceMatrix.needsUpdate = true;

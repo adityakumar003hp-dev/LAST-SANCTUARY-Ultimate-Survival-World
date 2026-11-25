@@ -2,7 +2,7 @@
 import * as THREE from 'three';
 import { POIStructure } from '../../types/game';
 import { CHUNK_SIZE } from './WorldCoordinates';
-import { TerrainGenerator } from './TerrainGenerator';
+import { getRailwayGradeY } from './RailwayGrade';
 
 export type RailwayTrackId = 'F1' | 'F2' | 'F3' | 'B1' | 'B2' | 'B3';
 export const RAILWAY_TRACKS: ReadonlyArray<{ id: RailwayTrackId; direction: 'forward' | 'backward'; playerDrivable: boolean; zOffset: number }> = [
@@ -38,14 +38,8 @@ const contactWireGeo = new THREE.CylinderGeometry(0.025, 0.025, CHUNK_SIZE, 6);
 
 const STATION_SPACING = 1200;
 
-/** Flat surveyed grade through the central station platform and throat. */
-function railwayGrade(x: number, z: number, seed: number): number {
-  const stationX = Math.round(x / STATION_SPACING) * STATION_SPACING;
-  if (Math.abs(x - stationX) <= 84 && z >= 132 && z <= 228) {
-    return TerrainGenerator.getHeight(stationX, z, seed);
-  }
-  return TerrainGenerator.getHeight(x, z, seed);
-}
+/** Shared continuous surveyed grade; also used by AI train positioning. */
+const railwayGrade = getRailwayGradeY;
 
 function hash01(x: number, z: number, seed: number, salt: number): number {
   const n = Math.sin(x * 127.1 + z * 311.7 + seed * 0.017 + salt * 74.7) * 43758.5453123;
@@ -111,14 +105,21 @@ export class RailwayNetworkGenerator {
       // Match the train's 16m rail-grade sampling grid so rolling stock stays seated
       // on the rail crown even when the procedural terrain rises or falls.
       for (let offset = 0; offset < CHUNK_SIZE; offset += gradeSegment) {
-        const segmentX = minX + offset + gradeSegment * 0.5;
-        const ground = railwayGrade(segmentX, z, seed);
+        const segmentStartX = minX + offset;
+        const segmentEndX = segmentStartX + gradeSegment;
+        const segmentX = segmentStartX + gradeSegment * 0.5;
+        const startY = railwayGrade(segmentStartX, z, seed);
+        const endY = railwayGrade(segmentEndX, z, seed);
+        const centerY = (startY + endY) * 0.5;
+        const gradeAngle = Math.atan2(endY - startY, gradeSegment);
         const ballast = new THREE.Mesh(ballastChunkGeo, ballastMat);
-        ballast.position.set(segmentX, ground + 0.02, z);
+        ballast.position.set(segmentX, centerY + 0.02, z);
+        ballast.rotation.z = gradeAngle;
         group.add(ballast);
         for (const side of [-1, 1]) {
           const rail = new THREE.Mesh(railChunkGeo, railMat);
-          rail.position.set(segmentX, ground + 0.36, z + side * 0.88);
+          rail.position.set(segmentX, centerY + 0.36, z + side * 0.88);
+          rail.rotation.z = gradeAngle;
           group.add(rail);
         }
       }

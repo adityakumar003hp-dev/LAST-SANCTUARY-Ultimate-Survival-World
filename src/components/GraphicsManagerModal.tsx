@@ -58,8 +58,14 @@ const PRESET_CARDS: Array<{
   {
     id: 'ultra_5x',
     label: 'Ultra Realistic 5x',
-    tag: 'Max Fidelity',
+    tag: 'High Fidelity',
     specs: 'Up to 2.0x Scale · 3072px Shadows · 16x AF · 4-Chunk',
+  },
+  {
+    id: 'absolute_realism',
+    label: 'Absolute Realism',
+    tag: 'Experimental · Max Engine Fidelity',
+    specs: 'Up to 2.0x Scale · 3072px Shadows · 16x AF · 5-Chunk · Max Lighting',
     flagship: true,
   },
 ];
@@ -301,6 +307,7 @@ export const GraphicsManagerModal: React.FC<GraphicsManagerModalProps> = ({
           {/* Quality Presets */}
           <div>
             <div className="text-[11px] font-mono uppercase text-neutral-400 mb-2">Quality Presets</div>
+            <p className="mb-2 rounded-lg border border-amber-500/30 bg-amber-950/20 px-3 py-2 text-[10px] leading-relaxed text-amber-200">Absolute Realism pushes the highest visual quality supported by this game engine. On phones and low-memory GPUs it automatically uses a safer adaptive profile; unsupported effects are not forced, to help prevent freezes and missing textures.</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
               {PRESET_CARDS.map((card) => {
                 const active = (effectiveCfg?.preset ?? qualityMode) === card.id;
@@ -308,8 +315,9 @@ export const GraphicsManagerModal: React.FC<GraphicsManagerModalProps> = ({
                   <button
                     key={card.id}
                     type="button"
+                    disabled={card.id === 'absolute_realism' && Boolean(snap?.isSoftwareGl)}
                     onClick={() => handleSelectPreset(card.id)}
-                    className={`flex flex-col gap-1 rounded-xl border p-3 text-left transition-all cursor-pointer ${
+                    className={`flex flex-col gap-1 rounded-xl border p-3 text-left transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${
                       active
                         ? card.flagship
                           ? 'bg-amber-500/15 border-amber-400'

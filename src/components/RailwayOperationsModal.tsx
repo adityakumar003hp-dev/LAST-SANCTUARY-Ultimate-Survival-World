@@ -139,7 +139,7 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
         {/* Top Header Bar */}
         <div className="flex flex-wrap items-center justify-between px-4 py-3 bg-[#0f172a] border-b border-sky-900/60">
           <div className="flex items-center space-x-3">
-            <div className="w-3.5 h-3.5 rounded-full bg-emerald-400 animate-pulse" />
+            <div className="w-3.5 h-3.5 rounded-full bg-emerald-400" />
             <div>
               <h2 className="text-base sm:text-lg font-bold tracking-wider text-sky-300 font-mono">
                 SANCTUARY CENTRAL RAILWAY OPERATIONS CENTRE
@@ -151,6 +151,9 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
           </div>
 
           <div className="flex items-center space-x-3 mt-2 sm:mt-0">
+            <span className="px-2.5 py-1 text-xs font-mono tabular-nums font-bold bg-[#071121] text-sky-200 border border-sky-700/60 rounded">
+              DAY {selectedTrain?.dayCount ?? 1} · {selectedTrain?.currentTimeText ?? '08:00:00'}
+            </span>
             <span className="hidden md:inline-block px-2.5 py-1 text-xs font-mono font-semibold bg-emerald-950/80 text-emerald-400 border border-emerald-700/60 rounded">
               INTERLOCK: NOMINAL
             </span>
@@ -332,7 +335,7 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         {/* Slot, Line Badge and Service Info */}
                         <div className="flex items-center space-x-3">
-                          <span className="w-6 h-6 flex items-center justify-center text-xs font-mono font-bold bg-slate-800 text-slate-300 rounded">
+                          <span className="w-6 h-6 flex items-center justify-center text-xs font-mono tabular-nums font-bold bg-slate-800 text-slate-300 rounded">
                             {t.slot}
                           </span>
                           <span
@@ -342,7 +345,7 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                                 : 'bg-amber-900 text-amber-200 border border-amber-700'
                             }`}
                           >
-                            LINE {t.line}
+                            {t.trainNumber} · {t.line}
                           </span>
                           <div>
                             <div className="font-bold text-sm text-slate-100">
@@ -354,37 +357,44 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                           </div>
                         </div>
 
-                        {/* Station Progress */}
-                        <div className="text-left sm:text-right">
-                          <div className="text-xs text-slate-300">
-                            Current: <span className="text-white font-semibold">{t.currentStation}</span>
+                        {/* Stations & Route Progress */}
+                        <div className="text-left font-mono tabular-nums text-[11px] space-y-0.5">
+                          <div className="text-slate-300">
+                            Arrived: <span className="text-emerald-300 font-semibold">{t.arrivedStation}</span> · Departed: <span className="text-slate-100 font-semibold">{t.departedStation}</span>
                           </div>
-                          <div className="text-xs text-sky-400 font-mono">
-                            Next: {t.nextStation} ({t.distToNextMeters}m away)
+                          <div className="text-sky-300">
+                            Departing <span className="font-semibold">{t.departingStation}</span> → Arriving <span className="text-amber-300 font-semibold">{t.arrivingStation}</span>
+                          </div>
+                          <div className="text-slate-400">
+                            Covered: <span className="text-emerald-300">{t.legDistanceCoveredM}m</span> ({t.routeDistanceCoveredKm.toFixed(2)}km) · Left: <span className="text-amber-300">{t.legDistanceLeftM}m</span> ({t.routeDistanceLeftKm.toFixed(2)}km)
                           </div>
                         </div>
 
-                        {/* Speed and Arrival Status */}
+                        {/* Speed, Arrival/Departure Clocks and Condition */}
                         <div className="flex items-center space-x-3">
-                          <div className="text-right font-mono">
+                          <div className="text-right font-mono tabular-nums">
                             <div className="text-base font-bold text-emerald-400">
                               {t.speedKmh} km/h
                             </div>
-                            <div className="text-xs text-slate-400">
-                              ETA: {t.estimatedArrival}
+                            <div className="text-[11px] text-slate-300">
+                              DEP {t.departureTime} · ARR {t.arrivalTime}
+                            </div>
+                            <div className="text-[10px] text-sky-300">
+                              {t.isAtStation ? `DEP IN ${t.departureCountdownText}` : `ARR IN ${t.arrivalCountdownText}`}
                             </div>
                           </div>
 
                           <div
-                            className={`px-3 py-1.5 text-xs font-mono font-bold rounded ${
+                            className={`px-3 py-1.5 text-xs font-mono font-bold rounded text-center ${
                               t.holdOrdered
-                                ? 'bg-rose-900 text-rose-200 border border-rose-600 animate-pulse'
+                                ? 'bg-rose-900 text-rose-200 border border-rose-600'
                                 : t.stationStatus === 'doors_open'
                                 ? 'bg-amber-900 text-amber-200 border border-amber-600'
                                 : 'bg-emerald-950 text-emerald-300 border border-emerald-700'
                             }`}
                           >
-                            {t.onTimeStatus}
+                            <div>{t.condition} · {t.conditionPct}%</div>
+                            <div className="text-[10px] font-normal opacity-85">{t.onTimeStatus}</div>
                           </div>
                         </div>
                       </div>
@@ -435,7 +445,7 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                     {selectedTrain.warningMessage && !selectedTrain.warningAcknowledged && (
                       <button
                         onClick={handleAcknowledgeWarning}
-                        className="px-4 py-2 text-xs font-mono font-bold bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-all animate-bounce"
+                        className="px-4 py-2 text-xs font-mono font-bold bg-amber-600 hover:bg-amber-500 text-white rounded-lg transition-colors"
                       >
                         ACKNOWLEDGE WARNING [A]
                       </button>
@@ -454,39 +464,41 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                   6-TRACK AUTONOMOUS RAILWAY CORRIDOR (SANCTUARY REGIONAL SYSTEM)
                 </h3>
                 <p className="text-xs text-slate-400 font-mono mb-4">
-                  Real-time GPS transponder positions across the 12,000-meter mainline network.
+                  Live 8-station corridor progress across the 9.6 km primary loop ({telemetry[0]?.currentTimeText ?? '08:00:00'}).
                 </p>
 
                 <div className="space-y-4">
                   {telemetry.map((t) => (
                     <div key={t.slot} className="p-3 bg-[#0a0f1d] rounded-lg border border-slate-800/80">
-                      <div className="flex items-center justify-between text-xs font-mono mb-1.5">
+                      <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono tabular-nums mb-1.5">
                         <span className="font-bold text-sky-300">
-                          TRACK {t.line} ({t.directionLabel})
+                          {t.trainNumber} · TRACK {t.line} ({t.directionLabel})
                         </span>
-                        <span className="text-slate-400">
-                          {t.serviceId} @ X={t.x}m · Speed: {t.speedKmh} km/h
+                        <span className="text-slate-300">
+                          {t.departingStation} → {t.arrivingStation} · {t.speedKmh} km/h · {t.routeProgressPct}%
                         </span>
                       </div>
 
-                      {/* Track Bar with Station Pins and Train Marker */}
+                      {/* Track Bar with 8 Station Pins and Train Marker */}
                       <div className="relative w-full h-7 bg-slate-900 border border-slate-800 rounded flex items-center px-2">
-                        {/* Station tick lines */}
-                        {[-2400, -1200, 0, 1200, 2400].map((pos) => {
-                          const leftPct = Math.max(2, Math.min(98, ((pos + 3000) / 6000) * 100));
+                        {[0, 1, 2, 3, 4, 5, 6, 7].map((sIdx) => {
+                          const leftPct = 4 + (sIdx / 7) * 92;
                           return (
                             <div
-                              key={pos}
+                              key={sIdx}
                               style={{ left: `${leftPct}%` }}
-                              className="absolute top-0 bottom-0 w-0.5 bg-slate-700/60"
-                              title={`Station Node at ${pos}m`}
+                              className="absolute top-0 bottom-0 w-0.5 bg-slate-700/70"
+                              title={`Station ${sIdx + 1}`}
                             />
                           );
                         })}
 
-                        {/* Train Icon */}
                         {(() => {
-                          const leftPct = Math.max(4, Math.min(96, ((t.x + 3000) / 6000) * 100));
+                          const normRatio =
+                            t.direction === 1
+                              ? t.routeProgressPct / 100
+                              : 1 - t.routeProgressPct / 100;
+                          const leftPct = Math.max(4, Math.min(96, 4 + normRatio * 92));
                           return (
                             <div
                               style={{ left: `${leftPct}%` }}
@@ -501,6 +513,25 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                             </div>
                           );
                         })()}
+                      </div>
+
+                      <div className="mt-2 flex flex-wrap gap-1 text-[10px] font-mono">
+                        {(t.routeStations || []).map((st) => (
+                          <span
+                            key={st.index}
+                            className={`rounded px-1.5 py-0.5 border ${
+                              st.status === 'arrived'
+                                ? 'border-emerald-500/60 bg-emerald-950/70 text-emerald-300'
+                                : st.status === 'arriving'
+                                ? 'border-amber-500/60 bg-amber-950/70 text-amber-300'
+                                : st.status === 'departed'
+                                ? 'border-sky-500/60 bg-sky-950/70 text-sky-300'
+                                : 'border-slate-800 bg-slate-900/70 text-slate-400'
+                            }`}
+                          >
+                            {st.shortName} ({st.status})
+                          </span>
+                        ))}
                       </div>
                     </div>
                   ))}
@@ -565,7 +596,7 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                       </p>
                     </div>
                     <span className="px-3 py-1 bg-emerald-950 text-emerald-400 border border-emerald-700 text-xs font-mono font-bold rounded">
-                      HEALTH: {selectedTrain.conditionPct}% NOMINAL
+                      {selectedTrain.condition} · {selectedTrain.conditionPct}%
                     </span>
                   </div>
 
@@ -575,7 +606,7 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                       <div className="text-xl font-bold font-mono text-emerald-400 mt-1">
                         {selectedTrain.tractionMotorTempC}°C
                       </div>
-                      <div className="text-[10px] text-slate-500 font-mono mt-1">Range: 45°C - 85°C</div>
+                      <div className="text-[10px] text-slate-500 font-mono mt-1">{selectedTrain.conditionDetail}</div>
                     </div>
 
                     <div className="p-3 bg-[#0a0f1d] rounded-lg border border-slate-800">
@@ -595,21 +626,23 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                     </div>
 
                     <div className="p-3 bg-[#0a0f1d] rounded-lg border border-slate-800">
-                      <div className="text-xs text-slate-400 font-mono">Passenger Doors</div>
-                      <div className="text-xl font-bold font-mono text-purple-400 mt-1">
-                        {selectedTrain.doorsOpen ? 'OPEN' : 'SECURED'}
+                      <div className="text-xs text-slate-400 font-mono">Distance Covered / Left</div>
+                      <div className="text-base font-bold font-mono tabular-nums text-cyan-300 mt-1">
+                        {selectedTrain.routeDistanceCoveredKm.toFixed(2)} / {selectedTrain.routeDistanceLeftKm.toFixed(2)} km
                       </div>
-                      <div className="text-[10px] text-slate-500 font-mono mt-1">Platform interlock active</div>
+                      <div className="text-[10px] text-slate-500 font-mono mt-1">
+                        Leg: {selectedTrain.legDistanceCoveredM}m / {selectedTrain.legDistanceLeftM}m left
+                      </div>
                     </div>
                   </div>
 
                   {/* Subsystems checklist */}
                   <div className="p-3 bg-[#0a0f1d] rounded-lg border border-slate-800 font-mono text-xs space-y-1.5 text-slate-300">
-                    <div className="text-slate-400 font-bold mb-1">INTERNAL DIAGNOSTICS LOG:</div>
-                    <div className="text-emerald-400">✓ Inverter 1 & 2 Traction Balance: 100%</div>
-                    <div className="text-emerald-400">✓ Wheel Flange Lubrication System: OPERATIONAL</div>
-                    <div className="text-emerald-400">✓ Automatic Train Protection (ATP) Beacon Link: SYNCED</div>
-                    <div className="text-emerald-400">✓ Passenger Saloon HVAC Climate Control: 21.5°C</div>
+                    <div className="text-slate-400 font-bold mb-1">STATION & CONDITION LOG:</div>
+                    <div className="text-emerald-400">✓ Last Arrived: {selectedTrain.arrivedStation} · Last Departed: {selectedTrain.departedStation}</div>
+                    <div className="text-sky-400">✓ Active Leg: {selectedTrain.departingStation} → {selectedTrain.arrivingStation}</div>
+                    <div className="text-amber-300">✓ Departure {selectedTrain.departureTime} · Arrival {selectedTrain.arrivalTime} · Cumulative {selectedTrain.totalDistanceCoveredKm.toFixed(1)} km</div>
+                    <div className="text-emerald-400">✓ Automatic Train Protection (ATP) Beacon Link: SYNCED · Doors {selectedTrain.doorsOpen ? 'OPEN' : 'SECURED'}</div>
                   </div>
                 </div>
               ) : (
@@ -624,32 +657,61 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
               <div className="p-4 bg-[#0f172a] rounded-xl border border-slate-800">
                 <div className="flex items-center justify-between border-b border-slate-800 pb-3 mb-3">
                   <h3 className="text-sm font-bold text-amber-400 font-mono">
-                    SANCTUARY CENTRAL TERMINAL — PASSENGER TIMETABLE
+                    LIVE CORRIDOR TIMETABLE — ALL 6 SERVICES
                   </h3>
-                  <span className="text-xs text-slate-400 font-mono">PLATFORMS 1 THROUGH 6</span>
+                  <span className="text-xs text-slate-300 font-mono tabular-nums">
+                    CLOCK: DAY {selectedTrain?.dayCount ?? 1} · {selectedTrain?.currentTimeText ?? '08:00:00'}
+                  </span>
                 </div>
 
                 <div className="overflow-x-auto">
-                  <table className="w-full text-left font-mono text-xs">
+                  <table className="w-full text-left font-mono tabular-nums text-xs">
                     <thead>
                       <tr className="border-b border-slate-800 text-slate-400">
-                        <th className="py-2 px-3">PLATFORM</th>
-                        <th className="py-2 px-3">LINE</th>
-                        <th className="py-2 px-3">DESTINATION</th>
-                        <th className="py-2 px-3">SCHED</th>
-                        <th className="py-2 px-3">ESTIMATED</th>
-                        <th className="py-2 px-3">STATUS</th>
+                        <th className="py-2 px-2">TRAIN / LINE</th>
+                        <th className="py-2 px-2">ARRIVED / DEPARTED</th>
+                        <th className="py-2 px-2">DEPARTING → ARRIVING</th>
+                        <th className="py-2 px-2">DEP TIME</th>
+                        <th className="py-2 px-2">ARR TIME</th>
+                        <th className="py-2 px-2">SPEED</th>
+                        <th className="py-2 px-2">COVERED / LEFT</th>
+                        <th className="py-2 px-2">CONDITION</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-800/60">
                       {telemetry.map((t) => (
                         <tr key={t.slot} className="hover:bg-slate-800/40">
-                          <td className="py-2.5 px-3 font-bold text-amber-400">P{t.slot}</td>
-                          <td className="py-2.5 px-3 text-sky-300 font-bold">{t.line}</td>
-                          <td className="py-2.5 px-3 text-white font-sans font-medium">{t.nextStation}</td>
-                          <td className="py-2.5 px-3 text-slate-300">{t.scheduledArrival}</td>
-                          <td className="py-2.5 px-3 text-emerald-400 font-bold">{t.estimatedArrival}</td>
-                          <td className="py-2.5 px-3">
+                          <td className="py-2.5 px-2 font-bold text-sky-300">
+                            {t.trainNumber} ({t.line})
+                          </td>
+                          <td className="py-2.5 px-2 text-[11px] text-slate-300">
+                            <div>ARR: {t.arrivedStation}</div>
+                            <div className="text-slate-400">DEP: {t.departedStation}</div>
+                          </td>
+                          <td className="py-2.5 px-2 text-[11px]">
+                            <div className="text-sky-300">{t.departingStation} →</div>
+                            <div className="text-amber-300 font-bold">{t.arrivingStation}</div>
+                          </td>
+                          <td className="py-2.5 px-2 text-slate-200">
+                            <div>{t.departureTime}</div>
+                            <div className="text-[10px] text-slate-400">
+                              {t.isAtStation ? `In ${t.departureCountdownText}` : 'Departed'}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-2 text-emerald-400 font-bold">
+                            <div>{t.arrivalTime}</div>
+                            <div className="text-[10px] text-sky-300 font-normal">
+                              {t.isAtStation ? 'At Platform' : `ETA ${t.arrivalCountdownText}`}
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-2 text-cyan-300 font-bold">{t.speedKmh} km/h</td>
+                          <td className="py-2.5 px-2 text-[11px]">
+                            <div>{t.legDistanceCoveredM}m / {t.legDistanceLeftM}m</div>
+                            <div className="text-[10px] text-slate-400">
+                              {t.routeDistanceCoveredKm.toFixed(2)} / {t.routeDistanceLeftKm.toFixed(2)} km
+                            </div>
+                          </td>
+                          <td className="py-2.5 px-2">
                             <span
                               className={`px-2 py-0.5 rounded text-[11px] font-bold ${
                                 t.holdOrdered
@@ -659,7 +721,7 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                                   : 'bg-emerald-950 text-emerald-300'
                               }`}
                             >
-                              {t.holdOrdered ? 'HELD' : (t.stationStatus === 'doors_open' ? 'BOARDING' : 'ON TIME')}
+                              {t.condition} ({t.conditionPct}%)
                             </span>
                           </td>
                         </tr>
@@ -678,7 +740,7 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                 <div className="flex flex-wrap items-center justify-between border-b border-slate-800 pb-3">
                   <div>
                     <h3 className="text-base font-bold text-white font-mono flex items-center gap-2">
-                      <span className="h-3 w-3 rounded-full bg-rose-500 animate-pulse"></span>
+                      <span className="h-3 w-3 rounded-full bg-rose-500"></span>
                       STATION CCTV SURVEILLANCE & RPF SECURITY INTERLOCK
                     </h3>
                     <p className="text-xs text-slate-400 font-mono">
@@ -707,7 +769,7 @@ export const RailwayOperationsModal: React.FC<RailwayOperationsModalProps> = ({
                       <div className="flex items-center justify-between text-[10px] font-mono text-slate-400 mb-1.5 border-b border-slate-800 pb-1">
                         <span className="font-bold text-sky-400">{cam.id}</span>
                         <span className="flex items-center gap-1 text-rose-400 font-bold">
-                          <span className="h-1.5 w-1.5 rounded-full bg-rose-500 animate-ping"></span>
+                          <span className="h-1.5 w-1.5 rounded-full bg-rose-500"></span>
                           REC
                         </span>
                       </div>

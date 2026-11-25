@@ -912,7 +912,7 @@ export class MegaStationArchitecture {
       const gy = trackSurfaceY(gx, gz) - 0.37;
       addBox(`CHECKPOINT_BOOTH_${side}`, 4.2, 3.2, 3.8, gx, gy + 1.6, gz, darkWallMat, 'Checkpoint', 0, 'security', true, true, 'platform');
       addBox(`CHECKPOINT_SANDBAG_WALL_${side}`, 6.2, 0.95, 1.2, gx - side * 5.2, gy + 0.475, gz, sandbagMat, 'Checkpoint', 0, 'security', true, true, 'platform');
-      const pivotX = gx - side * 2.25;
+      const pivotX = gx - side * 2.50; // Keep the pedestal clear of the checkpoint booth collider.
       addBox(`BOOM_PEDESTAL_${side}`, 0.45, 1.25, 0.45, pivotX, gy + 0.625, gz - 1.5, steelMat, 'Checkpoint', 0, 'security', true, true, 'platform');
       const beaconMat = new THREE.MeshStandardMaterial({ color: 0xef4444, emissive: 0xb91c1c, emissiveIntensity: 0.85 });
       const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 10), beaconMat);

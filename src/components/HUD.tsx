@@ -203,7 +203,9 @@ export const HUD: React.FC<HUDProps> = ({
   const timeStr = `${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}`;
   const isDawn = hours >= 5 && hours < 8;
   const qualityBadgeLabel =
-    qualityMode === 'ultra_5x'
+    qualityMode === 'absolute_realism'
+      ? 'REALISM MAX'
+      : qualityMode === 'ultra_5x'
       ? 'ULTRA 5X'
       : qualityMode === 'quality'
       ? 'ULTRA 4K'

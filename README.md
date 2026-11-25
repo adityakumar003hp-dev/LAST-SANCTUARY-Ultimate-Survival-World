@@ -29,7 +29,7 @@ The authoritative opening campaign is six days / 36 missions. See `SIX_DAY_CAMPA
 
 ## Updated source delivery
 
-For the updated project, use the root `package.json` and root `src/` directory as the active application. See `IMPLEMENTATION_DELIVERY_REPORT.md` for implemented code changes and exact validation limitations, and `IMPLEMENTATION_TRACEABILITY.md` for the subsystem-to-source map. The nested `latest_working_source/` and `ls_dev/` folders are retained as historical source snapshots.
+For the updated project, use the root `package.json` and root `src/` directory as the active application. See `COMPOUND_IMPLEMENTATION_REPORT.md` for the latest five-gate, twenty-turret Player Mansion / Rebirth Compound implementation and its validation limits. Run `npm run validate:compound` for the source-level compound checks. See `IMPLEMENTATION_DELIVERY_REPORT.md` for broader implemented code changes and `IMPLEMENTATION_TRACEABILITY.md` for the subsystem-to-source map.
 
 ## Railway basement dispatch control centre (November 2026)
 The apartment now contains a dedicated underground railway dispatch room. The former upper-floor command desk has been removed and the new room is accessed by walking down to basement level and pressing **E** at the dispatch console. It includes one wide operations board, four auxiliary monitors, a keyboard desk, six-line railway map, six-service arrival/departure board, condition, speed, distance and next-stop details. Keyboard controls are listed in `RAILWAY_BASEMENT_CONTROL_CENTER_UPDATE.md`.

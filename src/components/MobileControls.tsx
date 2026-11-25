@@ -432,7 +432,9 @@ export const MobileControls: React.FC<MobileControlsProps> = ({
   }
 
   const qualityBadgeLabel =
-    qualityMode === 'ultra_5x'
+    qualityMode === 'absolute_realism'
+      ? 'REALISM MAX'
+      : qualityMode === 'ultra_5x'
       ? 'ULTRA 5X'
       : qualityMode === 'quality'
       ? 'ULTRA 4K'

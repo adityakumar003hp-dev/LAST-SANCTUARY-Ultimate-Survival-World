@@ -138,25 +138,25 @@ export class TownLifeManager {
   }
 
   private buildTownInfrastructure() {
-    // Main Avenue (North-South: Z from -50 to 40, Width 7m)
-    const mainRoadGeo = new THREE.PlaneGeometry(7.2, 90);
+    // Main Avenue (North-South: Z from -75 to 45, Width 7.2m) — clear of Compound East Wall (X=-8)
+    const mainRoadGeo = new THREE.PlaneGeometry(7.2, 120);
     const mainRoad = new THREE.Mesh(mainRoadGeo, this.roadMat);
     mainRoad.rotation.x = -Math.PI / 2;
-    mainRoad.position.set(0, 0.05, -5);
+    mainRoad.position.set(0, 0.05, -15);
     mainRoad.receiveShadow = true;
     this.group.add(mainRoad);
 
-    // Cross Street (East-West: X from -50 to 50, Width 6.5m)
-    const crossRoadGeo = new THREE.PlaneGeometry(100, 6.5);
+    // Cross Street (East-West from Main Avenue eastwards: X from -3.6 to 50, Width 6.5m)
+    const crossRoadGeo = new THREE.PlaneGeometry(53.6, 6.5);
     const crossRoad = new THREE.Mesh(crossRoadGeo, this.roadMat);
     crossRoad.rotation.x = -Math.PI / 2;
-    crossRoad.position.set(0, 0.06, 0);
+    crossRoad.position.set(23.2, 0.06, 0);
     crossRoad.receiveShadow = true;
     this.group.add(crossRoad);
 
     // Road Yellow Center Stripes
     const stripeMat = new THREE.MeshBasicMaterial({ color: 0xffd233 });
-    for (let z = -46; z <= 36; z += 5) {
+    for (let z = -70; z <= 40; z += 5) {
       const stripe = new THREE.Mesh(new THREE.PlaneGeometry(0.2, 2.5), stripeMat);
       stripe.rotation.x = -Math.PI / 2;
       stripe.position.set(0, 0.07, z);
@@ -164,15 +164,17 @@ export class TownLifeManager {
     }
 
     // Sidewalks along Main Avenue
-    const sideGeo = new THREE.BoxGeometry(2.4, 0.18, 90);
+    const sideGeo = new THREE.BoxGeometry(2.4, 0.18, 120);
     const eastSidewalk = new THREE.Mesh(sideGeo, this.sidewalkMat);
-    eastSidewalk.position.set(4.8, 0.09, -5);
+    eastSidewalk.position.set(4.8, 0.09, -15);
     const westSidewalk = new THREE.Mesh(sideGeo, this.sidewalkMat);
-    westSidewalk.position.set(-4.8, 0.09, -5);
+    westSidewalk.position.set(-4.8, 0.09, -15);
     this.group.add(eastSidewalk, westSidewalk);
 
     // Street Lamps along Sidewalks
     const lampPositions: [number, number][] = [
+      [5.6, -60], [-5.6, -60],
+      [5.6, -44], [-5.6, -44],
       [5.6, -30], [-5.6, -30],
       [5.6, -12], [-5.6, -12],
       [5.6, 12],  [-5.6, 12],
@@ -280,19 +282,19 @@ export class TownLifeManager {
   }
 
   private buildTownBuildings() {
-    // 1. Grocery Market ("OAKRIDGE FRESH MARKET")
+    // 1. Grocery Market ("OAKRIDGE FRESH MARKET") — South-West commercial strip (clear of compound South Wall Z=-37.5)
     const grocery = this.createCommercialBuilding('OAKRIDGE FRESH MARKET', 0x9c3d2e, 11, 5, 8);
-    grocery.position.set(-14, 0, 10);
+    grocery.position.set(-14, 0, -48);
     this.group.add(grocery);
 
-    // 2. Town Corner Cafe ("CORNER ROAST CAFE")
+    // 2. Town Corner Cafe ("CORNER ROAST CAFE") — South-West commercial strip
     const cafe = this.createCommercialBuilding('CORNER CAFE', 0xc98c4b, 9, 4.5, 8);
-    cafe.position.set(-14, 0, 22);
+    cafe.position.set(-14, 0, -60);
     this.group.add(cafe);
 
-    // 3. Community Health Clinic / Hospital
+    // 3. Community Health Clinic / Hospital — South-East avenue block (clear of Fire Station Z=-37..-27)
     const hospital = this.createCivicBuilding('VALLEY COMMUNITY CLINIC', 0xdedede, 14, 7.5, 12, true);
-    hospital.position.set(-18, 0, -18);
+    hospital.position.set(18, 0, -52);
     this.group.add(hospital);
 
     // 4. Police Station
@@ -305,18 +307,18 @@ export class TownLifeManager {
     fireStation.position.set(16, 0, -32);
     this.group.add(fireStation);
 
-    // 6. Elementary School
+    // 6. Elementary School — South block outside compound South Wall
     const school = this.createCivicBuilding('PINE ELEMENTARY', 0x854330, 18, 6.5, 12);
-    school.position.set(-20, 0, -36);
+    school.position.set(-38, 0, -56);
     this.group.add(school);
 
-    // 7. Residential District
+    // 7. Residential District (East of Main Avenue, cleanly south of Railway Station)
     const cottage1 = this.createHouse(0x8f7259);
     cottage1.position.set(16, 0, 38);
     const cottage2 = this.createHouse(0x566d7e);
     cottage2.position.set(28, 0, 38);
     const cottage3 = this.createHouse(0x8c8266);
-    cottage3.position.set(-54, 0, 38); // outside the apartment compound west wall
+    cottage3.position.set(16, 0, 52);
 
     // Add residential cottages (apartment is handled by apartmentBuilding)
     this.group.add(cottage1, cottage2, cottage3);
@@ -667,8 +669,8 @@ export class TownLifeManager {
 
   private spawnCivilianVehicles() {
     const carSpots = [
-      { x: -7.5, z: 12, rot: Math.PI / 2, color: this.carMat1 },
-      { x: -7.5, z: 20, rot: Math.PI / 2, color: this.carMat2 },
+      { x: -7.5, z: -44, rot: 0, color: this.carMat1 },
+      { x: -7.5, z: -54, rot: 0, color: this.carMat2 },
       { x: 7.5, z: -14, rot: -Math.PI / 2, color: this.carMat1 },
       { x: 7.5, z: -20, rot: -Math.PI / 2, color: this.carMat2 },
       { x: 38, z: 4, rot: 0, color: this.carMat1 },
@@ -681,28 +683,28 @@ export class TownLifeManager {
       this.group.add(car);
     });
 
-    // 2 Dynamic Moving Civilian Cars. Both paths stay centred on the town's paved roads;
-    // the protected apartment district is deliberately isolated from the railway corridor.
+    // 2 Dynamic Moving Civilian Cars. Both paths stay centred on Oakridge's paved roads,
+    // cleanly isolated from the expanded compound perimeter and railway corridor.
     const movingCar1 = this.createCarMesh(this.carMat1);
-    movingCar1.position.set(-1.65, 0, -42);
+    movingCar1.position.set(-1.65, 0, -64);
     this.group.add(movingCar1);
     this.movingCars.push({
       mesh: movingCar1,
       axis: 'z',
       speed: 9.5,
-      min: -46,
-      max: 36,
+      min: -68,
+      max: 40,
     });
 
     const movingCar2 = this.createCarMesh(this.carMat2);
     movingCar2.rotation.y = Math.PI / 2;
-    movingCar2.position.set(-48, 0, 1.65);
+    movingCar2.position.set(6, 0, 1.65);
     this.group.add(movingCar2);
     this.movingCars.push({
       mesh: movingCar2,
       axis: 'x',
       speed: 8.0,
-      min: -48,
+      min: 6,
       max: 48,
     });
   }
@@ -794,7 +796,7 @@ export class TownLifeManager {
         name: 'Mr. Henderson',
         role: 'Market Shopkeeper',
         bType: 'market',
-        pos: [-9, 0, 10],
+        pos: [-7.5, 0, -48],
         rot: Math.PI / 2,
         shirt: 0x3d6e52,
         pants: 0x3a3026,
@@ -809,7 +811,7 @@ export class TownLifeManager {
         name: 'Sam',
         role: 'Corner Cafe Barista',
         bType: 'cafe',
-        pos: [-10, 0, 22],
+        pos: [-8.5, 0, -60],
         rot: Math.PI / 2,
         shirt: 0xc49b45,
         pants: 0x222222,
@@ -839,8 +841,8 @@ export class TownLifeManager {
         name: 'Nurse Sarah',
         role: 'Clinic Head Nurse',
         bType: 'clinic',
-        pos: [-13, 0, -18],
-        rot: Math.PI / 2,
+        pos: [10, 0, -52],
+        rot: -Math.PI / 2,
         shirt: 0x5a9ea8,
         pants: 0xffffff,
         lines: [
@@ -1127,15 +1129,15 @@ export class TownLifeManager {
 
   public registerColliders(physMgr: UnifiedPhysicsManager) {
     // 1. Major town buildings with accurate collision boxes
-    physMgr.registerBoxCollider('bld_grocery', 'building', [-14, 2.5, 10], 11, 5, 8);
-    physMgr.registerBoxCollider('bld_cafe', 'building', [-14, 2.25, 22], 9, 4.5, 8);
-    physMgr.registerBoxCollider('bld_clinic', 'building', [-18, 3.75, -18], 14, 7.5, 12);
+    physMgr.registerBoxCollider('bld_grocery', 'building', [-14, 2.5, -48], 11, 5, 8);
+    physMgr.registerBoxCollider('bld_cafe', 'building', [-14, 2.25, -60], 9, 4.5, 8);
+    physMgr.registerBoxCollider('bld_clinic', 'building', [18, 3.75, -52], 14, 7.5, 12);
     physMgr.registerBoxCollider('bld_police', 'building', [16, 2.75, -16], 12, 5.5, 9);
     physMgr.registerBoxCollider('bld_fire', 'building', [16, 3.0, -32], 12, 6, 10);
-    physMgr.registerBoxCollider('bld_school', 'building', [-20, 3.25, -36], 18, 6.5, 12);
+    physMgr.registerBoxCollider('bld_school', 'building', [-38, 3.25, -56], 18, 6.5, 12);
     physMgr.registerBoxCollider('bld_cottage1', 'building', [16, 1.75, 38], 8, 3.5, 7);
     physMgr.registerBoxCollider('bld_cottage2', 'building', [28, 1.75, 38], 8, 3.5, 7);
-    physMgr.registerBoxCollider('bld_cottage3', 'building', [-54, 1.75, 38], 8, 3.5, 7);
+    physMgr.registerBoxCollider('bld_cottage3', 'building', [16, 1.75, 52], 8, 3.5, 7);
     physMgr.registerBoxCollider('bld_gas_store', 'building', [38, 2.0, -5], 9, 4, 6);
     physMgr.registerBoxCollider('bld_townhall', 'building', [38, 3.5, 18], 14, 7, 10);
     physMgr.registerCylinderCollider('bld_fountain', 'building', [20, 0.5, 18], 3.0, 2.0);

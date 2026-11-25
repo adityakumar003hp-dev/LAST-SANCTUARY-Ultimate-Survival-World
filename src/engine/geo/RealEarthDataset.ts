@@ -136,7 +136,7 @@ const LAND_POLYGONS: ReadonlyArray<LandPolygon> = [
   ]),
   defLand('sa_main', 'South America', 'South America', false, 380, [
     [11.5, -72.0], [10.5, -62.0], [6.5, -54.0], [1.5, -50.0], [-1.5, -48.0],
-    [-5.2, -35.2], [-13.0, -38.5], [-22.9, -43.1], [-25.5, -48.5], [-33.7, -53.4],
+    [-5.2, -35.2], [-13.0, -38.5], [-22.95, -42.95], [-25.5, -48.5], [-33.7, -53.4],
     [-38.0, -57.5], [-43.0, -64.5], [-48.0, -65.8], [-53.5, -68.5], [-55.0, -67.0],
     [-52.5, -74.5], [-46.0, -75.0], [-41.5, -74.0], [-33.0, -71.6], [-23.5, -70.4],
     [-18.4, -70.4], [-12.0, -77.2], [-5.0, -81.3], [-2.2, -80.9], [2.0, -78.8],
@@ -168,15 +168,15 @@ const LAND_POLYGONS: ReadonlyArray<LandPolygon> = [
     [31.2, 121.8], [22.3, 114.2], [20.5, 106.8], [12.0, 109.2],
     [10.0, 105.0], [13.6, 100.5], [1.3, 103.8], [7.8, 98.4],
     [16.5, 96.2], [22.2, 91.8], [20.0, 86.5], [13.1, 80.3],
-    [8.1, 77.5], [19.1, 72.8], [24.8, 67.0], [25.2, 56.4],
-    [29.5, 48.0], [24.0, 52.0], [23.6, 58.6], [12.8, 45.0],
+    [8.1, 77.5], [19.0, 72.72], [24.8, 67.0], [25.2, 56.8], [27.0, 56.5],
+    [29.9, 48.5], [26.3, 50.1], [25.3, 51.5], [24.3, 52.6], [24.45, 54.3], [25.35, 55.45], [26.2, 56.4], [23.6, 58.6], [17.0, 54.1], [12.8, 45.0],
     [21.5, 39.2], [29.5, 34.9], [31.2, 32.5], [36.8, 35.5],
     [36.5, 27.2], [41.0, 29.0], [41.5, 41.5], [44.0, 44.0],
     [47.0, 48.0], [55.0, 60.0], [68.5, 60.0], [72.5, 72.0],
   ]),
   defLand('au_main', 'Australia', 'Australia & Oceania', false, 280, [
     [-10.7, 142.5], [-15.5, 145.3], [-23.5, 151.0], [-27.5, 153.5],
-    [-33.9, 151.2], [-37.8, 149.9], [-38.4, 144.9], [-35.0, 138.5],
+    [-33.95, 151.35], [-37.8, 149.9], [-38.4, 144.9], [-35.0, 138.5],
     [-32.0, 132.5], [-34.0, 122.0], [-34.4, 115.1], [-32.0, 115.8],
     [-22.0, 114.1], [-17.9, 122.2], [-12.5, 130.8], [-12.2, 136.8],
     [-15.5, 136.5], [-16.5, 141.0],
@@ -269,6 +269,7 @@ const MOUNTAIN_RANGES: ReadonlyArray<MountainRangeDef> = [
   { name: 'Ural Mountains', peakElevM: 1550, widthDeg: 2.0, points: [[67.0, 64.0], [60.0, 59.5], [53.0, 58.0]] },
   { name: 'Ethiopian Highlands', peakElevM: 3200, widthDeg: 3.2, points: [[14.0, 38.5], [9.5, 39.2], [6.5, 39.0]] },
   { name: 'Atlas Mountains', peakElevM: 3100, widthDeg: 1.8, points: [[31.0, -8.0], [33.5, -4.5], [35.5, 3.0]] },
+  { name: 'Aravalli Range', peakElevM: 580, widthDeg: 1.1, points: [[24.6, 72.7], [26.9, 75.8], [28.4, 77.1]] },
   { name: 'Southern Alps (NZ)', peakElevM: 2800, widthDeg: 1.1, points: [[-41.8, 172.2], [-43.6, 170.1], [-45.2, 167.8]] },
 ];
 
@@ -312,11 +313,15 @@ const MAJOR_DESERTS: ReadonlyArray<DesertDef> = [
 ];
 
 const COUNTRY_BOXES: ReadonlyArray<CountryBox> = [
-  { country: 'India', continent: 'Asia', minLat: 7.5, maxLat: 35.5, minLon: 68.1, maxLon: 97.4 },
   { country: 'Nepal', continent: 'Asia', minLat: 26.3, maxLat: 30.5, minLon: 80.0, maxLon: 88.2 },
-  { country: 'China', continent: 'Asia', minLat: 18.2, maxLat: 53.5, minLon: 73.5, maxLon: 134.8 },
+  { country: 'Sri Lanka', continent: 'Asia', minLat: 5.8, maxLat: 10.0, minLon: 79.4, maxLon: 82.0 },
+  { country: 'United Arab Emirates', continent: 'Asia', minLat: 22.6, maxLat: 26.2, minLon: 51.5, maxLon: 56.4 },
+  { country: 'Singapore', continent: 'Asia', minLat: 1.1, maxLat: 1.5, minLon: 103.5, maxLon: 104.1 },
+  { country: 'South Korea', continent: 'Asia', minLat: 34.0, maxLat: 38.6, minLon: 125.0, maxLon: 130.0 },
+  { country: 'India', continent: 'Asia', minLat: 7.5, maxLat: 35.5, minLon: 68.1, maxLon: 97.4 },
   { country: 'Japan', continent: 'Asia', minLat: 30.0, maxLat: 45.6, minLon: 129.0, maxLon: 146.0 },
   { country: 'Indonesia', continent: 'Asia', minLat: -11.0, maxLat: 6.0, minLon: 95.0, maxLon: 141.0 },
+  { country: 'China', continent: 'Asia', minLat: 18.2, maxLat: 53.5, minLon: 73.5, maxLon: 134.8 },
   { country: 'United Kingdom', continent: 'Europe', minLat: 49.9, maxLat: 58.7, minLon: -6.3, maxLon: 1.8 },
   { country: 'Ireland', continent: 'Europe', minLat: 51.4, maxLat: 55.4, minLon: -10.5, maxLon: -5.4 },
   { country: 'Iceland', continent: 'Europe', minLat: 63.3, maxLat: 66.6, minLon: -24.6, maxLon: -13.4 },
@@ -342,6 +347,33 @@ const COUNTRY_BOXES: ReadonlyArray<CountryBox> = [
   { country: 'Russia', continent: 'Asia', minLat: 50.0, maxLat: 77.7, minLon: 27.0, maxLon: 180.0 },
   { country: 'Saudi Arabia', continent: 'Asia', minLat: 16.3, maxLat: 32.2, minLon: 34.5, maxLon: 55.7 },
 ];
+
+export const REAL_EARTH_DATA_SOURCES = [
+  {
+    layer: 'Continents, Coastlines & Islands',
+    dataset: 'Natural Earth 1:110m/50m simplified vector polygons (embedded)',
+    resolution: 'Macro continental & 18 major island rings',
+    license: 'Public Domain (Natural Earth)',
+  },
+  {
+    layer: 'Global Elevation & Bathymetry',
+    dataset: 'Copernicus / SRTM macro ridge & shelf elevation model + local multi-octave FBM',
+    resolution: 'Mountain ranges, plateaus, continental shelves & 256m chunk meshes',
+    license: 'Open / Embedded procedural-GIS hybrid',
+  },
+  {
+    layer: 'Hydrology (Rivers & Inland Lakes)',
+    dataset: 'HydroSHEDS-aligned major river corridors & inland water basins',
+    resolution: '12 major river systems & 6 major lakes/inland seas',
+    license: 'Embedded hydrological dataset',
+  },
+  {
+    layer: 'Cities, Landmarks & Infrastructure',
+    dataset: 'GeoNames / WGS-84 City Gazetteer + optional live OpenStreetMap Overpass API cache',
+    resolution: '55+ global hubs (incl. Jaipur, New Delhi, Mumbai, London, NYC, Tokyo, Dubai, Sydney, Cairo, Rio)',
+    license: 'ODbL (OpenStreetMap contributors) when online / offline fallback embedded',
+  },
+] as const;
 
 function pointInPolygon(lat: number, lon: number, poly: ReadonlyArray<readonly [number, number]>): boolean {
   let inside = false;

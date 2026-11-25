@@ -299,7 +299,8 @@ export default function App() {
         stored === 'performance' ||
         stored === 'balanced' ||
         stored === 'quality' ||
-        stored === 'ultra_5x'
+        stored === 'ultra_5x' ||
+        stored === 'absolute_realism'
       ) {
         return stored;
       }
@@ -2866,6 +2867,20 @@ export default function App() {
               if (engineRef.current) {
                 const open = engineRef.current.prologueManager.townMgr.apartmentBuilding.toggleCompoundGate();
                 engineRef.current.callbacks.onInteractionPrompt(open ? 'Compound Gate: OPEN' : 'Compound Gate: CLOSED');
+              }
+            }}
+            vehicleGateOpen={engineRef.current?.prologueManager.townMgr.apartmentBuilding.vehicleGateOpen ?? false}
+            onToggleVehicleGate={() => {
+              if (engineRef.current) {
+                const open = engineRef.current.prologueManager.townMgr.apartmentBuilding.toggleVehicleGate();
+                engineRef.current.callbacks.onInteractionPrompt(open ? 'Gate 4 Vehicle Entrance: OPEN' : 'Gate 4 Vehicle Entrance: CLOSED');
+              }
+            }}
+            vehicleGate2Open={engineRef.current?.prologueManager.townMgr.apartmentBuilding.vehicleGate2Open ?? false}
+            onToggleVehicleGate2={() => {
+              if (engineRef.current) {
+                const open = engineRef.current.prologueManager.townMgr.apartmentBuilding.toggleSecondVehicleGate();
+                engineRef.current.callbacks.onInteractionPrompt(open ? 'Gate 5 North Vehicle Entrance: OPEN' : 'Gate 5 North Vehicle Entrance: CLOSED');
               }
             }}
             garageShutterOpen={engineRef.current?.prologueManager.townMgr.apartmentBuilding.garageShutterOpen ?? false}

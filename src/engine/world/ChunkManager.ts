@@ -13,6 +13,7 @@ import { TerrainGenerator } from './TerrainGenerator';
 import { BiomeGenerator } from './BiomeGenerator';
 import { TerrainWorkerClient } from '../geo/TerrainWorkerClient';
 import { OsmTileFetcher } from '../geo/OsmTileFetcher';
+import { EnterableBuildingDef } from './RealEarthBuildings';
 
 export class ChunkManager {
   private static readonly _frustum = new THREE.Frustum();
@@ -38,6 +39,8 @@ export class ChunkManager {
   private workerClient: TerrainWorkerClient = new TerrainWorkerClient();
   private prefetchedKeys: Set<string> = new Set();
   private lastOsmPrefetchKey: string = '';
+  private pendingOsmRefreshKeys: Set<string> = new Set();
+  private unsubscribeOsm: (() => void) | null = null;
 
   constructor(
     scene: THREE.Scene,
@@ -49,6 +52,17 @@ export class ChunkManager {
     this.worldSeed = worldSeed;
     this.quality = quality;
     this.persistence = persistence;
+    this.unsubscribeOsm = OsmTileFetcher.onSectorReady((sector) => {
+      if (!sector.isGeometryReady || (sector.buildings.length === 0 && sector.roads.length === 0)) return;
+      this.activeChunks.forEach((chunk, key) => {
+        if (chunk.data.coord.cx === 0 && chunk.data.coord.cz === 0) return;
+        const [cX, cZ] = WorldCoordinates.chunkToWorldCenter(chunk.data.coord.cx, chunk.data.coord.cz);
+        const geo = WorldCoordinates.worldToLatLon(cX, cZ);
+        if (Math.abs(geo.lat - sector.lat) <= 0.014 && Math.abs(geo.lon - sector.lon) <= 0.014) {
+          this.pendingOsmRefreshKeys.add(key);
+        }
+      });
+    });
   }
 
   public setStreamingRadius(radius: number | null) {
@@ -86,6 +100,7 @@ export class ChunkManager {
     });
     this.activeChunks.clear();
     this.prefetchedKeys.clear();
+    this.pendingOsmRefreshKeys.clear();
     this.lastCheckedPos.set(-99999, -99999, -99999);
   }
 
@@ -261,7 +276,34 @@ export class ChunkManager {
       this.activeChunks.set(key, generated);
       this.persistence.markChunkDiscovered(coord.cx, coord.cz);
     }
-    if (chunksToLoad.length > batchCount) {
+
+    // Smoothly upgrade 1 active chunk per eligible frame if live Overpass OSM geometry arrived
+    if (allowChunkBuild && batchCount === 0 && this.pendingOsmRefreshKeys.size > 0) {
+      const nextKey = this.pendingOsmRefreshKeys.values().next().value as string | undefined;
+      if (nextKey) {
+        this.pendingOsmRefreshKeys.delete(nextKey);
+        const existing = this.activeChunks.get(nextKey);
+        if (existing) {
+          const coord = existing.data.coord;
+          const lod = LODManager.getLODLevel(playerCoord.cx, playerCoord.cz, coord.cx, coord.cz, this.quality);
+          this.scene.remove(existing.group);
+          existing.dispose();
+          const rebuilt = ChunkGenerator.createChunk(
+            coord,
+            this.worldSeed,
+            lod,
+            this.quality,
+            this.persistence.destroyedResourceIds,
+            this.persistence.openedPoiIds,
+            this.apocalypticSeverity
+          );
+          this.scene.add(rebuilt.group);
+          this.activeChunks.set(nextKey, rebuilt);
+        }
+      }
+    }
+
+    if (chunksToLoad.length > batchCount || this.pendingOsmRefreshKeys.size > 0) {
       // Allow immediate continuation on next eligible frame instead of waiting for 5m movement
       this.lastCheckedPos.set(-99999, -99999, -99999);
     }
@@ -353,9 +395,29 @@ export class ChunkManager {
   }
 
   /**
+   * Returns all enterable building definitions from currently streamed chunks.
+   */
+  public getActiveEnterableBuildings(): EnterableBuildingDef[] {
+    const out: EnterableBuildingDef[] = [];
+    this.activeChunks.forEach((chunk) => {
+      if (chunk.enterableBuildings && chunk.enterableBuildings.length > 0) {
+        for (let i = 0; i < chunk.enterableBuildings.length; i++) {
+          out.push(chunk.enterableBuildings[i]);
+        }
+      }
+    });
+    return out;
+  }
+
+  /**
    * Dispose all loaded chunks & worker upon game reset/exit
    */
   public dispose() {
+    if (this.unsubscribeOsm) {
+      this.unsubscribeOsm();
+      this.unsubscribeOsm = null;
+    }
+    this.pendingOsmRefreshKeys.clear();
     this.workerClient.dispose();
     this.activeChunks.forEach((chunk) => {
       this.scene.remove(chunk.group);
