@@ -8,6 +8,22 @@ import { UnifiedPhysicsManager } from './physics/UnifiedPhysicsManager';
 import { buildRealisticHumanoid } from './rendering/RealisticHumanoidBuilder';
 import { getWoodPBR, getMetalPBR, getFabricPBR, getSkinPBR } from '../utils/proceduralTextures';
 import type { InteriorStreamingManager } from './world/InteriorStreamingManager';
+import {
+  AURELION_ATRIUM_VOID,
+  AURELION_ELEVATOR_CONFIGS,
+  AURELION_F6_INDOOR_POOL,
+  AURELION_LEVEL_ORDER,
+  AURELION_LEVELS,
+  AURELION_ROOFTOP_INFINITY_POOL,
+  AURELION_STAIR_VOID,
+} from './aurelion/AurelionConfig';
+import {
+  NEXUS_ELEVATORS,
+  NEXUS_FLOOR_ORDER,
+  NEXUS_FLOORS,
+  NEXUS_STAIRWELL,
+  NexusElevatorId,
+} from './nexus/NexusConfig';
 
 export class PlayerController {
   private static readonly _tmpDesiredPos = new THREE.Vector3();
@@ -69,6 +85,8 @@ export class PlayerController {
   public worldSeed: number = 42;
   public aiTrainManager?: any;
   public interiorStreamingManager?: InteriorStreamingManager;
+  public aurelionElevatorsSnapshot?: Record<'main' | 'service' | 'private', { currentY: number; stops: readonly string[] }>;
+  public nexusElevatorsSnapshot?: Record<NexusElevatorId, { currentY: number }>;
 
   constructor(scene: THREE.Scene, camera: THREE.PerspectiveCamera, worldSeed: number = 42) {
     this.scene = scene;
@@ -476,127 +494,174 @@ export class PlayerController {
       effectiveGroundY = -4.5;
     }
 
-    // Building 1: Option A 4-floor Player Apartment + Rooftop Pool + Explorable Side Wings (-26, 0, 38)
+    // Building 1: THE AURELION 9-Level Private Mega Estate (B2, B1, F1-F7) at (-26, 0, 38)
     let inApartmentPool = false;
     let waterSurfaceY = 0.0;
-    const isInsideApartmentCore =
-      this.position.x >= -34.0 &&
-      this.position.x <= -18.0 &&
-      this.position.z >= 31.0 &&
-      this.position.z <= 45.0;
-    const isInsideApartmentWings =
-      !isInsideApartmentCore &&
-      this.position.x >= -41.2 &&
-      this.position.x <= -10.8 &&
-      this.position.z >= 25.8 &&
-      this.position.z <= 50.2;
+    const aurRelX = this.position.x - (-26);
+    const aurRelZ = this.position.z - 38;
+    const isInsideAurelionCore = Math.abs(aurRelX) <= 15.2 && Math.abs(aurRelZ) <= 12.2;
+    const isOnAurelionF2Balcony =
+      Math.abs(aurRelX) <= 5.05 &&
+      Math.abs(aurRelZ) > 12.2 &&
+      Math.abs(aurRelZ) <= 13.35 &&
+      this.position.y >= 3.0 &&
+      this.position.y <= 7.0;
 
-    if (isInsideApartmentWings) {
-      const inEastWingStairs =
-        this.position.x >= -13.6 &&
-        this.position.x <= -11.6 &&
-        this.position.z >= 34.3 &&
-        this.position.z <= 39.7;
-      if (inEastWingStairs && this.position.y >= -0.2 && this.position.y < 10.2) {
-        const wFloor = THREE.MathUtils.clamp(Math.floor(Math.max(0, this.position.y - 0.25) / 3.2), 0, 2);
-        const wp = THREE.MathUtils.clamp((this.position.z - 34.5) / 5.0, 0, 1);
-        effectiveGroundY = 0.245 + wFloor * 3.2 + wp * 3.2;
-      } else if (this.position.y >= 11.8) {
-        effectiveGroundY = 13.06; // Wing roof terrace
-      } else if (this.position.y >= 9.2) {
-        effectiveGroundY = 9.845; // Wing Floor 4
-      } else if (this.position.y >= 6.0) {
-        effectiveGroundY = 6.645; // Wing Floor 3
-      } else if (this.position.y >= 3.0) {
-        effectiveGroundY = 3.445; // Wing Floor 2
-      } else {
-        effectiveGroundY = 0.245; // Wing Floor 1
-      }
-    }
-
-    if (isInsideApartmentCore) {
-      // Rooftop basin occupies the south-west portion of the roof.
-      // Only the basin volume is water; all surrounding terrace tiles stay dry.
-      inApartmentPool =
-        this.position.x >= -31.5 && this.position.x <= -25.5 &&
-        this.position.z >= 35.0 && this.position.z <= 41.0 &&
-        this.position.y >= 11.2 && this.position.y <= 14.0;
-      if (inApartmentPool) {
-        waterSurfaceY = 12.82;
-        const atPoolExitSteps =
-          this.position.x >= -28.2 && this.position.x <= -26.4 &&
-          this.position.z >= 38.0 && this.position.z <= 41.0;
-        // Jumping at the built-in exit steps lets the survivor climb back onto the deck.
-        if (input.jump && atPoolExitSteps && this.position.y >= 11.5) {
-          inApartmentPool = false;
-          effectiveGroundY = 13.1;
-        }
-      }
-
-      const isInStairwell =
-        this.position.x >= -22.2 && this.position.x <= -17.8 &&
-        this.position.z >= 33.4 && this.position.z <= 39.8;
-
-      if (isInStairwell) {
-        const progressForward = Math.max(0, Math.min(1, (this.position.z - 34.5) / 4.2));
-        const progressReverse = 1.0 - progressForward;
-        const onRearLanding = this.position.z >= 38.2;
-        const onFrontLanding = this.position.z <= 34.8;
-        const isWestLane = this.position.x < -20.0;
-
-        if (onRearLanding) {
-          if (this.position.y < -1.0) {
-            effectiveGroundY = -2.955;
-          } else if (this.position.y >= 8.2) {
-            effectiveGroundY = 9.845;
-          } else if (this.position.y >= 2.0) {
-            effectiveGroundY = 3.445;
-          } else {
-            effectiveGroundY = 0.245;
-          }
-        } else if (onFrontLanding) {
-          if (this.position.y >= 11.2) {
-            effectiveGroundY = 13.1;
-          } else if (this.position.y >= 5.0) {
-            effectiveGroundY = 6.645;
-          } else {
-            effectiveGroundY = 0.245;
-          }
-        } else {
-          if (isWestLane) {
-            if (this.position.y >= 5.0) {
-              effectiveGroundY = 6.645 + progressForward * 3.2;
-            } else {
-              effectiveGroundY = 0.245 + progressForward * 3.2;
-            }
-          } else {
-            if (this.position.y < 1.0) {
-              effectiveGroundY = 0.245 - progressForward * 3.2;
-            } else if (this.position.y >= 8.2) {
-              effectiveGroundY = 9.845 + progressReverse * 3.2;
-            } else {
-              effectiveGroundY = 3.445 + progressReverse * 3.2;
+    if (isOnAurelionF2Balcony) {
+      effectiveGroundY = AURELION_LEVELS.F2.floorY;
+    } else if (isInsideAurelionCore) {
+      // 1. Check 3 Working Elevators (Main, Service, Private Basement VIP)
+      let ridingElevator = false;
+      if (this.aurelionElevatorsSnapshot) {
+        for (const elevId of ['main', 'service', 'private'] as const) {
+          const cfg = AURELION_ELEVATOR_CONFIGS[elevId];
+          if (Math.abs(aurRelX - cfg.localX) <= cfg.cabW * 0.5 && Math.abs(aurRelZ - cfg.localZ) <= cfg.cabD * 0.5) {
+            const cabY = this.aurelionElevatorsSnapshot[elevId].currentY;
+            if (this.position.y >= cabY - 1.2 && this.position.y <= cabY + 2.4) {
+              effectiveGroundY = cabY;
+              ridingElevator = true;
+              if (Math.abs(this.position.y - cabY) < 0.35 && this.velocity.y <= 0.5) {
+                this.position.y = cabY;
+              }
+              break;
             }
           }
         }
-      } else {
-        if (inApartmentPool) {
-          effectiveGroundY = 11.55;
-        } else if (this.position.y >= 11.8) {
-          effectiveGroundY = 13.1;
-        } else if (this.position.y >= 9.2) {
-          effectiveGroundY = 9.845;
-        } else if (this.position.y >= 6.0) {
-          effectiveGroundY = 6.645;
-        } else if (this.position.y >= 3.0) {
-          effectiveGroundY = 3.445;
+      }
+
+      if (!ridingElevator) {
+        // 2. Check F6 Indoor Leisure Pool
+        const inF6Pool =
+          aurRelX >= AURELION_F6_INDOOR_POOL.localMinX &&
+          aurRelX <= AURELION_F6_INDOOR_POOL.localMaxX &&
+          aurRelZ >= AURELION_F6_INDOOR_POOL.localMinZ &&
+          aurRelZ <= AURELION_F6_INDOOR_POOL.localMaxZ &&
+          this.position.y >= 18.1 &&
+          this.position.y <= 20.8;
+
+        // 3. Check F7 Crown Infinity Swimming Pool
+        const inF7Pool =
+          aurRelX >= AURELION_ROOFTOP_INFINITY_POOL.localMinX &&
+          aurRelX <= AURELION_ROOFTOP_INFINITY_POOL.localMaxX &&
+          aurRelZ >= AURELION_ROOFTOP_INFINITY_POOL.localMinZ &&
+          aurRelZ <= AURELION_ROOFTOP_INFINITY_POOL.localMaxZ &&
+          this.position.y >= 21.6 &&
+          this.position.y <= 24.8;
+
+        if (inF6Pool) {
+          inApartmentPool = true;
+          waterSurfaceY = AURELION_F6_INDOOR_POOL.waterSurfaceY;
+          effectiveGroundY = AURELION_F6_INDOOR_POOL.basinBottomY;
+          const atExitF6 = aurRelX >= -4.9 && aurRelX <= -3.5 && aurRelZ >= -2.6 && aurRelZ <= 2.6;
+          if (input.jump && atExitF6 && this.position.y >= 18.4) {
+            inApartmentPool = false;
+            effectiveGroundY = AURELION_F6_INDOOR_POOL.deckY;
+          }
+        } else if (inF7Pool) {
+          inApartmentPool = true;
+          waterSurfaceY = AURELION_ROOFTOP_INFINITY_POOL.waterSurfaceY;
+          effectiveGroundY = AURELION_ROOFTOP_INFINITY_POOL.basinBottomY;
+          const atExitF7 = aurRelX >= -3.8 && aurRelX <= -2.3 && aurRelZ >= 1.5 && aurRelZ <= 3.5;
+          if (input.jump && atExitF7 && this.position.y >= 22.0) {
+            inApartmentPool = false;
+            effectiveGroundY = AURELION_ROOFTOP_INFINITY_POOL.deckY;
+          }
         } else {
-          effectiveGroundY = 0.245;
+          // 4. Check Continuous 9-Level Switchback Grand Stairwell
+          const isInStairwell =
+            aurRelX >= AURELION_STAIR_VOID.minX - 0.08 &&
+            aurRelX <= AURELION_STAIR_VOID.maxX + 0.08 &&
+            aurRelZ >= AURELION_STAIR_VOID.minZ - 0.65 &&
+            aurRelZ <= AURELION_STAIR_VOID.maxZ + 0.85;
+
+          if (isInStairwell) {
+            const pNorth = THREE.MathUtils.clamp((aurRelZ - AURELION_STAIR_VOID.zStart) / (AURELION_STAIR_VOID.zEnd - AURELION_STAIR_VOID.zStart), 0, 1);
+            const pSouth = 1.0 - pNorth;
+            const isWestLane = aurRelX < 6.0;
+
+            if (aurRelZ >= AURELION_STAIR_VOID.zEnd + 0.05) {
+              // North landings (including B1<->F1 midway landing at y=-1.90)
+              if (this.position.y >= -2.9 && this.position.y <= -0.9) {
+                effectiveGroundY = -1.90;
+              } else {
+                let nearestY = AURELION_LEVELS.F1.floorY;
+                let bestD = Infinity;
+                for (const id of AURELION_LEVEL_ORDER) {
+                  const fy = AURELION_LEVELS[id].floorY;
+                  const d = Math.abs(this.position.y - fy);
+                  if (d < bestD) {
+                    bestD = d;
+                    nearestY = fy;
+                  }
+                }
+                effectiveGroundY = nearestY;
+              }
+            } else if (aurRelZ <= AURELION_STAIR_VOID.zStart - 0.05) {
+              // South landings
+              let nearestY = AURELION_LEVELS.F1.floorY;
+              let bestD = Infinity;
+              for (const id of AURELION_LEVEL_ORDER) {
+                const fy = AURELION_LEVELS[id].floorY;
+                const d = Math.abs(this.position.y - fy);
+                if (d < bestD) {
+                  bestD = d;
+                  nearestY = fy;
+                }
+              }
+              effectiveGroundY = nearestY;
+            } else if (isWestLane) {
+              // West Lane: B1->Mid (-4.0..-1.9), F1->F2 (0.245..4.0), F3->F4 (7.6..11.2), F5->F6 (14.8..18.4)
+              if (this.position.y < -1.1) {
+                effectiveGroundY = -4.0 + pNorth * 2.10;
+              } else if (this.position.y < 5.8) {
+                effectiveGroundY = 0.245 + pNorth * 3.755;
+              } else if (this.position.y < 13.0) {
+                effectiveGroundY = 7.6 + pNorth * 3.6;
+              } else {
+                effectiveGroundY = 14.8 + pNorth * 3.6;
+              }
+            } else {
+              // East Lane: B2->B1 (-7.6..-4.0), Mid->F1 (-1.9..0.245), F2->F3 (4.0..7.6), F4->F5 (11.2..14.8), F6->F7 (18.4..22.0)
+              if (this.position.y < -2.95) {
+                effectiveGroundY = -7.6 + pNorth * 3.6;
+              } else if (this.position.y < 2.2) {
+                effectiveGroundY = 0.245 - pNorth * 2.145;
+              } else if (this.position.y < 9.4) {
+                effectiveGroundY = 4.0 + pSouth * 3.6;
+              } else if (this.position.y < 16.6) {
+                effectiveGroundY = 11.2 + pSouth * 3.6;
+              } else {
+                effectiveGroundY = 18.4 + pSouth * 3.6;
+              }
+            }
+          } else {
+            // 5. Walkable Level Slabs (checking from top F7 down to B2, respecting Atrium Void on F2-F4 & F6-F7 setback)
+            const overAtriumVoid =
+              aurRelX > AURELION_ATRIUM_VOID.minX &&
+              aurRelX < AURELION_ATRIUM_VOID.maxX &&
+              aurRelZ > AURELION_ATRIUM_VOID.minZ &&
+              aurRelZ < AURELION_ATRIUM_VOID.maxZ;
+
+            let matchedSlabY: number | null = null;
+            for (let li = AURELION_LEVEL_ORDER.length - 1; li >= 0; li--) {
+              const id = AURELION_LEVEL_ORDER[li];
+              const spec = AURELION_LEVELS[id];
+              const walkableHalfW = id === 'F5' ? 15.1 : spec.halfWidth + 0.2;
+              const walkableHalfD = id === 'F5' ? 12.1 : spec.halfDepth + 0.2;
+              if (Math.abs(aurRelX) > walkableHalfW || Math.abs(aurRelZ) > walkableHalfD) continue;
+              if (spec.hasAtriumVoid && overAtriumVoid) continue;
+              if (this.position.y >= spec.floorY - 0.95) {
+                matchedSlabY = spec.floorY;
+                break;
+              }
+            }
+            effectiveGroundY = matchedSlabY !== null ? matchedSlabY : AURELION_LEVELS.B2.floorY;
+          }
         }
       }
     }
 
-    // Building 2: 8-Floor Railway Command Centre + Roof Helipad (World center (-74, 0, 62), X: [-85.2, -62.8], Z: [52.8, 71.2])
+    // Building 2: THE NEXUS — 8-Floor Grand Railway Intelligence Headquarters (World center (-74, 0, 62), X: [-85.2, -62.8], Z: [52.8, 71.2])
     const inCommandCentre =
       this.position.x >= -85.2 &&
       this.position.x <= -62.8 &&
@@ -605,23 +670,74 @@ export class PlayerController {
     if (inCommandCentre) {
       const cmdLocalX = this.position.x - (-74);
       const cmdLocalZ = this.position.z - 62;
-      const onCmdStairs =
-        cmdLocalX >= 6.2 && cmdLocalX <= 9.1 &&
-        cmdLocalZ >= -5.2 && cmdLocalZ <= 6.2;
 
-      if (onCmdStairs) {
-        const stairFloor = THREE.MathUtils.clamp(Math.floor(Math.max(0, this.position.y - 0.76) / 3.45), 0, 7);
-        if (cmdLocalZ >= 4.0 && this.position.y >= 0.76 + stairFloor * 3.45 + 1.8) {
-          effectiveGroundY = 0.76 + (stairFloor + 1) * 3.45;
-        } else {
-          const p = THREE.MathUtils.clamp((cmdLocalZ + 5.0) / 9.3, 0, 1);
-          effectiveGroundY = 0.76 + stairFloor * 3.45 + p * 3.45;
+      // 1. Check Lift A & Lift B animated passenger elevator cabs first
+      let ridingNexusLift = false;
+      if (this.nexusElevatorsSnapshot) {
+        for (const elevId of ['liftA', 'liftB'] as NexusElevatorId[]) {
+          const cfg = NEXUS_ELEVATORS[elevId];
+          if (Math.abs(cmdLocalX - cfg.localX) <= cfg.cabW * 0.55 && Math.abs(cmdLocalZ - cfg.localZ) <= cfg.cabD * 0.55) {
+            const cabY = this.nexusElevatorsSnapshot[elevId].currentY;
+            if (this.position.y >= cabY - 1.2 && this.position.y <= cabY + 2.5) {
+              effectiveGroundY = cabY;
+              ridingNexusLift = true;
+              if (Math.abs(this.position.y - cabY) < 0.35 && this.velocity.y <= 0.5) {
+                this.position.y = cabY;
+              }
+              break;
+            }
+          }
         }
-      } else if (this.position.y >= 27.1) {
-        effectiveGroundY = 28.44; // Roof Helipad Deck
-      } else {
-        const fl = THREE.MathUtils.clamp(Math.floor((this.position.y + 0.55 - 0.76) / 3.45), 0, 7);
-        effectiveGroundY = 0.76 + fl * 3.45;
+      }
+
+      if (!ridingNexusLift) {
+        const onCmdStairs =
+          cmdLocalX >= NEXUS_STAIRWELL.minX && cmdLocalX <= NEXUS_STAIRWELL.maxX &&
+          cmdLocalZ >= NEXUS_STAIRWELL.minZ && cmdLocalZ <= NEXUS_STAIRWELL.maxZ;
+
+        if (onCmdStairs) {
+          // Determine which flight (F1->F2 .. F7->F8) matches player's vertical zone
+          let activeFloorIdx = 0;
+          for (let i = 0; i < 7; i++) {
+            const flY = NEXUS_FLOORS[NEXUS_FLOOR_ORDER[i]].floorY;
+            const nextY = NEXUS_FLOORS[NEXUS_FLOOR_ORDER[i + 1]].floorY;
+            if (this.position.y >= flY - 0.6 && this.position.y < nextY - 0.35) {
+              activeFloorIdx = i;
+              break;
+            }
+            if (i === 6 && this.position.y >= nextY - 0.35) {
+              activeFloorIdx = 7;
+            }
+          }
+          if (activeFloorIdx >= 7) {
+            effectiveGroundY = NEXUS_FLOORS[8].floorY;
+          } else if (cmdLocalZ >= NEXUS_STAIRWELL.zEnd + 0.15) {
+            effectiveGroundY = NEXUS_FLOORS[NEXUS_FLOOR_ORDER[activeFloorIdx + 1]].floorY;
+          } else if (cmdLocalZ <= NEXUS_STAIRWELL.zStart - 0.15) {
+            effectiveGroundY = NEXUS_FLOORS[NEXUS_FLOOR_ORDER[activeFloorIdx]].floorY;
+          } else {
+            const flY = NEXUS_FLOORS[NEXUS_FLOOR_ORDER[activeFloorIdx]].floorY;
+            const nextY = NEXUS_FLOORS[NEXUS_FLOOR_ORDER[activeFloorIdx + 1]].floorY;
+            const p = THREE.MathUtils.clamp(
+              (cmdLocalZ - NEXUS_STAIRWELL.zStart) / (NEXUS_STAIRWELL.zEnd - NEXUS_STAIRWELL.zStart),
+              0,
+              1
+            );
+            effectiveGroundY = flY + p * (nextY - flY);
+          }
+        } else if (this.position.y >= 30.6) {
+          effectiveGroundY = 31.43; // Crown Roof Deck above Floor 8
+        } else {
+          let matchedY = NEXUS_FLOORS[1].floorY;
+          for (let i = NEXUS_FLOOR_ORDER.length - 1; i >= 0; i--) {
+            const fy = NEXUS_FLOORS[NEXUS_FLOOR_ORDER[i]].floorY;
+            if (this.position.y >= fy - 0.85) {
+              matchedY = fy;
+              break;
+            }
+          }
+          effectiveGroundY = matchedY;
+        }
       }
     }
 

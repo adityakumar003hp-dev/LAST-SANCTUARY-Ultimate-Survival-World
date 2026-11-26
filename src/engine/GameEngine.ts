@@ -38,7 +38,7 @@ import { AtmosphericSky } from './rendering/AtmosphericSky';
 import { HouseInteractionController, HouseInteractionType } from './interaction/HouseInteractionController';
 import { isProtectedSpawnZone } from './world/ProtectedSpawnZones';
 import { StorylineCheckpointManager } from './campaign/StorylineCheckpointManager';
-import { WeatherManager } from './weather/WeatherManager';
+import { WeatherManager, type WeatherTelemetry } from './weather/WeatherManager';
 import { TacticalCombatEffects } from './combat/TacticalCombatEffects';
 import { WorldEventsManager, ExtractionState } from './world/WorldEventsManager';
 import { WeatherType, SandboxSettings, WeaponModId, RadiantBounty, SupplyDropState, ZombieEntity, EarthOriginConfig } from '../types/game';
@@ -48,6 +48,10 @@ import { DEFAULT_EARTH_ORIGIN, EarthProjection, METERS_PER_DEG_LAT, normalizeLon
 import { RealEarthDataset } from './geo/RealEarthDataset';
 import { RealWorldCities } from './geo/RealWorldCities';
 import { InteriorStreamingManager, InteriorInteractResult } from './world/InteriorStreamingManager';
+import { AURELION_ELEVATOR_CONFIGS, AurelionDocument, AurelionLevelId } from './aurelion/AurelionConfig';
+import type { AurelionDashboardSnapshot, ElevatorId } from './aurelion/AurelionSystems';
+import { NEXUS_ELEVATORS, NEXUS_FLOORS, type NexusElevatorId, type NexusFloorNumber } from './nexus/NexusConfig';
+import type { NexusDashboardSnapshot, NexusLiveContext, NexusLiveNpcMarker } from './nexus/NexusSystems';
 
 export interface GameEngineCallbacks {
   onStatsChange: (stats: PlayerStats) => void;
@@ -79,6 +83,12 @@ export interface GameEngineCallbacks {
   onOpenMedicalClinic?: () => void;
   onOpenApartmentStatus?: () => void;
   onOpenSecurityCommandCenter?: () => void;
+  onOpenAurelionElevator?: (elevatorId: ElevatorId) => void;
+  onOpenAurelionDocument?: (docId: string) => void;
+  onAurelionLocationChange?: (loc: { level: string; roomName: string } | null) => void;
+  onOpenNexusElevator?: (elevatorId: NexusElevatorId) => void;
+  onOpenNexusFloor1?: (tab: 'visitor' | 'staff' | 'directory' | 'building' | 'security') => void;
+  onOpenNexusDepartment?: (floor: NexusFloorNumber, screenId?: string) => void;
   onTrainChange?: (hudData: any | null) => void;
   onOpenFriendModal?: (friend: StoryCompanion) => void;
   onGetInventory?: () => (InventorySlot | null)[];
@@ -225,6 +235,7 @@ export class GameEngine {
   private uiSyncTimer: number = 0;
   private lastReportedBiomeId: string = '';
   private lastReportedWeather: WeatherType = 'clear';
+  private lastWeatherTelemetry: WeatherTelemetry | null = null;
   private weatherFogMultiplier: number = 1.0;
   private geigerTimer: number = 0;
   public sandboxSettings: SandboxSettings = {
@@ -561,6 +572,13 @@ export class GameEngine {
     if (initialSave?.compoundState) {
       this.prologueManager.townMgr.apartmentBuilding.restoreCompoundState(initialSave.compoundState);
     }
+    if (initialSave?.aurelionState) {
+      this.prologueManager.townMgr.apartmentBuilding.restoreAurelionState(initialSave.aurelionState);
+    }
+    if (initialSave?.nexusState) {
+      this.prologueManager.townMgr.apartmentBuilding.restoreNexusState(initialSave.nexusState);
+    }
+    this.prologueManager.townMgr.apartmentBuilding.nexusLiveProvider = () => this.buildNexusLiveContext();
 
     // Storyline Checkpoint Manager (Handles all 70 missions and exact checkpoint restoration)
     this.storylineManager = new StorylineCheckpointManager(this);
@@ -1149,6 +1167,7 @@ export class GameEngine {
 
     // Dynamic Biome Weather update
     const wx = this.weatherManager.update(delta, this.player.position, currentBiomeId, this.player.isSubmerged);
+    this.lastWeatherTelemetry = wx;
     this.weatherFogMultiplier = wx.fogDensityMultiplier;
     this.playerStats.weatherType = wx.weather;
     this.playerStats.weatherIntensity = wx.intensity;
@@ -1537,6 +1556,16 @@ export class GameEngine {
       this.globalOutbreakSimulator.powerGridStability,
       this.activeLocalLightLimit
     );
+    const aurApt = this.prologueManager?.townMgr?.apartmentBuilding;
+    if (aurApt) {
+      aurApt.setEnvironmentState(this.gameTimeMinutes, this.lastReportedWeather);
+      if (aurApt.aurelion) {
+        this.player.aurelionElevatorsSnapshot = aurApt.aurelion.systems.elevators;
+      }
+      if (aurApt.nexus) {
+        this.player.nexusElevatorsSnapshot = aurApt.nexus.systems.elevators;
+      }
+    }
     if (this.prologueManager?.townMgr) {
       this.prologueManager.townMgr.gridPowerFactor = this.globalOutbreakSimulator.powerGridStability;
     }
@@ -1636,6 +1665,7 @@ export class GameEngine {
         apt.renderSecurityScreenContent(trackedEntities, playerRel);
         apt.renderWallClockContent(this.gameTimeMinutes, this.dayCount);
         apt.renderComputerScreenContent(this.playerStats, this.dayCount, this.gameTimeMinutes);
+        this.callbacks.onAurelionLocationChange?.(apt.getLocationSummary(this.player.position));
       }
     }
 
@@ -2517,11 +2547,29 @@ export class GameEngine {
         const isOpen = apt.toggleSecondVehicleGate();
         this.callbacks.onInteractionPrompt(isOpen ? 'Gate 5 north vehicle entrance: OPEN' : 'Gate 5 north vehicle entrance: CLOSED');
         return;
-      } else if (aptInteraction.id === 'commandElevator') {
-        const destination = apt.cycleCommandElevator();
-        this.player.position.copy(destination);
-        this.player.velocity.set(0, 0, 0);
-        this.callbacks.onInteractionPrompt('Railway Command Elevator: arrived at the next floor.');
+      } else if (aptInteraction.id === 'nexusElevator') {
+        soundEngine.playUIClick();
+        this.callbacks.onOpenNexusElevator?.(aptInteraction.nexusElevatorId || 'liftA');
+        return;
+      } else if (aptInteraction.id === 'nexusFloor1Terminal') {
+        soundEngine.playUIClick();
+        this.callbacks.onOpenNexusFloor1?.(aptInteraction.nexusFloor1Tab || 'visitor');
+        return;
+      } else if (aptInteraction.id === 'nexusCompoundRadar') {
+        soundEngine.playUIClick();
+        this.callbacks.onOpenNexusDepartment?.(7, 'F7-S01');
+        return;
+      } else if (aptInteraction.id === 'nexusOutbreakRadar') {
+        soundEngine.playUIClick();
+        this.callbacks.onOpenNexusDepartment?.(8, 'F8-S01');
+        return;
+      } else if (aptInteraction.id === 'nexusScreen') {
+        soundEngine.playUIClick();
+        this.callbacks.onOpenNexusDepartment?.(aptInteraction.nexusFloor || 2, aptInteraction.nexusScreenId);
+        return;
+      } else if (aptInteraction.id === 'nexusStaff') {
+        soundEngine.playUIClick();
+        this.callbacks.onInteractionPrompt(aptInteraction.staffBriefing || `${aptInteraction.label}: Station operational.`);
         return;
       } else if (aptInteraction.id === 'fridge') {
         soundEngine.playUIClick();
@@ -2735,7 +2783,7 @@ export class GameEngine {
       } else if (aptInteraction.id === 'medicalBed') {
         soundEngine.playUIClick();
         this.player.startMedicalRest(this.player.position);
-        this.callbacks.onInteractionPrompt('Resting in Ground-Floor Medical Recovery Station (Regenerating Health. Move to stand up)');
+        this.callbacks.onInteractionPrompt('Resting in Medical Recovery Station (Regenerating Health. Move to stand up)');
         return;
       } else if (aptInteraction.id === 'basementTV') {
         const isOn = apt.toggleBasementTV();
@@ -2744,6 +2792,100 @@ export class GameEngine {
       } else if (aptInteraction.id === 'apartmentStatus') {
         soundEngine.playUIClick();
         this.callbacks.onOpenApartmentStatus?.();
+        return;
+      } else if (aptInteraction.id === 'aurelionElevator') {
+        soundEngine.playUIClick();
+        this.callbacks.onOpenAurelionElevator?.(aptInteraction.elevatorId || 'main');
+        return;
+      } else if (aptInteraction.id === 'aurelionGenerator') {
+        const running = apt.aurelion.systems.toggleGenerator();
+        soundEngine.playSwitchClick();
+        if (!running && apt.aurelion.systems.fuelLiters <= 0.1) {
+          this.callbacks.onInteractionPrompt('B2 Diesel Fuel exhausted — refuel in B2 Fuel Room first.');
+        } else {
+          this.callbacks.onInteractionPrompt(
+            running
+              ? 'B2 Twin Diesel Generators: ONLINE (70 kW Output)'
+              : 'B2 Twin Diesel Generators: STANDBY'
+          );
+        }
+        return;
+      } else if (aptInteraction.id === 'aurelionRefuel') {
+        apt.aurelion.systems.refuelGenerator(120);
+        soundEngine.playUIClick();
+        this.callbacks.onInteractionPrompt(
+          `B2 Fuel Day-Tank replenished (+120 L · Total: ${Math.round(apt.aurelion.systems.fuelLiters)} L)`
+        );
+        return;
+      } else if (aptInteraction.id === 'aurelionWaterPurifier') {
+        const wasPaused = !apt.aurelion.systems.purifierActive;
+        apt.aurelion.systems.togglePurifier();
+        if (apt.aurelion.systems.drawPurifiedWaterBottle()) {
+          this.callbacks.onItemCollected('clean_water', 1);
+          soundEngine.playWaterRunning(1.5);
+          this.callbacks.onInteractionPrompt('B2 RO/UV Purifier active · Filled +1 Clean Water Canteen');
+        } else {
+          soundEngine.playSwitchClick();
+          this.callbacks.onInteractionPrompt(
+            wasPaused ? 'B2 RO/UV Filtration Plant: ACTIVE' : 'B2 RO/UV Filtration Plant: PAUSED'
+          );
+        }
+        return;
+      } else if (aptInteraction.id === 'aurelionMaintenance') {
+        apt.aurelion.systems.repairMaintenance();
+        soundEngine.playBuildSnap();
+        this.callbacks.onInteractionPrompt('Estate mechanical systems serviced and calibrated to 100% integrity.');
+        return;
+      } else if (aptInteraction.id === 'aurelionHydroBed') {
+        const bedId = aptInteraction.hydroBedId ?? 0;
+        const bed = apt.aurelion.systems.hydroBeds[bedId];
+        if (bed?.stage === 0) {
+          apt.aurelion.systems.plantHydroBed(bedId);
+          soundEngine.playBuildSnap();
+          this.callbacks.onInteractionPrompt(`Planted ${bed.cropType.toUpperCase()} in ${bed.label}.`);
+        } else if (bed?.stage === 3) {
+          const harvest = apt.aurelion.systems.harvestHydroBed(bedId);
+          if (harvest) {
+            this.callbacks.onItemCollected(harvest.itemId, harvest.count);
+            this.addXP(25);
+            soundEngine.playDawnVictoryChime();
+            this.callbacks.onInteractionPrompt(`Harvested +${harvest.count} Fresh ${harvest.itemId.replace(/_/g, ' ')} (+25 XP)!`);
+          }
+        } else {
+          soundEngine.playUIClick();
+          this.callbacks.onOpenApartmentStatus?.();
+        }
+        return;
+      } else if (aptInteraction.id === 'aurelionCinema') {
+        apt.aurelion.systems.cinemaOn = !apt.aurelion.systems.cinemaOn;
+        soundEngine.playSwitchClick();
+        this.callbacks.onInteractionPrompt(
+          apt.aurelion.systems.cinemaOn ? 'Floor 6 Private 4K Cinema: SCREENING ACTIVE' : 'Floor 6 Private 4K Cinema: STANDBY'
+        );
+        return;
+      } else if (aptInteraction.id === 'aurelionGym') {
+        soundEngine.playUIClick();
+        this.playerStats.stamina = Math.min(this.playerStats.maxStamina, this.playerStats.stamina + 35);
+        this.addXP(15);
+        this.callbacks.onStatsChange({ ...this.playerStats });
+        this.callbacks.onInteractionPrompt('Completed athletic training set (+35 Stamina, +15 XP).');
+        return;
+      } else if (aptInteraction.id === 'aurelionRefreshment') {
+        soundEngine.playUIClick();
+        this.playerStats.thirst = Math.min(100, this.playerStats.thirst + 25);
+        this.playerStats.stamina = Math.min(this.playerStats.maxStamina, this.playerStats.stamina + 15);
+        this.callbacks.onStatsChange({ ...this.playerStats });
+        this.callbacks.onInteractionPrompt('Enjoyed chilled espresso & fresh fruit tonic (+25 Thirst, +15 Stamina).');
+        return;
+      } else if (aptInteraction.id === 'aurelionWeather') {
+        soundEngine.playUIClick();
+        this.callbacks.onInteractionPrompt(
+          `Crown Met Station: ${this.lastReportedWeather.toUpperCase()} · ${Math.round(this.playerStats.temperature)}°C · Solar Array +${apt.aurelion.systems.solarKw.toFixed(1)} kW`
+        );
+        return;
+      } else if (aptInteraction.id === 'aurelionDocument' && aptInteraction.documentId) {
+        soundEngine.playUIClick();
+        this.callbacks.onOpenAurelionDocument?.(aptInteraction.documentId);
         return;
       }
     }
@@ -3122,17 +3264,279 @@ export class GameEngine {
     this.updateQuestProgress('study_wildlife', 1);
   }
 
+  public getAurelionSnapshot(): AurelionDashboardSnapshot | null {
+    return this.prologueManager?.townMgr?.apartmentBuilding?.getAurelionSnapshot() ?? null;
+  }
+
+  public getAurelionDocument(docId: string): AurelionDocument | undefined {
+    return this.prologueManager?.townMgr?.apartmentBuilding?.aurelion?.getDocumentById(docId);
+  }
+
+  public callAurelionElevatorToFloor(elevatorId: ElevatorId, targetFloor: AurelionLevelId): { ok: boolean; reason?: string } {
+    const apt = this.prologueManager?.townMgr?.apartmentBuilding;
+    if (!apt?.aurelion) return { ok: false, reason: 'Estate systems offline.' };
+    const sys = apt.aurelion.systems;
+    const cfg = AURELION_ELEVATOR_CONFIGS[elevatorId];
+    const st = sys.elevators[elevatorId];
+    const relX = this.player.position.x - apt.origin.x;
+    const relZ = this.player.position.z - apt.origin.z;
+    const nearShaft = Math.hypot(relX - cfg.localX, relZ - cfg.localZ) < 2.8;
+    const cabAtPlayerFloor = Math.abs(this.player.position.y - st.currentY) < 1.8;
+
+    const res = sys.sendElevator(elevatorId, targetFloor);
+    if (!res.accepted) {
+      this.callbacks.onInteractionPrompt(res.reason || 'Elevator unable to move.');
+      return { ok: false, reason: res.reason };
+    }
+
+    if (nearShaft && cabAtPlayerFloor) {
+      this.player.position.set(apt.origin.x + cfg.localX, st.currentY, apt.origin.z + cfg.localZ);
+      this.player.velocity.set(0, 0, 0);
+      this.callbacks.onInteractionPrompt(`${cfg.name}: Riding smoothly to ${targetFloor}...`);
+    } else {
+      this.callbacks.onInteractionPrompt(`${cfg.name}: Dispatched to ${targetFloor}.`);
+    }
+    return { ok: true };
+  }
+
+  public buildNexusLiveContext(): NexusLiveContext {
+    const apt = this.prologueManager?.townMgr?.apartmentBuilding;
+    const trains = this.aiTrainManager?.getDispatchTelemetry?.() || [];
+    const stationSnapshot = this.aiTrainManager?.getStationOperationsSnapshot?.() || null;
+
+    const vehicles = Array.from(this.vehicleManager?.vehicles?.values?.() || []).map((v) => ({
+      id: v.def.id,
+      name: v.def.name,
+      type: v.def.type,
+      fuelType: v.def.fuelType,
+      position: [...v.state.position] as [number, number, number],
+      batteryPercent: Math.round(v.state.batteryPercent),
+      odometerKm: Math.round((v.state.odometerKm || 0) * 10) / 10,
+      isOccupied: !!v.state.isOccupied,
+      isLocked: !!v.state.isLocked,
+      headlightsOn: !!v.state.headlightsOn,
+      gear: v.state.gear || 'P',
+      speedKmh: Math.round(Math.abs(v.currentSpeed) * 3.6),
+    }));
+
+    const npcs: NexusLiveNpcMarker[] = [];
+    if (this.prologueManager?.companionMgr?.companions) {
+      this.prologueManager.companionMgr.companions.forEach((c) => {
+        const mesh = this.prologueManager.companionMgr.companionMeshes.get(c.id);
+        const pos: [number, number, number] = mesh
+          ? [mesh.position.x, mesh.position.y, mesh.position.z]
+          : [...c.position];
+        npcs.push({
+          id: c.id,
+          name: c.name,
+          role: c.role,
+          kind: 'companion',
+          position: pos,
+          health: c.health,
+          maxHealth: c.maxHealth,
+        });
+      });
+    }
+    if (this.npcSettlementManager?.npcs) {
+      for (const n of this.npcSettlementManager.npcs) {
+        npcs.push({
+          id: n.id,
+          name: n.name,
+          role: n.role,
+          kind: 'settlement',
+          position: [...n.position],
+          health: n.health,
+          maxHealth: n.maxHealth,
+        });
+      }
+    }
+    if (this.rescueManager?.getLivingTargets) {
+      for (const r of this.rescueManager.getLivingTargets()) {
+        npcs.push({
+          id: r.id,
+          name: `Survivor ${r.id.slice(-4).toUpperCase()}`,
+          role: 'Field Survivor',
+          kind: 'rescued',
+          position: [...r.position],
+          health: 100,
+          maxHealth: 100,
+        });
+      }
+    }
+    if (apt?.nexus?.staff) {
+      npcs.push(
+        ...apt.nexus.staff.getRadarMarkers({
+          x: apt.origin.x - 48,
+          z: apt.origin.z + 24,
+        })
+      );
+    }
+
+    const activeZombies = (this.zombieMgr?.zombies || [])
+      .filter((z) => z.state !== 'dead')
+      .map((z) => ({
+        id: z.id,
+        type: z.type,
+        position: [...z.position] as [number, number, number],
+        health: Math.round(z.health),
+        isBoss: z.isBoss,
+        state: z.state,
+      }));
+
+    const creatures = this.wildlifeManager?.creatures || [];
+    const territorialWildlifeCount = creatures.filter((c) => c.species.temperament === 'territorial').length;
+
+    let minCx = Infinity;
+    let maxCx = -Infinity;
+    let minCz = Infinity;
+    let maxCz = -Infinity;
+    const disc = this.worldPersistence?.discoveredChunks;
+    if (disc && disc.size > 0) {
+      disc.forEach((key) => {
+        const parts = key.split(',');
+        if (parts.length === 2) {
+          const cx = Number(parts[0]);
+          const cz = Number(parts[1]);
+          if (Number.isFinite(cx) && Number.isFinite(cz)) {
+            if (cx < minCx) minCx = cx;
+            if (cx > maxCx) maxCx = cx;
+            if (cz < minCz) minCz = cz;
+            if (cz > maxCz) maxCz = cz;
+          }
+        }
+      });
+    }
+    const exploredBounds =
+      disc && disc.size > 0 && Number.isFinite(minCx)
+        ? { minCx, maxCx, minCz, maxCz }
+        : null;
+
+    const wx: WeatherTelemetry = this.lastWeatherTelemetry || {
+      weather: this.lastReportedWeather,
+      intensity: this.playerStats.weatherIntensity ?? 0.25,
+      visibilityPercent: this.playerStats.visibilityPercent ?? 100,
+      temperatureDelta: 0,
+      fogDensityMultiplier: this.weatherFogMultiplier,
+      rainCatchmentBonus: 0,
+      isHazardousToxic: this.lastReportedWeather === 'toxic_fog',
+      lightningFlash: 0,
+      overcast: 0,
+      windStrength: 0.7,
+      rainIntensity: 0,
+    };
+
+    return {
+      gameTimeMinutes: this.gameTimeMinutes,
+      dayCount: this.dayCount,
+      isNight: this.isNight,
+      isDusk: this.isDusk,
+      trains,
+      stationSnapshot,
+      compound: {
+        mainGateOpen: !!apt?.compoundGateOpen,
+        westPedOpen: !!apt?.westPedestrianDoorOpen,
+        eastPedOpen: !!apt?.eastPedestrianDoorOpen,
+        vehicleGate1Open: !!apt?.vehicleGateOpen,
+        vehicleGate2Open: !!apt?.vehicleGate2Open,
+        garageShutterOpen: !!apt?.garageShutterOpen,
+        turrets: apt?.turrets?.getTurretsTelemetry() || [],
+        aurelionSnapshot: apt?.getAurelionSnapshot() || null,
+        vehicles,
+      },
+      player: {
+        position: [this.player.position.x, this.player.position.y, this.player.position.z],
+        yaw: this.player.yaw,
+        health: Math.round(this.playerStats.health),
+        maxHealth: Math.round(this.playerStats.maxHealth),
+        infection: Math.round(this.playerStats.infection),
+        radiation: Math.round(this.playerStats.radiationExposure ?? 0),
+        countryName: this.playerStats.countryName,
+        continentOrOcean: this.playerStats.continentOrOcean,
+        nearestCityName: this.playerStats.nearestCityName,
+        latitude: this.playerStats.latitude,
+        longitude: this.playerStats.longitude,
+      },
+      npcs,
+      outbreak: {
+        isLocalOutbreakActive: !!(this.zombieMgr?.isOutbreakActive || this.prologueManager?.outbreakMgr?.isOutbreakActive),
+        globalMetrics: this.globalOutbreakSimulator.getGlobalMetrics(),
+        cities: this.globalOutbreakSimulator.getCityStates(),
+        activeZombies,
+        wildlifeCount: creatures.length,
+        territorialWildlifeCount,
+        weather: wx,
+        supplyDrop: this.worldEventsManager?.getActiveSupplyDrop() ?? null,
+        extraction: this.worldEventsManager?.getExtractionState() ?? {
+          active: false,
+          beaconUid: null,
+          remainingSeconds: 0,
+          totalSeconds: 90,
+          completed: false,
+        },
+        discoveredChunksCount: disc?.size ?? 0,
+        exploredBounds,
+        baseAlarmArmed: !!this.securityManager?.state?.isAlarmArmed,
+        baseResearchUnlockedCount: this.researchManager?.technologies?.filter((t) => t.unlocked).length ?? 0,
+        baseResearchTotalCount: this.researchManager?.technologies?.length ?? 0,
+        baseLevel: this.baseLevel,
+      },
+    };
+  }
+
+  public getNexusSnapshot(): NexusDashboardSnapshot | null {
+    const nexus = this.prologueManager?.townMgr?.apartmentBuilding?.nexus;
+    if (!nexus) return null;
+    return nexus.systems.getSnapshot(this.buildNexusLiveContext());
+  }
+
+  public callNexusElevatorToFloor(
+    elevatorId: NexusElevatorId,
+    targetFloor: NexusFloorNumber
+  ): { ok: boolean; reason?: string } {
+    const apt = this.prologueManager?.townMgr?.apartmentBuilding;
+    if (!apt?.nexus) return { ok: false, reason: 'THE NEXUS systems unavailable.' };
+    const sys = apt.nexus.systems;
+    const cfg = NEXUS_ELEVATORS[elevatorId];
+    const st = sys.elevators[elevatorId];
+    const nexusOriginX = apt.origin.x - 48;
+    const nexusOriginZ = apt.origin.z + 24;
+    const relX = this.player.position.x - nexusOriginX;
+    const relZ = this.player.position.z - nexusOriginZ;
+    const nearShaft = Math.hypot(relX - cfg.localX, relZ - cfg.localZ) < 2.9;
+    const cabAtPlayerFloor = Math.abs(this.player.position.y - st.currentY) < 1.85;
+
+    const res = sys.callElevator(elevatorId, targetFloor);
+    if (!res.accepted) {
+      this.callbacks.onInteractionPrompt(res.reason || 'Elevator unable to move.');
+      return { ok: false, reason: res.reason };
+    }
+
+    if (nearShaft && cabAtPlayerFloor) {
+      this.player.position.set(nexusOriginX + cfg.localX, st.currentY, nexusOriginZ + cfg.localZ);
+      this.player.velocity.set(0, 0, 0);
+      this.callbacks.onInteractionPrompt(`${cfg.name}: Traveling smoothly to Floor ${targetFloor}...`);
+    } else {
+      this.callbacks.onInteractionPrompt(`${cfg.name}: Dispatched to Floor ${targetFloor} (${NEXUS_FLOORS[targetFloor].title}).`);
+    }
+    return { ok: true };
+  }
+
   public handleBedSleepInteraction(): boolean {
     const hour = this.gameTimeMinutes / 60;
     const isActualNight = hour >= 21.0 || hour < 5.0;
 
-    // Bed Mattress world position (-31.5, 0.88, 41.8) strictly on top of mattress
-    const bedMattressPos = new THREE.Vector3(-31.5, 0.88, 41.8);
-    const bedApproachPos = new THREE.Vector3(-29.8, 0.245, 41.8);
+    // Sleep right on the active F2 Master/Guest Suite bed if upstairs, otherwise use F1 Bed Mattress
+    const onUpperSuite = this.player.position.y >= 2.5;
+    const bedMattressPos = onUpperSuite
+      ? new THREE.Vector3(this.player.position.x, this.player.position.y + 0.55, this.player.position.z)
+      : new THREE.Vector3(-31.5, 0.88, 41.8);
+    const bedApproachPos = onUpperSuite
+      ? this.player.position.clone()
+      : new THREE.Vector3(-29.8, 0.245, 41.8);
 
     const started = this.houseInteractionCtrl.startInteraction({
       id: 'bed_sleep',
-      label: 'Double Bed',
+      label: onUpperSuite ? 'Estate Suite Bed' : 'Double Bed',
       targetObjectPos: bedMattressPos,
       targetObjectRotY: 0,
       approachPos: bedApproachPos,
@@ -4249,6 +4653,8 @@ export class GameEngine {
         railwayNPCSaveState: this.aiTrainManager?.npcManager.getSaveState(),
         activeRailwayTicket: this.activeRailwayTicket,
         compoundState: this.prologueManager?.townMgr?.apartmentBuilding?.exportCompoundState(),
+        aurelionState: this.prologueManager?.townMgr?.apartmentBuilding?.exportAurelionState(),
+        nexusState: this.prologueManager?.townMgr?.apartmentBuilding?.exportNexusState(),
       };
     };
 

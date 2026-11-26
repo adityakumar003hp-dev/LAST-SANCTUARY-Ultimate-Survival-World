@@ -1,3 +1,5 @@
+import type { AurelionSaveState } from '../engine/aurelion/AurelionSystems';
+
 export type GameMode = 'survival' | 'creative' | 'story';
 export type Difficulty = 'explorer' | 'standard' | 'survivor';
 export type CameraView = 'first' | 'third' | 'second';
@@ -713,6 +715,8 @@ export interface FullGameSave {
   railwayNPCSaveState?: RailwayNPCSaveRecord[];
   activeRailwayTicket?: RailwayTicket;
   compoundState?: CompoundSecuritySaveData;
+  aurelionState?: AurelionSaveState;
+  nexusState?: import('../engine/nexus/NexusSystems').NexusSaveState;
 }
 
 export type RailwayPassengerClass =

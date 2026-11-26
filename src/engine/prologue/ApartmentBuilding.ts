@@ -5,12 +5,27 @@ import { ApartmentTurrets } from './ApartmentTurrets';
 import type { HostileFactionTurretTarget, TurretSaveRecord } from './ApartmentTurrets';
 import type { CompoundSecuritySaveData } from '../../types/game';
 import { BasementControlRoom } from './BasementControlRoom';
-import { CommandCenterScreens } from './CommandCenterScreens';
+import { NexusCoordinator, type NexusInteractionResult } from '../nexus/NexusCoordinator';
+import { registerNexusStructure2Colliders } from '../nexus/NexusColliders';
+import type { NexusLiveContext, NexusSaveState } from '../nexus/NexusSystems';
+import type { NexusElevatorId, NexusFloorNumber } from '../nexus/NexusConfig';
 import { getTerrainHeight } from '../Terrain';
 import { ZombieManager } from '../ZombieManager';
 import { WildlifeManager } from '../WildlifeManager';
 import { ApartmentObjectBinding } from './ApartmentObjectBinding';
 import { ApartmentObjectAnimator, type ApartmentInteractableOptions, type ApartmentObjectAction } from './ApartmentObjectAnimator';
+import { AurelionCoordinator, type AurelionInteractionResult } from '../aurelion/AurelionCoordinator';
+import {
+  AURELION_F6_INDOOR_POOL,
+  AURELION_LEVEL_ORDER,
+  AURELION_LEVELS,
+  AURELION_ROOFTOP_INFINITY_POOL,
+  AURELION_STAIR_VOID,
+  AurelionLevelId,
+  getLevelForLocalY,
+} from '../aurelion/AurelionConfig';
+import { registerAurelionStructure1Colliders } from '../aurelion/AurelionColliders';
+import type { AurelionDashboardSnapshot, AurelionSaveState, ElevatorId } from '../aurelion/AurelionSystems';
 import {
   getBrickPBR,
   getBrushedMetalPBR,
@@ -43,9 +58,12 @@ export class ApartmentBuilding {
   public state: ApartmentState;
   public turrets: ApartmentTurrets;
   public basementRoom: BasementControlRoom;
-  public commandScreens!: CommandCenterScreens;
+  public nexus!: NexusCoordinator;
+  public aurelion!: AurelionCoordinator;
+  private currentGameTimeMinutes = 480;
+  private currentWeatherType = 'clear';
 
-  // Floor groups for camera-aware cutaways
+  // Floor groups for camera-aware cutaways & object bindings
   public floor1Group: THREE.Group;
   public floor2Group: THREE.Group;
   public floor3Group: THREE.Group;
@@ -75,7 +93,6 @@ export class ApartmentBuilding {
   private compoundPedestrianDoorRight!: THREE.Group;
   public compoundPedestrianDoorsOpen = [false, false];
   public poolWaterMesh!: THREE.Mesh;
-  public backyardPoolWaterMesh!: THREE.Mesh;
   private floorLights: THREE.PointLight[] = [];
   public compoundGateOpen = false;
   public vehicleGateOpen = false;
@@ -84,8 +101,6 @@ export class ApartmentBuilding {
   private vehicleGate2Group!: THREE.Group;
   public garageShutterOpen = true;
   private garageShutterGroup!: THREE.Group;
-  private commandElevatorPlatform: THREE.Mesh | null = null;
-  private commandElevatorFloor = 0;
   private aptElevatorPlatform: THREE.Group | null = null;
   private aptElevatorFloor = 0;
   public patioDoorOpen = true;
@@ -189,9 +204,12 @@ export class ApartmentBuilding {
   };
 
   public readonly poolWaterBounds = {
-    minX: -31.5, maxX: -25.5,
-    minY: 11.2, maxY: 14.0,
-    minZ: 34.5, maxZ: 41.5,
+    minX: -26 + AURELION_ROOFTOP_INFINITY_POOL.localMinX,
+    maxX: -26 + AURELION_ROOFTOP_INFINITY_POOL.localMaxX,
+    minY: AURELION_ROOFTOP_INFINITY_POOL.basinBottomY,
+    maxY: AURELION_ROOFTOP_INFINITY_POOL.deckY + 1.2,
+    minZ: 38 + AURELION_ROOFTOP_INFINITY_POOL.localMinZ,
+    maxZ: 38 + AURELION_ROOFTOP_INFINITY_POOL.localMaxZ,
   };
 
   constructor(parent: THREE.Scene | THREE.Group) {
@@ -304,7 +322,7 @@ export class ApartmentBuilding {
 
     const limestonePBR = getConcretePBR(0xe2ded5);
     const travertinePBR = getSandstonePBR(0xb8ae9c);
-    const darkStonePBR = getStonePBR(0x2a2f36);
+    const darkStonePBR = getStonePBR();
     this.warmLimestoneMat = new THREE.MeshStandardMaterial({
       color: 0xf4f1ea,
       map: limestonePBR.albedo,
@@ -401,51 +419,79 @@ export class ApartmentBuilding {
     this.computerScreenTexture.colorSpace = THREE.SRGBColorSpace;
     this.renderComputerScreenContent();
 
-    this.floor1Group = new THREE.Group();
-    this.floor1Group.name = 'floor_0_luxury_living';
-    this.floor2Group = new THREE.Group();
-    this.floor2Group.name = 'floor_1_private_residence';
-    this.floor3Group = new THREE.Group();
-    this.floor3Group.name = 'floor_2_medical_and_survival';
-    this.floor4Group = new THREE.Group();
-    this.floor4Group.name = 'floor_3_self_sufficiency';
-    this.floor5Group = new THREE.Group();
-    this.floor5Group.name = 'floor_4_rooftop_infinity_recreation';
-    this.basementGroup = new THREE.Group();
-    this.basementGroup.name = 'retained_basement_operations_room';
-    this.exteriorWalls = new THREE.Group();
-    this.exteriorWalls.name = 'exterior_cutaway_facade';
-    this.staircaseGroup = new THREE.Group();
-    this.staircaseGroup.name = 'continuous_staircase';
-
-    this.group.add(
-      this.floor1Group,
-      this.floor2Group,
-      this.floor3Group,
-      this.floor4Group,
-      this.floor5Group,
-      this.basementGroup,
-      this.exteriorWalls,
-      this.staircaseGroup
+    // Instantiate THE AURELION (9-level Mega Estate: B2, B1, F1-F7) strictly inside Structure 1 bounds
+    this.aurelion = new AurelionCoordinator(
+      this.group,
+      {
+        tvScreenMat: this.tvScreenMat,
+        securityScreenTex: this.securityScreenTexture,
+        wallClockTex: this.wallClockTexture,
+        computerScreenTex: this.computerScreenTexture,
+      },
+      this.state.doorOpen,
+      this.patioDoorOpen
     );
+    this.aurelion.rootGroup.name = 'building_1_player_mansion_attached_wings';
+    this.aurelion.rootGroup.userData = {
+      buildingNumber: 1,
+      estateName: 'THE AURELION',
+      style: 'Ultra-Luxury Private Billionaire Mega Estate',
+      basements: 2,
+      aboveGroundFloors: 7,
+      totalLevels: 9,
+      elevators: 3,
+      targetFootprint: [30, 24],
+    };
 
-    // Build building architecture
-    this.buildFloor1();
-    this.buildFloor2();
-    this.buildFloor3();
-    this.buildFloor4Survival();
-    this.buildFloor5Pool();
-    this.buildBasement();
-    this.buildContinuousStaircase();
-    this.buildExteriorFacade();
+    // Map public floor/cutaway/interactive handles onto THE AURELION meshes
+    this.floor1Group = this.aurelion.lower.f1Group;
+    this.floor2Group = this.aurelion.lower.f2Group;
+    this.floor3Group = this.aurelion.upper.f3Group;
+    this.floor4Group = this.aurelion.upper.f4Group;
+    this.floor5Group = this.aurelion.crown.f7Group;
+    this.basementGroup = this.aurelion.basements.b1RingGroup;
+    this.exteriorWalls =
+      (this.aurelion.rootGroup.getObjectByName('the_aurelion_monumental_exterior') as THREE.Group) ||
+      new THREE.Group();
+    this.staircaseGroup =
+      (this.aurelion.rootGroup.getObjectByName('aurelion_continuous_nine_level_staircase') as THREE.Group) ||
+      new THREE.Group();
+
+    this.southWallMesh = this.aurelion.arch.southWallMesh;
+    this.northWallMesh = this.aurelion.arch.northWallMesh;
+    this.eastWallMesh = this.aurelion.arch.eastWallMesh;
+    this.westWallMesh = this.aurelion.arch.westWallMesh;
+    this.frontDoorLeftLeaf = this.aurelion.arch.frontDoorLeftLeaf;
+    this.frontDoorRightLeaf = this.aurelion.arch.frontDoorRightLeaf;
+    this.patioDoorLeftLeaf = this.aurelion.arch.patioDoorLeftLeaf;
+    this.patioDoorRightLeaf = this.aurelion.arch.patioDoorRightLeaf;
+
+    this.poolWaterMesh = this.aurelion.crown.f7PoolWaterMesh;
+    this.fanBlades = this.aurelion.lower.fanBlades;
+    this.acLedMat = this.aurelion.lower.acLedMat;
+    this.tvMesh = this.aurelion.lower.tvScreenMesh;
+    this.securityScreenMesh = this.aurelion.lower.securityScreenMesh;
+    this.computerScreenMesh = this.aurelion.lower.computerScreenMesh;
+
+    this.bathroomDoorGroup = this.aurelion.lower.bathroomDoorGroup;
+    this.bathroomLight = this.aurelion.lower.bathroomLight;
+    this.bathroomTapMesh = this.aurelion.lower.bathroomTapMesh;
+    this.bathroomTapWaterMesh = this.aurelion.lower.bathroomTapWaterMesh;
+    this.bathroomShowerWaterGroup = this.aurelion.lower.bathroomShowerWaterGroup;
+    this.bathroomShowerSteamMesh = this.aurelion.lower.bathroomShowerSteamMesh;
+    this.bathroomCabinetDoor = this.aurelion.lower.bathroomCabinetDoor;
+    this.bathtubWaterMesh = this.aurelion.lower.bathtubWaterMesh;
+    this.toiletWaterMesh = this.aurelion.lower.toiletWaterMesh;
+    this.kitchenStoveBurners = this.aurelion.lower.kitchenStoveBurners;
+    this.kitchenTapWaterMesh = this.aurelion.lower.kitchenTapWaterMesh;
+    this.wardrobeLeftDoor = this.aurelion.lower.wardrobeLeftDoor;
+    this.wardrobeRightDoor = this.aurelion.lower.wardrobeRightDoor;
+    this.bedsideLampLight = this.aurelion.lower.bedsideLampLight;
+
     this.buildEnclosedProperty();
     this.buildIndependentCompoundBuildings();
-    // Security defaults: all compound entrances begin closed.
-    // Access is granted only through the two explicit gate interactions.
 
-    // Physics colliders are registered once by TownLifeManager after the full town is created.
-
-    // Keep the existing security and basement operations systems connected to the expanded building.
+    // Keep the existing security and basement operations systems connected to THE AURELION.
     this.turrets = new ApartmentTurrets(this.group, this.origin);
     this.basementRoom = new BasementControlRoom(this.group, this.origin);
     this.initializeApartmentObjectBindings();
@@ -477,507 +523,13 @@ export class ApartmentBuilding {
     const woodAccent = new THREE.MeshStandardMaterial({ color: 0x6b4c35, roughness: 0.68 });
     const fabricMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85 });
 
-    // =========================================================================
-    // BUILDING 1 EXTENSION: MODERN GLASS LUXURY FORTRESS WINGS (4 FLOORS)
-    // =========================================================================
-    const mansionWings = new THREE.Group();
-    mansionWings.name = 'building_1_player_mansion_attached_wings';
-    mansionWings.userData = {
-      buildingNumber: 1,
-      style: 'Modern Glass Luxury Fortress',
-      floors: 4,
-      rooftopTerrace: true,
-      basement: true,
-      targetFootprint: [30, 24],
-      attachedToExistingMansion: true,
-    };
-    campus.add(mansionWings);
-
-    const creamFabricMat = new THREE.MeshStandardMaterial({ color: 0xe6dfd3, roughness: 0.88 });
-    const charcoalUpholsteryMat = new THREE.MeshStandardMaterial({ color: 0x2c3038, roughness: 0.85 });
-    const brassHardwareMat = new THREE.MeshStandardMaterial({ color: 0xc8a45d, metalness: 0.85, roughness: 0.25 });
-    const porcelainMat = new THREE.MeshStandardMaterial({ color: 0xf8f8f6, roughness: 0.16, metalness: 0.08 });
-    const shelterSteelMat = new THREE.MeshStandardMaterial({ color: 0x373e47, metalness: 0.78, roughness: 0.36 });
-    const lushFoliageMat = new THREE.MeshStandardMaterial({ color: 0x2f7d44, roughness: 0.88 });
-
-    const floorGroups = [this.floor1Group, this.floor2Group, this.floor3Group, this.floor4Group];
-    for (const side of [-1, 1] as const) {
-      const wingCenterX = side * 11.5;
-      const outerX = side * 14.92;
-      const wingShell = new THREE.Group();
-      wingShell.name = side < 0 ? 'mansion_west_wing_shell' : 'mansion_east_wing_shell';
-      mansionWings.add(wingShell);
-
-      // Honed travertine plinth foundation
-      const basePad = new THREE.Mesh(new THREE.BoxGeometry(7.0, 0.25, 24.0), this.travertineStoneMat);
-      basePad.position.set(wingCenterX, 0.12, 0);
-      basePad.receiveShadow = true;
-      wingShell.add(basePad);
-
-      // Architectural travertine & bronze structural piers (full 13m height)
-      for (const z of [-11.85, -6.0, 0, 6.0, 11.85]) {
-        const pier = new THREE.Mesh(new THREE.BoxGeometry(0.42, 13.0, 0.56), this.travertineStoneMat);
-        pier.position.set(outerX, 6.5, z);
-        pier.castShadow = true;
-        pier.receiveShadow = true;
-        const bronzeMullion = new THREE.Mesh(new THREE.BoxGeometry(0.46, 13.0, 0.14), this.charcoalBronzeMat);
-        bronzeMullion.position.set(outerX, 6.5, z);
-        wingShell.add(pier, bronzeMullion);
-      }
-
-      // Per-floor panoramic curtain glass, limestone slab edges & warm architectural lighting
-      for (let fl = 0; fl < 4; fl++) {
-        const fy = fl * 3.2;
-        const fg = floorGroups[fl];
-
-        // Walkable interior slabs (preserve East stairwell opening at X in [12.3, 14.5], Z in [-3.8, +1.8])
-        if (fl > 0) {
-          if (side > 0) {
-            const slabW = new THREE.Mesh(new THREE.BoxGeometry(4.3, 0.22, 23.6), this.warmLimestoneMat);
-            slabW.position.set(10.15, fy + 0.11, 0);
-            slabW.receiveShadow = true;
-            const slabN = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.22, 10.0), this.warmLimestoneMat);
-            slabN.position.set(13.65, fy + 0.11, 6.8);
-            slabN.receiveShadow = true;
-            const slabS = new THREE.Mesh(new THREE.BoxGeometry(2.7, 0.22, 8.0), this.warmLimestoneMat);
-            slabS.position.set(13.65, fy + 0.11, -7.8);
-            slabS.receiveShadow = true;
-            fg.add(slabW, slabN, slabS);
-          } else {
-            const slab = new THREE.Mesh(new THREE.BoxGeometry(6.9, 0.22, 23.6), this.warmLimestoneMat);
-            slab.position.set(wingCenterX, fy + 0.11, 0);
-            slab.receiveShadow = true;
-            fg.add(slab);
-          }
-        }
-
-        // Exterior limestone spandrel + floor-to-ceiling low-E curtain glazing + bronze transom
-        const lowerSpandrel = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.34, 23.8), this.warmLimestoneMat);
-        lowerSpandrel.position.set(outerX, fy + 0.22, 0);
-        const outerGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.58, 23.4), this.curtainGlassMat);
-        outerGlass.position.set(outerX, fy + 1.68, 0);
-        const slabFascia = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.22, 24.1), this.charcoalBronzeMat);
-        slabFascia.position.set(outerX + side * 0.06, fy + 3.1, 0);
-        const warmUnderGlow = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.04, 23.4), this.warmSconceMat);
-        warmUnderGlow.position.set(outerX + side * 0.14, fy + 2.98, 0);
-        wingShell.add(lowerSpandrel, outerGlass, slabFascia, warmUnderGlow);
-
-        // North wing end wall: stone plinth + full-height panoramic glass
-        const northLower = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.42, 0.26), this.travertineStoneMat);
-        northLower.position.set(wingCenterX, fy + 0.21, 11.86);
-        const northGlass = new THREE.Mesh(new THREE.BoxGeometry(6.2, 2.52, 0.06), this.curtainGlassMat);
-        northGlass.position.set(wingCenterX, fy + 1.68, 11.86);
-        const northHeader = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.22, 0.28), this.charcoalBronzeMat);
-        northHeader.position.set(wingCenterX, fy + 3.06, 11.86);
-        wingShell.add(northLower, northGlass, northHeader);
-
-        // South wing front wall (ground floor has double architectural entry; upper floors have curtain glass)
-        if (fl === 0) {
-          for (const dx of [-2.35, 2.35]) {
-            const sStone = new THREE.Mesh(new THREE.BoxGeometry(2.1, 3.1, 0.28), this.travertineStoneMat);
-            sStone.position.set(wingCenterX + dx, fy + 1.55, -11.86);
-            wingShell.add(sStone);
-          }
-          const canopy = new THREE.Mesh(new THREE.BoxGeometry(3.5, 0.16, 1.6), this.charcoalBronzeMat);
-          canopy.position.set(wingCenterX, 3.12, -12.55);
-          const canopyWarmWash = new THREE.Mesh(new THREE.BoxGeometry(3.1, 0.04, 0.08), this.warmSconceMat);
-          canopyWarmWash.position.set(wingCenterX, 3.02, -13.15);
-          const accessPad = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.28, 0.06), brassHardwareMat);
-          accessPad.position.set(wingCenterX + 1.25, 1.35, -12.02);
-          wingShell.add(canopy, canopyWarmWash, accessPad);
-        } else {
-          const southLower = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.42, 0.26), this.travertineStoneMat);
-          southLower.position.set(wingCenterX, fy + 0.21, -11.86);
-          const southGlass = new THREE.Mesh(new THREE.BoxGeometry(6.2, 2.52, 0.06), this.curtainGlassMat);
-          southGlass.position.set(wingCenterX, fy + 1.68, -11.86);
-          const southHeader = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.22, 0.28), this.charcoalBronzeMat);
-          southHeader.position.set(wingCenterX, fy + 3.06, -11.86);
-          wingShell.add(southLower, southGlass, southHeader);
-        }
-
-        // Warm 3000K architectural interior lighting
-        const light = new THREE.PointLight(fl === 2 ? 0xf0f6ff : 0xffe9cc, 1.15, 14, 1.4);
-        light.position.set(wingCenterX, fy + 2.75, 0);
-        this.floorLights.push(light);
-        fg.add(light);
-
-        if (side < 0) {
-          if (fl === 0) {
-            // Ground Floor West Wing: Private Cinema & Travertine Hearth Lounge
-            const lSofaMain = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.72, 1.05), creamFabricMat);
-            lSofaMain.position.set(-12.2, fy + 0.48, 3.8);
-            const lSofaChaise = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.72, 1.8), creamFabricMat);
-            lSofaChaise.position.set(-13.1, fy + 0.48, 2.6);
-            const coffeeTable = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.36, 0.95), this.walnutAccentMat);
-            coffeeTable.position.set(-11.8, fy + 0.30, 1.8);
-            const cinemaWall = new THREE.Mesh(new THREE.BoxGeometry(3.4, 2.2, 0.25), this.travertineStoneMat);
-            cinemaWall.position.set(-12.2, fy + 1.25, 7.6);
-            const cinemaScreen = new THREE.Mesh(
-              new THREE.BoxGeometry(2.4, 1.25, 0.06),
-              new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.18, metalness: 0.5 })
-            );
-            cinemaScreen.position.set(-12.2, fy + 1.48, 7.42);
-            const hearth = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.38, 0.45), this.charcoalBronzeMat);
-            hearth.position.set(-12.2, fy + 0.32, 7.35);
-            const emberGlow = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.1, 0.16), this.warmSconceMat);
-            emberGlow.position.set(-12.2, fy + 0.54, 7.35);
-            const readingChair = new THREE.Mesh(new THREE.BoxGeometry(1.05, 0.75, 1.0), charcoalUpholsteryMat);
-            readingChair.position.set(-12.4, fy + 0.48, -7.0);
-            fg.add(lSofaMain, lSofaChaise, coffeeTable, cinemaWall, cinemaScreen, hearth, emberGlow, readingChair);
-          } else if (fl === 1) {
-            // First Floor West Wing: Master Luxury Spa Bathroom & Dressing Lounge
-            const soakingTub = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.65, 2.1), porcelainMat);
-            soakingTub.position.set(-12.8, fy + 0.45, 5.2);
-            const tubWater = new THREE.Mesh(new THREE.PlaneGeometry(1.05, 1.8), this.waterMat);
-            tubWater.rotation.x = -Math.PI / 2;
-            tubWater.position.set(-12.8, fy + 0.78, 5.2);
-            const doubleVanity = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.85, 0.68), this.walnutAccentMat);
-            doubleVanity.position.set(-11.8, fy + 0.54, -2.5);
-            const marbleTop = new THREE.Mesh(new THREE.BoxGeometry(2.84, 0.06, 0.72), this.travertineStoneMat);
-            marbleTop.position.set(-11.8, fy + 0.99, -2.5);
-            const rainShowerGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.35, 2.1), this.curtainGlassMat);
-            rainShowerGlass.position.set(-12.4, fy + 1.35, -7.2);
-            const dressingOttoman = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.65, 0.44, 16), creamFabricMat);
-            dressingOttoman.position.set(-11.8, fy + 0.34, 1.2);
-            fg.add(soakingTub, tubWater, doubleVanity, marbleTop, rainShowerGlass, dressingOttoman);
-          } else if (fl === 2) {
-            // Second Floor West Wing: Emergency Treatment Room & Trauma Recovery
-            for (const bz of [-6.0, 2.5, 7.2]) {
-              const pod = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.52, 1.02), porcelainMat);
-              pod.position.set(-12.6, fy + 0.4, bz);
-              const mon = new THREE.Mesh(
-                new THREE.BoxGeometry(0.68, 0.48, 0.08),
-                new THREE.MeshBasicMaterial({ color: 0x38bdf8 })
-              );
-              mon.position.set(-13.85, fy + 1.35, bz);
-              const surgLamp = new THREE.Mesh(new THREE.CylinderGeometry(0.45, 0.55, 0.08, 16), this.warmSconceMat);
-              surgLamp.position.set(-12.6, fy + 2.65, bz);
-              fg.add(pod, mon, surgLamp);
-            }
-          } else {
-            // Third Floor West Wing: Vertical Hydroponics & Cold Food Storage
-            for (const gz of [-6.5, -1.5, 3.5, 7.8]) {
-              const rack = new THREE.Mesh(new THREE.BoxGeometry(2.3, 1.85, 1.05), this.charcoalBronzeMat);
-              rack.position.set(-12.4, fy + 1.02, gz);
-              const foliage = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.42, 0.88), lushFoliageMat);
-              foliage.position.set(-12.4, fy + 1.22, gz);
-              const growStrip = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.05, 0.2), this.warmSconceMat);
-              growStrip.position.set(-12.4, fy + 1.9, gz);
-              fg.add(rack, foliage, growStrip);
-            }
-          }
-        } else {
-          if (fl === 0) {
-            // Ground Floor East Wing: Reception Vestibule & Formal Gallery Lounge
-            const desk = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.96, 0.88), this.travertineStoneMat);
-            desk.position.set(10.6, fy + 0.58, -6.5);
-            const walnutTrim = new THREE.Mesh(new THREE.BoxGeometry(2.54, 0.1, 0.92), this.walnutAccentMat);
-            walnutTrim.position.set(10.6, fy + 1.08, -6.5);
-            const lounge = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.68, 1.0), creamFabricMat);
-            lounge.position.set(10.8, fy + 0.45, 5.8);
-            fg.add(desk, walnutTrim, lounge);
-          } else if (fl === 1) {
-            // First Floor East Wing: Private Guest Bedroom Suite
-            const guestBed = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.5, 2.3), this.walnutAccentMat);
-            guestBed.position.set(10.6, fy + 0.38, 6.2);
-            const guestMattress = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.28, 2.1), creamFabricMat);
-            guestMattress.position.set(10.6, fy + 0.68, 6.2);
-            const bench = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.45, 0.65), charcoalUpholsteryMat);
-            bench.position.set(10.6, fy + 0.36, -7.2);
-            fg.add(guestBed, guestMattress, bench);
-          } else if (fl === 2) {
-            // Second Floor East Wing: Secure Reinforced Survival Shelter & Vault
-            for (const az of [-7.5, 5.2, 8.2]) {
-              const shelterLocker = new THREE.Mesh(new THREE.BoxGeometry(1.65, 2.2, 0.95), shelterSteelMat);
-              shelterLocker.position.set(10.4, fy + 1.2, az);
-              const blastSeal = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.8, 0.65), brassHardwareMat);
-              blastSeal.position.set(9.56, fy + 1.2, az);
-              fg.add(shelterLocker, blastSeal);
-            }
-          } else {
-            // Third Floor East Wing: Lithium Inverter Vault & Maintenance Workshop
-            for (const pz of [-7.5, 5.2, 8.2]) {
-              const cabinet = new THREE.Mesh(new THREE.BoxGeometry(1.75, 2.15, 1.05), this.charcoalBronzeMat);
-              cabinet.position.set(10.4, fy + 1.18, pz);
-              const statusBar = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.1, 0.08), this.warmSconceMat);
-              statusBar.position.set(9.5, fy + 1.35, pz);
-              fg.add(cabinet, statusBar);
-            }
-          }
-        }
-      }
-
-      // Wing Rooftop Lounge Terrace (y = 12.92) with travertine deck & frameless glass parapet
-      const wingRoof = new THREE.Mesh(new THREE.BoxGeometry(7.2, 0.28, 24.2), this.travertineStoneMat);
-      wingRoof.position.set(wingCenterX, 12.92, 0);
-      wingRoof.receiveShadow = true;
-      const wingRail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.08, 24.0), this.curtainGlassMat);
-      wingRail.position.set(outerX, 13.56, 0);
-      const wingCap = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.06, 24.1), this.charcoalBronzeMat);
-      wingCap.position.set(outerX, 14.12, 0);
-      wingShell.add(wingRoof, wingRail, wingCap);
-    }
-
-    // East Wing Architectural Steel & Walnut Staircase (X = 13.4, Z: -3.5 -> +1.5)
-    const eastWingStairs = new THREE.Group();
-    eastWingStairs.name = 'east_wing_four_floor_staircase';
-    for (let fl = 0; fl < 3; fl++) {
-      const baseH = fl * 3.2;
-      for (let s = 0; s < 14; s++) {
-        const tread = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.14, 0.42), this.walnutAccentMat);
-        tread.position.set(13.4, baseH + (s + 1) * (3.2 / 14), -3.5 + ((s + 0.5) / 14) * 5.0);
-        tread.castShadow = true;
-        eastWingStairs.add(tread);
-      }
-    }
-    mansionWings.add(eastWingStairs);
+    // Building 1 is constructed by THE AURELION coordinator above. Building 2 & Building 3 remain preserved below.
 
     // =========================================================================
-    // BUILDING 2: NEO-TACTICAL 8-FLOOR RAILWAY COMMAND CENTER (25 LIVE SCREENS)
+    // BUILDING 2: THE NEXUS — 8-FLOOR GRAND RAILWAY INTELLIGENCE HEADQUARTERS
     // Positioned cleanly in NW quadrant at local (-48, 0, +24) -> World (-74, 0, +62)
     // =========================================================================
-    const command = new THREE.Group();
-    command.name = 'building_2_independent_railway_command_centre';
-    command.position.set(-48, 0, 24);
-    command.userData = {
-      buildingNumber: 2,
-      style: 'Option A Neo-Tactical Glass & Graphite',
-      floors: 8,
-      screenCount: 25,
-      basement: true,
-      roofHelipadDeck: true,
-      targetFootprint: [22, 18],
-      dispatchesExistingTrains: 6,
-    };
-    campus.add(command);
-
-    const cmdBase = new THREE.Mesh(new THREE.BoxGeometry(22.8, 0.55, 18.8), graphite);
-    cmdBase.position.y = 0.28;
-    command.add(cmdBase);
-
-    const wallT = 0.32;
-    const floorH = 3.45;
-    for (let f = 0; f < 8; f++) {
-      const floorY = 0.65 + f * floorH;
-      const slab = new THREE.Mesh(new THREE.BoxGeometry(22.4, 0.22, 18.4), graphite);
-      slab.position.y = floorY;
-      slab.receiveShadow = true;
-      command.add(slab);
-
-      // Exterior Cyan Floor Perimeter Strip
-      const ledStripS = new THREE.Mesh(new THREE.BoxGeometry(22.5, 0.07, 0.08), cyan);
-      ledStripS.position.set(0, floorY + 3.28, -9.05);
-      const ledStripW = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.07, 18.5), cyan);
-      ledStripW.position.set(-11.1, floorY + 3.28, 0);
-      const ledStripE = ledStripW.clone();
-      ledStripE.position.x = 11.1;
-      command.add(ledStripS, ledStripW, ledStripE);
-
-      // East & West Curtain Walls
-      for (const side of [-1, 1]) {
-        const x = side * 10.92;
-        const lower = new THREE.Mesh(new THREE.BoxGeometry(wallT, 0.65, 18), slate);
-        lower.position.set(x, floorY + 0.42, 0);
-        const upper = new THREE.Mesh(new THREE.BoxGeometry(wallT, 0.52, 18), graphite);
-        upper.position.set(x, floorY + 3.12, 0);
-        const glazing = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.0, 15.8), glass);
-        glazing.position.set(x, floorY + 1.82, 0);
-        command.add(lower, upper, glazing);
-        for (const z of [-8.65, 0, 8.65]) {
-          const pier = new THREE.Mesh(new THREE.BoxGeometry(0.46, 3.3, 0.68), graphite);
-          pier.position.set(x, floorY + 1.7, z);
-          pier.castShadow = true;
-          command.add(pier);
-        }
-      }
-
-      // North Solid Video-Wall Structural Backing
-      const backWall = new THREE.Mesh(new THREE.BoxGeometry(22, 3.28, wallT), slate);
-      backWall.position.set(0, floorY + 1.72, 8.82);
-      command.add(backWall);
-
-      // South Front Wall (Ground floor has wide open entrance, upper floors have panoramic glass)
-      if (f === 0) {
-        for (const x of [-6.6, 6.6]) {
-          const front = new THREE.Mesh(new THREE.BoxGeometry(8.8, 3.28, wallT), slate);
-          front.position.set(x, floorY + 1.72, -8.82);
-          command.add(front);
-        }
-        const header = new THREE.Mesh(new THREE.BoxGeometry(4.6, 0.58, wallT), graphite);
-        header.position.set(0, floorY + 3.04, -8.82);
-        const entryCanopy = new THREE.Mesh(new THREE.BoxGeometry(5.8, 0.2, 2.2), graphite);
-        entryCanopy.position.set(0, floorY + 3.2, -10.0);
-        const canopyLed = new THREE.Mesh(new THREE.BoxGeometry(5.8, 0.08, 0.08), cyan);
-        canopyLed.position.set(0, floorY + 3.2, -11.1);
-        command.add(header, entryCanopy, canopyLed);
-      } else {
-        const frontLower = new THREE.Mesh(new THREE.BoxGeometry(22, 0.72, wallT), slate);
-        frontLower.position.set(0, floorY + 0.45, -8.82);
-        const frontUpper = new THREE.Mesh(new THREE.BoxGeometry(22, 0.52, wallT), graphite);
-        frontUpper.position.set(0, floorY + 3.12, -8.82);
-        const glazing = new THREE.Mesh(new THREE.BoxGeometry(19.6, 1.98, 0.1), glass);
-        glazing.position.set(0, floorY + 1.82, -8.82);
-        command.add(frontLower, frontUpper, glazing);
-      }
-
-      // Interior Floor Lighting + Elevator Call Panel
-      const flLight = new THREE.PointLight(f === 2 ? 0x67e8f9 : 0xe0f2fe, 1.25, 22, 1.3);
-      flLight.position.set(-1.0, floorY + 2.75, 0);
-      command.add(flLight);
-
-      const callPanel = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.78, 0.1), cyan);
-      callPanel.name = `command_elevator_call_panel_f${f + 1}`;
-      callPanel.position.set(-5.8, floorY + 1.25, -1.2);
-      command.add(callPanel);
-
-      // Floor-specific furnishings & operator consoles
-      if (f === 0) {
-        const reception = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.95, 0.95), graphite);
-        reception.position.set(-0.8, floorY + 0.58, 2.25);
-        command.add(reception);
-      } else if (f <= 2) {
-        for (const dx of [-4.0, -0.8, 2.4]) {
-          if (f === 2 && dx > 0) continue;
-          const desk = new THREE.Mesh(new THREE.BoxGeometry(2.35, 0.85, 0.9), graphite);
-          desk.position.set(dx, floorY + 0.52, 2.25);
-          command.add(desk);
-        }
-      } else if (f <= 5) {
-        const desk = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.85, 0.95), graphite);
-        desk.position.set(-0.8, floorY + 0.52, 2.25);
-        command.add(desk);
-        for (const rx of [-7.5, -5.5]) {
-          const rack = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.3, 0.9), graphite);
-          rack.position.set(rx, floorY + 1.25, 5.2);
-          command.add(rack);
-        }
-      } else if (f === 6) {
-        // Floor 7: Command Briefing Holo-Table & Officer Bunks
-        const holoTable = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.88, 2.0), graphite);
-        holoTable.position.set(-2.0, floorY + 0.54, 1.5);
-        const holoPlate = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.08, 1.5), cyan);
-        holoPlate.position.set(-2.0, floorY + 1.0, 1.5);
-        const bunk1 = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.55, 1.05), slate);
-        bunk1.position.set(-7.6, floorY + 0.42, 4.8);
-        command.add(holoTable, holoPlate, bunk1);
-      } else if (f === 7) {
-        // Floor 8: Executive Observatory Desk & Central Server Racks
-        const execDesk = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.88, 1.1), graphite);
-        execDesk.position.set(-2.0, floorY + 0.54, 1.5);
-        for (let sr = 0; sr < 4; sr++) {
-          const srv = new THREE.Mesh(new THREE.BoxGeometry(1.0, 2.4, 0.9), graphite);
-          srv.position.set(-7.8 + sr * 1.4, floorY + 1.3, 5.8);
-          command.add(srv);
-        }
-        command.add(execDesk);
-      }
-    }
-
-    // Roof Deck (y = 0.65 + 8 * 3.45 = 28.25) with East stairwell hatch cutout (X in [6.2, 9.2], Z in [-5.4, +6.2])
-    const roofY = 0.65 + 8 * floorH;
-    const roofWest = new THREE.Mesh(new THREE.BoxGeometry(17.4, 0.38, 18.7), graphite);
-    roofWest.position.set(-2.65, roofY, 0);
-    const roofEastFar = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.38, 18.7), graphite);
-    roofEastFar.position.set(10.3, roofY, 0);
-    const roofStairN = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.38, 3.15), graphite);
-    roofStairN.position.set(7.65, roofY, 7.78);
-    const roofStairS = new THREE.Mesh(new THREE.BoxGeometry(3.2, 0.38, 3.95), graphite);
-    roofStairS.position.set(7.65, roofY, -7.38);
-    command.add(roofWest, roofEastFar, roofStairN, roofStairS);
-
-    // Rooftop Helipad + Glass Safety Railings + Comms Spires
-    const helipad = new THREE.Mesh(new THREE.CylinderGeometry(4.6, 4.8, 0.14, 32), slate);
-    helipad.position.set(-2.2, roofY + 0.25, 0);
-    const heliRing = new THREE.Mesh(new THREE.RingGeometry(3.6, 4.0, 32), amber);
-    heliRing.rotation.x = -Math.PI / 2;
-    heliRing.position.set(-2.2, roofY + 0.33, 0);
-    const heliHBar1 = new THREE.Mesh(new THREE.BoxGeometry(0.45, 0.04, 2.8), amber);
-    heliHBar1.position.set(-3.1, roofY + 0.33, 0);
-    const heliHBar2 = heliHBar1.clone();
-    heliHBar2.position.x = -1.3;
-    const heliHCross = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.04, 0.45), amber);
-    heliHCross.position.set(-2.2, roofY + 0.33, 0);
-    command.add(helipad, heliRing, heliHBar1, heliHBar2, heliHCross);
-
-    for (const [rx, rz, rw, rd] of [
-      [0, -9.15, 22.4, 0.1],
-      [0, 9.15, 22.4, 0.1],
-      [-11.15, 0, 0.1, 18.4],
-      [11.15, 0, 0.1, 18.4],
-    ] as const) {
-      const rail = new THREE.Mesh(new THREE.BoxGeometry(rw, 1.05, rd), glass);
-      rail.position.set(rx, roofY + 0.72, rz);
-      command.add(rail);
-    }
-    for (let i = 0; i < 3; i++) {
-      const ant = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.14, 4.2, 8), graphite);
-      ant.position.set(-7.5 + i * 3.8, roofY + 2.2, 7.2);
-      const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 8), cyan);
-      beacon.position.set(-7.5 + i * 3.8, roofY + 4.35, 7.2);
-      command.add(ant, beacon);
-    }
-
-    // 8-Stop High-Speed Glass Elevator Shaft on West (-7.2, -1.2)
-    const basementWell = new THREE.Mesh(new THREE.BoxGeometry(18, 2.6, 14), graphite);
-    basementWell.position.set(0, -1.35, 0);
-    command.add(basementWell);
-    const liftShaft = new THREE.Group();
-    liftShaft.name = 'railway_command_elevator_shaft';
-    liftShaft.position.set(-7.2, 0, -1.2);
-    command.add(liftShaft);
-    for (const [x, z] of [[-1.05, -1.05], [1.05, -1.05], [-1.05, 1.05], [1.05, 1.05]] as const) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.12, 27.6, 0.12), graphite);
-      post.position.set(x, 14.0, z);
-      liftShaft.add(post);
-    }
-    const liftPlatform = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.18, 1.9), cyan);
-    liftPlatform.name = 'command_elevator_platform';
-    liftPlatform.position.y = 0.78;
-    liftShaft.add(liftPlatform);
-    this.commandElevatorPlatform = liftPlatform;
-    liftShaft.userData = { stops: [0, 1, 2, 3, 4, 5, 6, 7], platform: liftPlatform.name, requiresPlayerInteraction: true };
-
-    // Continuous 8-Floor Staircase on East (X = 7.65, connecting F1..F8 + Roof Deck)
-    const stairGroup = new THREE.Group();
-    stairGroup.name = 'railway_command_eight_floor_staircase';
-    command.add(stairGroup);
-    for (let floor = 0; floor < 8; floor++) {
-      const baseY = 0.76 + floor * floorH;
-      for (let step = 0; step < 16; step++) {
-        const tread = new THREE.Mesh(new THREE.BoxGeometry(2.5, 0.16, 0.56), graphite);
-        tread.position.set(7.65, baseY + (step + 1) * (floorH / 16), -5.0 + step * 0.62);
-        tread.castShadow = true;
-        stairGroup.add(tread);
-      }
-      const landing = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.18, 2.2), graphite);
-      landing.position.set(7.65, baseY + floorH, 5.15);
-      stairGroup.add(landing);
-    }
-
-    // 25 Live Interactive Telemetry Screens distributed across all 8 floors
-    this.commandScreens = new CommandCenterScreens(command);
-    command.userData.dispatchDisplays = ['25_live_screens', 'six_train_telemetry', 'network_map', '5km_radar', 'alerts'];
-    command.userData.controlsConnectedTo = 'AITrainManager';
-    command.userData.explorableRooms = [
-      'f1_grand_dispatch_lobby',
-      'f2_train_dispatch_hall',
-      'f3_security_surveillance',
-      'f4_signal_interlocking',
-      'f5_communications_center',
-      'f6_traction_engineering',
-      'f7_briefing_quarters',
-      'f8_executive_observatory',
-      'roof_helipad_deck',
-    ];
-    command.userData.navigation = { stairs: true, elevator: true, floors: 8 };
-
-    const doorFrameLeft = new THREE.Mesh(new THREE.BoxGeometry(0.24, 3.1, 0.36), graphite);
-    doorFrameLeft.position.set(-2.25, 1.55, -8.82);
-    const doorFrameRight = doorFrameLeft.clone();
-    doorFrameRight.position.x = 2.25;
-    const doorHeader = new THREE.Mesh(new THREE.BoxGeometry(4.7, 0.24, 0.36), graphite);
-    doorHeader.position.set(0, 3.1, -8.82);
-    command.add(doorFrameLeft, doorFrameRight, doorHeader);
+    this.nexus = new NexusCoordinator(campus);
 
     // =========================================================================
     // BUILDING 3: OPTION A 3-LEVEL VERTICAL SECURITY GARAGE (4 BAY VEHICLES)
@@ -1154,1900 +706,7 @@ export class ApartmentBuilding {
     ];
   }
 
-  // ==========================================
-  // FLOOR SLAB WITH STAIR OPENING HELPER
-  // ==========================================
-  private createSlabWithStairwell(mat: THREE.Material, thickness: number, yPos: number): THREE.Group {
-    const g = new THREE.Group();
-    // West main section: X = -8.0 to +2.6 (width 10.6, depth 14, center X = -2.7)
-    const westSlab = new THREE.Mesh(new THREE.BoxGeometry(10.6, thickness, 14), mat);
-    westSlab.position.set(-2.7, yPos, 0);
-    westSlab.receiveShadow = true;
 
-    // Elevator corridor strip North of shaft: X = 2.6 to 4.5, Z = -4.4 to +7.0
-    const elevNorth = new THREE.Mesh(new THREE.BoxGeometry(1.9, thickness, 11.4), mat);
-    elevNorth.position.set(3.55, yPos, 1.3);
-    elevNorth.receiveShadow = true;
-
-    // Elevator corridor strip South of shaft: X = 2.6 to 4.5, Z = -7.0 to -6.4
-    const elevSouth = new THREE.Mesh(new THREE.BoxGeometry(1.9, thickness, 0.6), mat);
-    elevSouth.position.set(3.55, yPos, -6.7);
-    elevSouth.receiveShadow = true;
-
-    // East North section: covers X = 4.5 to 8.0, Z = 2.0 to 7.0
-    const eastNorth = new THREE.Mesh(new THREE.BoxGeometry(3.5, thickness, 5.0), mat);
-    eastNorth.position.set(6.25, yPos, 4.5);
-    eastNorth.receiveShadow = true;
-
-    // East South section: covers X = 4.5 to 8.0, Z = -7.0 to -4.5
-    const eastSouth = new THREE.Mesh(new THREE.BoxGeometry(3.5, thickness, 2.5), mat);
-    eastSouth.position.set(6.25, yPos, -5.75);
-    eastSouth.receiveShadow = true;
-
-    g.add(westSlab, elevNorth, elevSouth, eastNorth, eastSouth);
-    return g;
-  }
-
-  // ==========================================
-  // GROUND FLOOR (LEVEL 0): LUXURY LIVING & GRAND LOBBY
-  // ==========================================
-  private buildFloor1() {
-    const f1 = this.floor1Group;
-    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc8a45d, metalness: 0.85, roughness: 0.25 });
-    const boucleMat = new THREE.MeshStandardMaterial({ color: 0xe8e2d7, roughness: 0.9 });
-    const slateUpholsteryMat = new THREE.MeshStandardMaterial({ color: 0x2b303a, roughness: 0.85 });
-    const marbleIslandMat = new THREE.MeshStandardMaterial({ color: 0xf4f1eb, roughness: 0.22, metalness: 0.08 });
-
-    // Ground Floor Honed Travertine Base + Walnut Living/Bedroom Inlay
-    const floorSlab = new THREE.Mesh(new THREE.BoxGeometry(16, 0.25, 14), this.travertineStoneMat);
-    floorSlab.position.set(0, 0.12, 0);
-    floorSlab.receiveShadow = true;
-    const walnutInlay = new THREE.Mesh(new THREE.BoxGeometry(10.0, 0.02, 9.6), this.walnutAccentMat);
-    walnutInlay.position.set(-2.6, 0.25, 1.8);
-    walnutInlay.receiveShadow = true;
-    f1.add(floorSlab, walnutInlay);
-
-    // Ceiling with stairwell cutout + Elevator shaft opening at X in [2.6, 4.6], Z in [-6.4, -4.4]
-    const ceiling = this.createSlabWithStairwell(this.warmLimestoneMat, 0.2, 3.1);
-    f1.add(ceiling);
-
-    // Architectural Dividing Walls (Limestone + Walnut Acoustic Slats)
-    const bedDivider = new THREE.Mesh(new THREE.BoxGeometry(0.24, 2.9, 7.5), this.warmLimestoneMat);
-    bedDivider.position.set(-2.5, 1.6, 2.8);
-    const kitchenDivider = new THREE.Mesh(new THREE.BoxGeometry(0.24, 2.9, 5.0), this.warmLimestoneMat);
-    kitchenDivider.position.set(2.5, 1.6, 4.0);
-    for (let s = 0; s < 5; s++) {
-      const slat = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.7, 0.14), this.walnutAccentMat);
-      slat.position.set(-2.36, 1.55, 0.5 + s * 0.45);
-      f1.add(slat);
-    }
-    f1.add(bedDivider, kitchenDivider);
-
-    // Warm 3000K Architectural Ceiling & Chandelier Lighting
-    const lamp1 = new THREE.PointLight(0xffe6c4, 1.8, 14, 1.3);
-    lamp1.position.set(-4.5, 2.75, 2.5);
-    const lamp2 = new THREE.PointLight(0xffe9cc, 2.1, 16, 1.3);
-    lamp2.position.set(0, 2.75, -0.5);
-    const lobbyLight = new THREE.PointLight(0xffebd2, 1.4, 12, 1.4);
-    lobbyLight.position.set(2.2, 2.75, -4.6);
-    this.floorLights.push(lamp1, lamp2, lobbyLight);
-    f1.add(lamp1, lamp2, lobbyLight);
-
-    // Sculptural Brass Ring Chandelier over Living Salon
-    const chandelier = new THREE.Mesh(new THREE.TorusGeometry(0.75, 0.035, 10, 32), brassMat);
-    chandelier.rotation.x = Math.PI / 2;
-    chandelier.position.set(0, 2.68, -0.4);
-    const chGlow = new THREE.Mesh(new THREE.TorusGeometry(0.73, 0.02, 8, 32), this.warmSconceMat);
-    chGlow.rotation.x = Math.PI / 2;
-    chGlow.position.set(0, 2.65, -0.4);
-    f1.add(chandelier, chGlow);
-
-    // --- 1. GROUND FLOOR GUEST BEDROOM SUITE ---
-    const bedFrame = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.5, 2.8), this.walnutAccentMat);
-    bedFrame.position.set(-5.5, 0.35, 3.8);
-    bedFrame.castShadow = true;
-    bedFrame.receiveShadow = true;
-
-    const headboard = new THREE.Mesh(new THREE.BoxGeometry(2.6, 1.55, 0.18), this.walnutAccentMat);
-    headboard.position.set(-5.5, 0.96, 5.18);
-    headboard.castShadow = true;
-    headboard.receiveShadow = true;
-    const headboardPad = new THREE.Mesh(new THREE.BoxGeometry(2.35, 1.05, 0.08), boucleMat);
-    headboardPad.position.set(-5.5, 0.98, 5.06);
-
-    const mattress = new THREE.Mesh(
-      new THREE.BoxGeometry(2.2, 0.35, 2.5),
-      new THREE.MeshStandardMaterial({ color: 0xfbfaf7, roughness: 0.92 })
-    );
-    mattress.position.set(-5.5, 0.65, 3.8);
-    mattress.castShadow = true;
-    mattress.receiveShadow = true;
-
-    const blanket = new THREE.Mesh(
-      new THREE.BoxGeometry(2.22, 0.38, 1.7),
-      slateUpholsteryMat
-    );
-    blanket.position.set(-5.5, 0.66, 3.3);
-    blanket.castShadow = true;
-
-    const pillow1 = new THREE.Mesh(
-      new THREE.BoxGeometry(0.85, 0.16, 0.55),
-      new THREE.MeshStandardMaterial({ color: 0xf5f4f0, roughness: 0.95 })
-    );
-    pillow1.position.set(-6.1, 0.85, 4.6);
-    pillow1.castShadow = true;
-    const pillow2 = pillow1.clone();
-    pillow2.position.x = -4.9;
-
-    // Nightstand & Bedside Warm Brass Lamp
-    const nightstand = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.65, 0.72), this.walnutAccentMat);
-    nightstand.position.set(-7.2, 0.45, 4.8);
-    nightstand.castShadow = true;
-    nightstand.receiveShadow = true;
-
-    const lampBase = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.14, 0.08, 12), brassMat);
-    lampBase.position.set(-7.2, 0.81, 4.8);
-    const lampStem = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 0.35, 8), brassMat);
-    lampStem.position.set(-7.2, 1.0, 4.8);
-    const lampShade = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.12, 0.22, 0.28, 14),
-      new THREE.MeshStandardMaterial({ color: 0xfff1dc, roughness: 0.6, transparent: true, opacity: 0.92 })
-    );
-    lampShade.position.set(-7.2, 1.15, 4.8);
-    this.bedsideLampLight = new THREE.PointLight(0xffecd0, 1.4, 6.0, 1.5);
-    this.bedsideLampLight.position.set(-7.2, 1.15, 4.8);
-
-    // Walnut Wardrobe at (-7.2, 1.4) with double hinged doors
-    const wardrobeGroup = new THREE.Group();
-    wardrobeGroup.position.set(-7.2, 0, 1.4);
-    const wardrobeBody = new THREE.Mesh(new THREE.BoxGeometry(0.85, 2.3, 1.6), this.walnutAccentMat);
-    wardrobeBody.position.set(0, 1.25, 0);
-    wardrobeBody.castShadow = true;
-    wardrobeBody.receiveShadow = true;
-    wardrobeGroup.add(wardrobeBody);
-
-    this.wardrobeLeftDoor = new THREE.Group();
-    this.wardrobeLeftDoor.position.set(0.43, 1.25, -0.76);
-    const wDoorL = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.22, 0.76), this.walnutAccentMat);
-    wDoorL.position.set(0, 0, 0.38);
-    const wHandleL = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.22, 8), brassMat);
-    wHandleL.position.set(0.04, 0, 0.7);
-    this.wardrobeLeftDoor.add(wDoorL, wHandleL);
-
-    this.wardrobeRightDoor = new THREE.Group();
-    this.wardrobeRightDoor.position.set(0.43, 1.25, 0.76);
-    const wDoorR = new THREE.Mesh(new THREE.BoxGeometry(0.05, 2.22, 0.76), this.walnutAccentMat);
-    wDoorR.position.set(0, 0, -0.38);
-    const wHandleR = new THREE.Mesh(new THREE.CylinderGeometry(0.015, 0.015, 0.22, 8), brassMat);
-    wHandleR.position.set(0.04, 0, -0.7);
-    this.wardrobeRightDoor.add(wDoorR, wHandleR);
-    wardrobeGroup.add(this.wardrobeLeftDoor, this.wardrobeRightDoor);
-
-    // Study & Personal Computer Desk at (-3.5, 0.6)
-    const deskGroup = new THREE.Group();
-    deskGroup.position.set(-3.5, 0, 0.6);
-    const deskTop = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.06, 0.85), this.walnutAccentMat);
-    deskTop.position.set(0, 0.75, 0);
-    deskTop.castShadow = true;
-    const deskLeg1 = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.72, 0.06), this.charcoalBronzeMat);
-    deskLeg1.position.set(-0.72, 0.36, -0.36);
-    const deskLeg2 = deskLeg1.clone(); deskLeg2.position.set(0.72, 0.36, -0.36);
-    const deskLeg3 = deskLeg1.clone(); deskLeg3.position.set(-0.72, 0.36, 0.36);
-    const deskLeg4 = deskLeg1.clone(); deskLeg4.position.set(0.72, 0.36, 0.36);
-
-    const monitorStand = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.12, 0.25, 10), this.charcoalBronzeMat);
-    monitorStand.position.set(0, 0.9, 0.25);
-    const monitorFrame = new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.62, 0.05), this.charcoalBronzeMat);
-    monitorFrame.position.set(0, 1.25, 0.25);
-    this.computerScreenMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.96, 0.58),
-      new THREE.MeshBasicMaterial({ map: this.computerScreenTexture })
-    );
-    this.computerScreenMesh.rotation.y = Math.PI;
-    this.computerScreenMesh.position.set(0, 1.25, 0.22);
-
-    const deskKb = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.02, 0.16), this.charcoalBronzeMat);
-    deskKb.position.set(0, 0.79, -0.05);
-    const deskMouse = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.025, 0.12), this.charcoalBronzeMat);
-    deskMouse.position.set(0.35, 0.79, -0.05);
-
-    const chairSeat = new THREE.Mesh(new THREE.BoxGeometry(0.52, 0.08, 0.52), slateUpholsteryMat);
-    chairSeat.position.set(0, 0.48, -0.42);
-    chairSeat.castShadow = true;
-    const chairBack = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.55, 0.06), slateUpholsteryMat);
-    chairBack.position.set(0, 0.78, -0.66);
-    const chairStem = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.44, 8), this.charcoalBronzeMat);
-    chairStem.position.set(0, 0.22, -0.42);
-    deskGroup.add(deskTop, deskLeg1, deskLeg2, deskLeg3, deskLeg4, monitorStand, monitorFrame, this.computerScreenMesh, deskKb, deskMouse, chairSeat, chairBack, chairStem);
-
-    f1.add(bedFrame, headboard, headboardPad, mattress, blanket, pillow1, pillow2, nightstand, lampBase, lampStem, lampShade, this.bedsideLampLight, wardrobeGroup, deskGroup);
-
-    // --- 2. WORKING TELEVISION WITH BROADCAST SCREEN ---
-    const tvStand = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.65, 0.6), this.walnutAccentMat);
-    tvStand.position.set(-5.5, 0.45, 0.0);
-    tvStand.castShadow = true;
-    tvStand.receiveShadow = true;
-
-    const tvFrame = new THREE.Mesh(new THREE.BoxGeometry(2.0, 1.25, 0.1), this.charcoalBronzeMat);
-    tvFrame.position.set(-5.5, 1.55, 0.0);
-    tvFrame.rotation.x = -0.06;
-
-    this.tvMesh = new THREE.Mesh(new THREE.PlaneGeometry(1.9, 1.15), this.tvScreenMat);
-    this.tvMesh.rotation.y = 0;
-    this.tvMesh.rotation.x = -0.06;
-    this.tvMesh.position.set(-5.5, 1.55, 0.06);
-    f1.add(tvStand, tvFrame, this.tvMesh);
-
-    // --- 2B. GRAND LOBBY BIOMETRIC ACCESS CONTROL, SECURITY CAMERA & PANORAMIC GLASS ELEVATOR ---
-    // Biometric Access Control Wall Console beside front double doors
-    const accessPillar = new THREE.Mesh(new THREE.BoxGeometry(0.42, 2.8, 0.28), this.travertineStoneMat);
-    accessPillar.position.set(1.65, 1.52, -6.35);
-    const biometricPad = new THREE.Mesh(
-      new THREE.BoxGeometry(0.24, 0.38, 0.06),
-      new THREE.MeshStandardMaterial({ color: 0x111827, metalness: 0.75, roughness: 0.3 })
-    );
-    biometricPad.position.set(1.65, 1.38, -6.18);
-    const biometricLed = new THREE.Mesh(
-      new THREE.BoxGeometry(0.14, 0.04, 0.02),
-      new THREE.MeshBasicMaterial({ color: 0x10b981 })
-    );
-    biometricLed.position.set(1.65, 1.5, -6.14);
-    // Discreet Interior Lobby Ceiling Security Dome Camera
-    const camMount = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.16, 0.08, 16), this.charcoalBronzeMat);
-    camMount.position.set(-1.8, 2.94, -5.8);
-    const camDome = new THREE.Mesh(
-      new THREE.SphereGeometry(0.11, 12, 10),
-      new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.15, metalness: 0.6 })
-    );
-    camDome.position.set(-1.8, 2.88, -5.8);
-    // Sculptural Lobby Console Table
-    const lobbyConsole = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.86, 0.52), this.travertineStoneMat);
-    lobbyConsole.position.set(-0.2, 0.55, -4.6);
-    lobbyConsole.castShadow = true;
-    const lobbyVase = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.1, 0.42, 14), brassMat);
-    lobbyVase.position.set(-0.2, 1.19, -4.6);
-    f1.add(accessPillar, biometricPad, biometricLed, camMount, camDome, lobbyConsole, lobbyVase);
-
-    // Panoramic Glass Residential Elevator Shaft (X = 3.6, Z = -5.4, spanning Ground -> Rooftop)
-    const aptLiftShaft = new THREE.Group();
-    aptLiftShaft.name = 'apartment_panoramic_glass_elevator_shaft';
-    aptLiftShaft.position.set(3.6, 0, -5.4);
-    for (const [px, pz] of [[-0.92, -0.92], [0.92, -0.92], [-0.92, 0.92], [0.92, 0.92]] as const) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.1, 13.8, 0.1), this.charcoalBronzeMat);
-      post.position.set(px, 7.0, pz);
-      aptLiftShaft.add(post);
-    }
-    const shaftGlassBack = new THREE.Mesh(new THREE.BoxGeometry(1.8, 13.4, 0.05), this.curtainGlassMat);
-    shaftGlassBack.position.set(0, 6.8, -0.92);
-    const shaftGlassSide = new THREE.Mesh(new THREE.BoxGeometry(0.05, 13.4, 1.8), this.curtainGlassMat);
-    shaftGlassSide.position.set(0.92, 6.8, 0);
-    aptLiftShaft.add(shaftGlassBack, shaftGlassSide);
-
-    const aptCabGroup = new THREE.Group();
-    aptCabGroup.name = 'apartment_elevator_platform';
-    aptCabGroup.position.y = 0.25;
-    const cabFloor = new THREE.Mesh(new THREE.BoxGeometry(1.76, 0.12, 1.76), this.travertineStoneMat);
-    const cabTrim = new THREE.Mesh(new THREE.BoxGeometry(1.82, 0.08, 1.82), brassMat);
-    cabTrim.position.y = 0.05;
-    const cabBackGlass = new THREE.Mesh(new THREE.BoxGeometry(1.7, 2.2, 0.05), this.curtainGlassMat);
-    cabBackGlass.position.set(0, 1.16, -0.84);
-    const cabLight = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.04, 1.2), this.warmSconceMat);
-    cabLight.position.set(0, 2.26, 0);
-    aptCabGroup.add(cabFloor, cabTrim, cabBackGlass, cabLight);
-    aptLiftShaft.add(aptCabGroup);
-    this.aptElevatorPlatform = aptCabGroup;
-    this.group.add(aptLiftShaft);
-
-    // Elevator floor call pads on Ground..Rooftop
-    for (let fl = 0; fl < 5; fl++) {
-      const callPad = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.34, 0.05), brassMat);
-      callPad.position.set(2.55, fl * 3.2 + 1.35, -5.4);
-      this.group.add(callPad);
-    }
-
-    // --- 3. LUXURY INTEGRATED REFRIGERATOR ---
-    const fridgeBody = new THREE.Mesh(
-      new THREE.BoxGeometry(1.2, 2.2, 1.0),
-      new THREE.MeshStandardMaterial({ color: 0x3b4048, metalness: 0.72, roughness: 0.28 })
-    );
-    fridgeBody.position.set(4.5, 1.22, 5.8);
-    fridgeBody.castShadow = true;
-    fridgeBody.receiveShadow = true;
-
-    this.fridgeDoor = new THREE.Group();
-    this.fridgeDoor.position.set(4.5, 1.22, 5.3);
-    const doorPanel = new THREE.Mesh(
-      new THREE.BoxGeometry(1.2, 2.18, 0.1),
-      new THREE.MeshStandardMaterial({ color: 0x454b54, metalness: 0.75, roughness: 0.26 })
-    );
-    const doorHandle = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.85, 0.06), brassMat);
-    doorHandle.position.set(0.48, 0, -0.08);
-    this.fridgeDoor.add(doorPanel, doorHandle);
-    f1.add(fridgeBody, this.fridgeDoor);
-
-    // --- 4. MODERN CHEF'S MARBLE KITCHEN COUNTER, SINK & INDUCTION STOVE ---
-    const kitchenCounter = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.9, 1.1), this.walnutAccentMat);
-    kitchenCounter.position.set(5.8, 0.57, 3.2);
-    kitchenCounter.castShadow = true;
-    kitchenCounter.receiveShadow = true;
-    const counterMarbleTop = new THREE.Mesh(new THREE.BoxGeometry(3.66, 0.08, 1.16), marbleIslandMat);
-    counterMarbleTop.position.set(5.8, 1.05, 3.2);
-
-    const kitchenSink = new THREE.Mesh(
-      new THREE.BoxGeometry(1.1, 0.38, 0.75),
-      new THREE.MeshStandardMaterial({ color: 0x9ca3af, metalness: 0.88, roughness: 0.24 })
-    );
-    kitchenSink.position.set(5.8, 0.9, 2.5);
-
-    const kitchenFaucet = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.38, 8), brassMat);
-    kitchenFaucet.position.set(5.8, 1.2, 2.85);
-
-    this.kitchenTapWaterMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.015, 0.025, 0.32, 6),
-      new THREE.MeshStandardMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.7, roughness: 0.1 })
-    );
-    this.kitchenTapWaterMesh.position.set(5.8, 0.98, 2.75);
-    this.kitchenTapWaterMesh.visible = false;
-
-    const stoveBody = new THREE.Mesh(
-      new THREE.BoxGeometry(1.1, 0.92, 1.1),
-      new THREE.MeshStandardMaterial({ color: 0x1b1f26, metalness: 0.8, roughness: 0.25 })
-    );
-    stoveBody.position.set(5.8, 0.58, 4.6);
-    stoveBody.castShadow = true;
-    stoveBody.receiveShadow = true;
-
-    this.kitchenStoveBurners = [];
-    const burnerOffsets = [
-      [-0.25, -0.25],
-      [0.25, -0.25],
-      [-0.25, 0.25],
-      [0.25, 0.25],
-    ];
-    for (const [bx, bz] of burnerOffsets) {
-      const burner = new THREE.Mesh(
-        new THREE.TorusGeometry(0.12, 0.025, 8, 16),
-        new THREE.MeshStandardMaterial({ color: 0x222222, roughness: 0.5 })
-      );
-      burner.rotation.x = Math.PI / 2;
-      burner.position.set(5.8 + bx, 1.05, 4.6 + bz);
-      this.kitchenStoveBurners.push(burner);
-      f1.add(burner);
-    }
-    f1.add(kitchenCounter, counterMarbleTop, kitchenSink, kitchenFaucet, this.kitchenTapWaterMesh, stoveBody);
-
-    // --- 4B. FORMAL DINING ROOM (Travertine & Walnut Table + 4 Designer Chairs) at (2.2, 1.2) ---
-    const diningTable = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.1, 1.2), marbleIslandMat);
-    diningTable.position.set(2.2, 0.88, 1.2);
-    diningTable.castShadow = true;
-    diningTable.receiveShadow = true;
-    const diningPedestal = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.74, 0.55), this.walnutAccentMat);
-    diningPedestal.position.set(2.2, 0.48, 1.2);
-    diningPedestal.castShadow = true;
-
-    const chairOffsets = [
-      [-0.6, -0.75, 0],
-      [0.6, -0.75, 0],
-      [-0.6, 0.75, Math.PI],
-      [0.6, 0.75, Math.PI],
-    ];
-    for (let i = 0; i < chairOffsets.length; i++) {
-      const [cx, cz, crot] = chairOffsets[i];
-      const chair = new THREE.Mesh(new THREE.BoxGeometry(0.44, 0.85, 0.44), boucleMat);
-      chair.name = `dining_chair_${i}`;
-      chair.position.set(2.2 + cx, 0.45, 1.2 + cz);
-      chair.rotation.y = crot;
-      chair.castShadow = true;
-      chair.receiveShadow = true;
-      f1.add(chair);
-    }
-    f1.add(diningTable, diningPedestal);
-
-    // --- 5. SPACIOUS LUXURY LIVING ROOM SOFA, COFFEE TABLE & REAL-TIME WALL CLOCK ---
-    const sofa = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.82, 1.2), boucleMat);
-    sofa.position.set(0, 0.54, 0.5);
-    sofa.castShadow = true;
-    sofa.receiveShadow = true;
-
-    const coffeeTable = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.42, 0.92), marbleIslandMat);
-    coffeeTable.position.set(0, 0.34, -1.2);
-    coffeeTable.castShadow = true;
-    coffeeTable.receiveShadow = true;
-
-    const phoneMesh = new THREE.Mesh(
-      new THREE.BoxGeometry(0.18, 0.02, 0.34),
-      new THREE.MeshStandardMaterial({ color: 0x111111, metalness: 0.8, roughness: 0.2 })
-    );
-    phoneMesh.position.set(0.3, 0.57, -1.2);
-    const phoneScreen = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.16, 0.3),
-      new THREE.MeshBasicMaterial({ color: 0x00d2d3 })
-    );
-    phoneScreen.rotation.x = -Math.PI / 2;
-    phoneScreen.position.set(0.3, 0.585, -1.2);
-
-    const wallClockMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.42, 0.42, 0.06, 24),
-      brassMat
-    );
-    wallClockMesh.rotation.x = Math.PI / 2;
-    wallClockMesh.position.set(-1.2, 2.3, -1.8);
-    const clockFace = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.76, 0.76),
-      new THREE.MeshBasicMaterial({ map: this.wallClockTexture, transparent: true })
-    );
-    clockFace.position.set(-1.2, 2.3, -1.76);
-    f1.add(sofa, coffeeTable, phoneMesh, phoneScreen, wallClockMesh, clockFace);
-
-    // --- 6. ARCHITECTURAL WALNUT & BRASS CEILING FAN ---
-    const fanHub = new THREE.Group();
-    fanHub.position.set(0, 2.95, 0.5);
-    const fanStem = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.3, 6), this.charcoalBronzeMat);
-    fanStem.position.y = -0.15;
-    const fanMotor = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.15, 10), brassMat);
-    fanMotor.position.y = -0.3;
-
-    this.fanBlades = new THREE.Group();
-    this.fanBlades.position.y = -0.32;
-    for (let i = 0; i < 4; i++) {
-      const blade = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.02, 0.16), this.walnutAccentMat);
-      blade.rotation.y = (i * Math.PI) / 2;
-      blade.position.set(Math.cos(blade.rotation.y) * 0.55, 0, Math.sin(blade.rotation.y) * 0.55);
-      this.fanBlades.add(blade);
-    }
-    fanHub.add(fanStem, fanMotor, this.fanBlades);
-    f1.add(fanHub);
-
-    // --- 7. SLEEK CLIMATE CONTROL UNIT ---
-    this.acMesh = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.48, 0.36), this.charcoalBronzeMat);
-    this.acMesh.position.set(-2.5, 2.5, -6.6);
-
-    this.acLedMat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
-    const acLed = new THREE.Mesh(new THREE.SphereGeometry(0.03, 6, 6), this.acLedMat);
-    acLed.position.set(-1.8, 2.4, -6.38);
-    f1.add(this.acMesh, acLed);
-
-    // --- 8. REINFORCED ARCHITECTURAL BRONZE & WALNUT FRONT ENTRANCE DOUBLE DOORS ---
-    this.frontDoorMesh = new THREE.Group();
-    this.frontDoorMesh.name = 'apartment_double_front_doors';
-    const doorHeight = 2.42;
-    const doorLeafWidth = 0.99;
-    const doorThickness = 0.15;
-    this.frontDoorMesh.position.set(0, 1.4, -6.9);
-
-    const doorMaterial = this.walnutAccentMat;
-    const handleMaterial = brassMat;
-
-    this.frontDoorLeftLeaf = new THREE.Group();
-    this.frontDoorLeftLeaf.name = 'frontDoorLeftLeaf';
-    this.frontDoorLeftLeaf.position.x = -0.98;
-    const leftPanel = new THREE.Mesh(new THREE.BoxGeometry(doorLeafWidth, doorHeight, doorThickness), doorMaterial);
-    leftPanel.position.set(doorLeafWidth / 2, 0, 0);
-    leftPanel.castShadow = true;
-    leftPanel.receiveShadow = true;
-    const leftBronzeTrim = new THREE.Mesh(new THREE.BoxGeometry(0.08, doorHeight, doorThickness + 0.02), this.charcoalBronzeMat);
-    leftBronzeTrim.position.set(doorLeafWidth - 0.04, 0, 0);
-    const leftHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.72, 10), handleMaterial);
-    leftHandle.position.set(doorLeafWidth - 0.14, 0, 0.11);
-    this.frontDoorLeftLeaf.add(leftPanel, leftBronzeTrim, leftHandle);
-
-    this.frontDoorRightLeaf = new THREE.Group();
-    this.frontDoorRightLeaf.name = 'frontDoorRightLeaf';
-    this.frontDoorRightLeaf.position.x = 0.98;
-    const rightPanel = new THREE.Mesh(new THREE.BoxGeometry(doorLeafWidth, doorHeight, doorThickness), doorMaterial);
-    rightPanel.position.set(-doorLeafWidth / 2, 0, 0);
-    rightPanel.castShadow = true;
-    rightPanel.receiveShadow = true;
-    const rightBronzeTrim = new THREE.Mesh(new THREE.BoxGeometry(0.08, doorHeight, doorThickness + 0.02), this.charcoalBronzeMat);
-    rightBronzeTrim.position.set(-doorLeafWidth + 0.04, 0, 0);
-    const rightHandle = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.72, 10), handleMaterial);
-    rightHandle.position.set(-doorLeafWidth + 0.14, 0, 0.11);
-    this.frontDoorRightLeaf.add(rightPanel, rightBronzeTrim, rightHandle);
-
-    this.frontDoorMesh.add(this.frontDoorLeftLeaf, this.frontDoorRightLeaf);
-    f1.add(this.frontDoorMesh);
-
-    // --- REAR SLIDING PATIO GLASS DOUBLE DOORS (X = 0, Z = 6.8) ---
-    this.patioDoorMesh = new THREE.Group();
-    this.patioDoorMesh.name = 'rear_patio_sliding_doors';
-    this.patioDoorMesh.position.set(0, 1.4, 6.8);
-
-    const patioFrame = new THREE.Mesh(new THREE.BoxGeometry(2.5, 2.6, 0.12), this.charcoalBronzeMat);
-    this.patioDoorMesh.add(patioFrame);
-
-    const patioLeafW = 1.15;
-    this.patioDoorLeftLeaf = new THREE.Mesh(new THREE.BoxGeometry(patioLeafW, 2.45, 0.06), this.curtainGlassMat);
-    this.patioDoorLeftLeaf.position.set(this.patioDoorOpen ? -1.15 : -0.58, 0, 0.02);
-    this.patioDoorLeftLeaf.castShadow = true;
-
-    this.patioDoorRightLeaf = new THREE.Mesh(new THREE.BoxGeometry(patioLeafW, 2.45, 0.06), this.curtainGlassMat);
-    this.patioDoorRightLeaf.position.set(this.patioDoorOpen ? 1.15 : 0.58, 0, -0.02);
-    this.patioDoorRightLeaf.castShadow = true;
-
-    this.patioDoorMesh.add(this.patioDoorLeftLeaf, this.patioDoorRightLeaf);
-    f1.add(this.patioDoorMesh);
-
-    // ==============================================================
-    // GUEST LUXURY SPA BATHROOM SUITE (Southwest: X = -7.4 to -3.5, Z = -6.6 to -3.2)
-    // ==============================================================
-    const bathGroup = new THREE.Group();
-    bathGroup.name = 'ground_floor_luxury_bathroom_suite';
-
-    const ceramicTileMat = this.travertineStoneMat;
-    const bathFloor = new THREE.Mesh(new THREE.BoxGeometry(4.0, 0.08, 3.4), ceramicTileMat);
-    bathFloor.position.set(-5.45, 0.16, -4.9);
-    bathFloor.receiveShadow = true;
-
-    const bathWallMat = this.warmLimestoneMat;
-    const bathNorthWall = new THREE.Mesh(new THREE.BoxGeometry(3.9, 2.8, 0.18), bathWallMat);
-    bathNorthWall.position.set(-5.45, 1.55, -3.2);
-    bathNorthWall.castShadow = true;
-    bathNorthWall.receiveShadow = true;
-
-    const bathEastWallSouth = new THREE.Mesh(new THREE.BoxGeometry(0.18, 2.8, 1.8), bathWallMat);
-    bathEastWallSouth.position.set(-3.5, 1.55, -5.7);
-    bathEastWallSouth.castShadow = true;
-
-    // East partition wall Header above doorway (Z = -4.8 to -3.2, Y = 2.4 to 2.95)
-    const bathDoorLintel = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.6, 1.6), bathWallMat);
-    bathDoorLintel.position.set(-3.5, 2.65, -4.0);
-
-    // 3. Hinged Wooden Bathroom Door at (-3.5, 1.35, -4.0) with brass handle
-    this.bathroomDoorGroup = new THREE.Group();
-    this.bathroomDoorGroup.name = 'bathroom_hinged_door';
-    this.bathroomDoorGroup.position.set(-3.5, 1.35, -3.4); // Hinge position on north side of opening
-
-    this.bathroomDoorLeaf = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 2.3, 0.95),
-      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.6 })
-    );
-    this.bathroomDoorLeaf.position.set(0, 0, -0.475);
-    this.bathroomDoorLeaf.castShadow = true;
-    this.bathroomDoorLeaf.receiveShadow = true;
-
-    const bathDoorHandle = new THREE.Mesh(new THREE.SphereGeometry(0.045, 8, 8), handleMaterial);
-    bathDoorHandle.position.set(0.06, 0, -0.85);
-    this.bathroomDoorGroup.add(this.bathroomDoorLeaf, bathDoorHandle);
-
-    // 4. Dedicated Bathroom Ceiling Light & Wall Switch
-    this.bathroomLight = new THREE.PointLight(0xfff7ed, 1.6, 9.0, 1.2);
-    this.bathroomLight.position.set(-5.4, 2.85, -4.9);
-    this.bathroomLight.castShadow = true;
-
-    const bathLightFixture = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.2, 0.2, 0.05, 16),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.2 })
-    );
-    bathLightFixture.position.set(-5.4, 2.92, -4.9);
-
-    const bathSwitch = new THREE.Mesh(
-      new THREE.BoxGeometry(0.03, 0.12, 0.08),
-      new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.5 })
-    );
-    bathSwitch.position.set(-3.58, 1.35, -3.6);
-
-    // 5. Modern Vanity Unit with Ceramic Washbasin Bowl at (-4.5, -3.45)
-    const vanityCabinet = new THREE.Mesh(
-      new THREE.BoxGeometry(1.2, 0.82, 0.65),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.5 })
-    );
-    vanityCabinet.position.set(-4.5, 0.56, -3.55);
-    vanityCabinet.castShadow = true;
-    vanityCabinet.receiveShadow = true;
-
-    const ceramicWhiteMat = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.15, metalness: 0.1 });
-    const sinkBasin = new THREE.Mesh(new THREE.BoxGeometry(0.85, 0.22, 0.52), ceramicWhiteMat);
-    sinkBasin.position.set(-4.5, 0.98, -3.55);
-    sinkBasin.castShadow = true;
-
-    // Chrome Faucet & Animated Water Stream
-    this.bathroomTapMesh = new THREE.Group();
-    this.bathroomTapMesh.position.set(-4.5, 1.12, -3.35);
-    const tapStem = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.02, 0.02, 0.24, 8),
-      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.95, roughness: 0.1 })
-    );
-    tapStem.position.y = 0.1;
-    const tapSpout = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.018, 0.018, 0.16, 8),
-      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.95, roughness: 0.1 })
-    );
-    tapSpout.rotation.x = Math.PI / 3;
-    tapSpout.position.set(0, 0.18, -0.08);
-    const tapHandle = new THREE.Mesh(
-      new THREE.BoxGeometry(0.08, 0.02, 0.03),
-      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.95, roughness: 0.1 })
-    );
-    tapHandle.position.set(0, 0.22, 0);
-    this.bathroomTapMesh.add(tapStem, tapSpout, tapHandle);
-
-    this.bathroomTapWaterMesh = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.012, 0.02, 0.28, 6),
-      new THREE.MeshStandardMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.75, roughness: 0.05 })
-    );
-    this.bathroomTapWaterMesh.position.set(-4.5, 1.0, -3.48);
-    this.bathroomTapWaterMesh.visible = false;
-
-    // 6. Large Framed Bathroom Mirror above Sink
-    const mirrorFrame = new THREE.Mesh(
-      new THREE.BoxGeometry(1.1, 0.85, 0.04),
-      new THREE.MeshStandardMaterial({ color: 0x334155, metalness: 0.8, roughness: 0.3 })
-    );
-    mirrorFrame.position.set(-4.5, 1.82, -3.31);
-    const mirrorSurface = new THREE.Mesh(
-      new THREE.PlaneGeometry(1.02, 0.77),
-      new THREE.MeshStandardMaterial({
-        color: 0xccddee,
-        metalness: 0.98,
-        roughness: 0.04,
-      })
-    );
-    mirrorSurface.rotation.y = Math.PI; // Faces -Z into bathroom
-    mirrorSurface.position.set(-4.5, 1.82, -3.28);
-
-    // 7. Medicine Cabinet with Opening Mirror Door at (-5.6, 1.82, -3.31)
-    const cabinetBody = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 0.85, 0.18),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.4 })
-    );
-    cabinetBody.position.set(-5.6, 1.82, -3.4);
-    cabinetBody.castShadow = true;
-
-    // Inside shelves
-    const shelf1 = new THREE.Mesh(new THREE.BoxGeometry(0.66, 0.02, 0.14), this.metalTrimMat);
-    shelf1.position.set(-5.6, 1.7, -3.4);
-    const shelf2 = shelf1.clone(); shelf2.position.y = 1.95;
-
-    // Supplies on shelves (Antiseptic bottle & Bandage roll)
-    const antisepticBottle = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.035, 0.035, 0.12, 8),
-      new THREE.MeshStandardMaterial({ color: 0x8b5cf6, roughness: 0.3 })
-    );
-    antisepticBottle.position.set(-5.75, 1.77, -3.4);
-    const soapBar = new THREE.Mesh(
-      new THREE.BoxGeometry(0.09, 0.04, 0.06),
-      new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.6 })
-    );
-    soapBar.position.set(-5.5, 1.73, -3.4);
-
-    this.bathroomCabinetDoor = new THREE.Group();
-    this.bathroomCabinetDoor.position.set(-5.95, 1.82, -3.31); // Hinge on left
-    const cDoorPanel = new THREE.Mesh(
-      new THREE.BoxGeometry(0.7, 0.85, 0.03),
-      new THREE.MeshStandardMaterial({ color: 0xdbeafe, metalness: 0.9, roughness: 0.1 })
-    );
-    cDoorPanel.position.set(0.35, 0, 0);
-    this.bathroomCabinetDoor.add(cDoorPanel);
-
-    // 8. Glass Shower Stall at Northwest corner (X = -7.4 to -6.2, Z = -4.6 to -3.3)
-    const showerTray = new THREE.Mesh(
-      new THREE.BoxGeometry(1.3, 0.12, 1.3),
-      ceramicWhiteMat
-    );
-    showerTray.position.set(-6.75, 0.22, -3.95);
-    showerTray.receiveShadow = true;
-
-    // Tempered Frameless Glass Enclosure
-    const showerGlassMat = new THREE.MeshStandardMaterial({
-      color: 0x93c5fd,
-      roughness: 0.05,
-      metalness: 0.3,
-      transparent: true,
-      opacity: 0.35,
-    });
-    const showerGlassEast = new THREE.Mesh(new THREE.BoxGeometry(0.04, 2.3, 1.3), showerGlassMat);
-    showerGlassEast.position.set(-6.1, 1.35, -3.95);
-    showerGlassEast.castShadow = true;
-
-    const showerGlassSouth = new THREE.Mesh(new THREE.BoxGeometry(0.75, 2.3, 0.04), showerGlassMat);
-    showerGlassSouth.position.set(-6.48, 1.35, -4.6);
-    showerGlassSouth.castShadow = true;
-
-    // Chrome Shower Column & Rain Showerhead
-    const showerColumn = new THREE.Mesh(new THREE.CylinderGeometry(0.02, 0.02, 2.1, 8), this.metalTrimMat);
-    showerColumn.position.set(-7.3, 1.4, -3.95);
-    const showerArm = new THREE.Mesh(new THREE.BoxGeometry(0.35, 0.03, 0.03), this.metalTrimMat);
-    showerArm.position.set(-7.12, 2.45, -3.95);
-    const showerHead = new THREE.Mesh(new THREE.CylinderGeometry(0.14, 0.14, 0.02, 16), this.metalTrimMat);
-    showerHead.position.set(-6.95, 2.43, -3.95);
-
-    // Shower falling water spray particle group
-    this.bathroomShowerWaterGroup = new THREE.Group();
-    this.bathroomShowerWaterGroup.position.set(-6.95, 2.4, -3.95);
-    for (let i = 0; i < 8; i++) {
-      const drop = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.008, 0.015, 1.9, 4),
-        new THREE.MeshBasicMaterial({ color: 0x7dd3fc, transparent: true, opacity: 0.55 })
-      );
-      const angle = (i * Math.PI) / 4;
-      drop.position.set(Math.cos(angle) * 0.08, -0.95, Math.sin(angle) * 0.08);
-      this.bathroomShowerWaterGroup.add(drop);
-    }
-    this.bathroomShowerWaterGroup.visible = false;
-
-    // Shower Steam Mist
-    this.bathroomShowerSteamMesh = new THREE.Mesh(
-      new THREE.SphereGeometry(0.65, 8, 8),
-      new THREE.MeshBasicMaterial({ color: 0xe0f2fe, transparent: true, opacity: 0.28 })
-    );
-    this.bathroomShowerSteamMesh.position.set(-6.75, 1.4, -3.95);
-    this.bathroomShowerSteamMesh.visible = false;
-
-    // 9. Freestanding Porcelain Bathtub at (-6.5, 0.65, -5.7)
-    const tubGroup = new THREE.Group();
-    tubGroup.position.set(-6.5, 0, -5.7);
-
-    const tubBody = new THREE.Mesh(
-      new THREE.BoxGeometry(1.2, 0.68, 1.8),
-      ceramicWhiteMat
-    );
-    tubBody.position.set(0, 0.5, 0);
-    tubBody.castShadow = true;
-    tubBody.receiveShadow = true;
-
-    // Bathtub Warm Water with Animated Ripple Rings
-    this.bathtubWaterMesh = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.96, 1.56),
-      new THREE.MeshStandardMaterial({
-        color: 0x0284c7,
-        roughness: 0.08,
-        metalness: 0.4,
-        transparent: true,
-        opacity: 0.8,
-      })
-    );
-    this.bathtubWaterMesh.rotation.x = -Math.PI / 2;
-    this.bathtubWaterMesh.position.set(0, 0.72, 0);
-
-    const tubFaucet = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.45, 8), this.metalTrimMat);
-    tubFaucet.position.set(-0.55, 0.95, 0);
-    tubGroup.add(tubBody, this.bathtubWaterMesh, tubFaucet);
-
-    // 10. Modern Ceramic Toilet at (-4.4, 0.52, -6.0)
-    const toiletGroup = new THREE.Group();
-    toiletGroup.position.set(-4.4, 0, -6.0);
-
-    const toiletBase = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.36, 0.46, 16), ceramicWhiteMat);
-    toiletBase.position.set(0, 0.39, 0);
-    toiletBase.castShadow = true;
-
-    const toiletBowl = new THREE.Mesh(new THREE.CylinderGeometry(0.26, 0.22, 0.16, 16), ceramicWhiteMat);
-    toiletBowl.position.set(0, 0.64, 0);
-
-    const toiletSeat = new THREE.Mesh(
-      new THREE.TorusGeometry(0.25, 0.045, 8, 20),
-      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.3 })
-    );
-    toiletSeat.rotation.x = Math.PI / 2;
-    toiletSeat.position.set(0, 0.72, 0);
-
-    const toiletCistern = new THREE.Mesh(
-      new THREE.BoxGeometry(0.65, 0.62, 0.28),
-      ceramicWhiteMat
-    );
-    toiletCistern.position.set(0, 0.98, -0.32);
-    toiletCistern.castShadow = true;
-
-    const flushButton = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.04, 0.04, 0.03, 10),
-      this.metalTrimMat
-    );
-    flushButton.position.set(0, 1.3, -0.32);
-
-    this.toiletWaterMesh = new THREE.Mesh(
-      new THREE.CircleGeometry(0.18, 16),
-      new THREE.MeshBasicMaterial({ color: 0x38bdf8, transparent: true, opacity: 0.85 })
-    );
-    this.toiletWaterMesh.rotation.x = -Math.PI / 2;
-    this.toiletWaterMesh.position.set(0, 0.61, 0);
-    toiletGroup.add(toiletBase, toiletBowl, toiletSeat, toiletCistern, flushButton, this.toiletWaterMesh);
-
-    // 11. Chrome Towel Rack & Hanging Plush Bath Towels at (-3.6, 1.35, -5.2)
-    const towelRackGroup = new THREE.Group();
-    towelRackGroup.position.set(-3.6, 1.35, -5.2);
-    const towelBar = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.03, 0.85), this.metalTrimMat);
-    const towel1 = new THREE.Mesh(
-      new THREE.BoxGeometry(0.06, 0.65, 0.35),
-      new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.95 })
-    );
-    towel1.position.set(0.02, -0.28, -0.18);
-    const towel2 = new THREE.Mesh(
-      new THREE.BoxGeometry(0.06, 0.55, 0.35),
-      new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.95 })
-    );
-    towel2.position.set(0.02, -0.23, 0.18);
-    towelRackGroup.add(towelBar, towel1, towel2);
-
-    bathGroup.add(
-      bathFloor,
-      bathNorthWall,
-      bathEastWallSouth,
-      bathDoorLintel,
-      this.bathroomDoorGroup,
-      this.bathroomLight,
-      bathLightFixture,
-      bathSwitch,
-      vanityCabinet,
-      sinkBasin,
-      this.bathroomTapMesh,
-      this.bathroomTapWaterMesh,
-      mirrorFrame,
-      mirrorSurface,
-      cabinetBody,
-      shelf1,
-      shelf2,
-      antisepticBottle,
-      soapBar,
-      this.bathroomCabinetDoor,
-      showerTray,
-      showerGlassEast,
-      showerGlassSouth,
-      showerColumn,
-      showerArm,
-      showerHead,
-      this.bathroomShowerWaterGroup,
-      this.bathroomShowerSteamMesh,
-      tubGroup,
-      toiletGroup,
-      towelRackGroup
-    );
-
-    f1.add(bathGroup);
-  }
-
-  // ==========================================
-  // FIRST FLOOR (LEVEL 1): PRIVATE RESIDENCE
-  // ==========================================
-  private buildFloor2() {
-    const f2 = this.floor2Group;
-    const yOff = 3.2;
-    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc8a45d, metalness: 0.85, roughness: 0.25 });
-    const creamMat = new THREE.MeshStandardMaterial({ color: 0xede7dc, roughness: 0.88 });
-    const taupeMat = new THREE.MeshStandardMaterial({ color: 0x6b6257, roughness: 0.85 });
-    const porcelainMat = new THREE.MeshStandardMaterial({ color: 0xf8f8f6, roughness: 0.16, metalness: 0.08 });
-
-    // Walnut & Travertine Floor + Limestone Ceiling
-    f2.add(this.createSlabWithStairwell(this.walnutAccentMat, 0.25, yOff + 0.12));
-    f2.add(this.createSlabWithStairwell(this.warmLimestoneMat, 0.2, yOff + 3.1));
-
-    // Interior Architectural Partition Walls (leaving Z in [-2.8, -0.8] open for West Wing & X=0 open for balconies)
-    const loungePartition = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.8, 5.2), this.warmLimestoneMat);
-    loungePartition.position.set(-1.9, yOff + 1.55, 3.6);
-    const guestSuiteWall = new THREE.Mesh(new THREE.BoxGeometry(4.2, 2.8, 0.18), this.warmLimestoneMat);
-    guestSuiteWall.position.set(1.2, yOff + 1.55, 2.2);
-    const masterBathWall = new THREE.Mesh(new THREE.BoxGeometry(4.0, 2.8, 0.18), this.travertineStoneMat);
-    masterBathWall.position.set(-5.6, yOff + 1.55, -2.9);
-    f2.add(loungePartition, guestSuiteWall, masterBathWall);
-
-    // --- MASTER BEDROOM SUITE (Northwest Core: X in [-7.6, -2.0], Z in [0.2, 6.5]) ---
-    const masterFrame = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.45, 2.9), this.walnutAccentMat);
-    masterFrame.position.set(-4.8, yOff + 0.36, 3.6);
-    masterFrame.castShadow = true;
-    const masterHeadboard = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.65, 0.18), this.walnutAccentMat);
-    masterHeadboard.position.set(-4.8, yOff + 0.98, 5.2);
-    const masterMattress = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.34, 2.6), porcelainMat);
-    masterMattress.position.set(-4.8, yOff + 0.68, 3.6);
-    const masterDuvet = new THREE.Mesh(new THREE.BoxGeometry(2.42, 0.36, 1.75), taupeMat);
-    masterDuvet.position.set(-4.8, yOff + 0.70, 3.1);
-    for (const px of [-5.45, -4.15]) {
-      const pillow = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.16, 0.56), creamMat);
-      pillow.position.set(px, yOff + 0.9, 4.6);
-      f2.add(pillow);
-    }
-    for (const nx of [-6.45, -3.15]) {
-      const stand = new THREE.Mesh(new THREE.BoxGeometry(0.65, 0.58, 0.62), this.walnutAccentMat);
-      stand.position.set(nx, yOff + 0.42, 4.8);
-      const sconce = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.18, 0.28, 12), this.warmSconceMat);
-      sconce.position.set(nx, yOff + 0.95, 4.8);
-      f2.add(stand, sconce);
-    }
-    // Master Walk-in Wardrobe
-    const masterWardrobe = new THREE.Mesh(new THREE.BoxGeometry(0.85, 2.35, 2.4), this.walnutAccentMat);
-    masterWardrobe.position.set(-7.1, yOff + 1.32, 1.6);
-    const wardrobeTrim = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.1, 0.08), brassMat);
-    wardrobeTrim.position.set(-6.64, yOff + 1.32, 1.6);
-    f2.add(masterFrame, masterHeadboard, masterMattress, masterDuvet, masterWardrobe, wardrobeTrim);
-
-    // --- ATTACHED MASTER LUXURY BATHROOM (Southwest Core: X in [-7.6, -3.4], Z in [-6.5, -3.0]) ---
-    const spaFloor = new THREE.Mesh(new THREE.BoxGeometry(4.2, 0.06, 3.4), this.travertineStoneMat);
-    spaFloor.position.set(-5.5, yOff + 0.25, -4.8);
-    const spaTub = new THREE.Mesh(new THREE.BoxGeometry(1.25, 0.65, 1.95), porcelainMat);
-    spaTub.position.set(-6.4, yOff + 0.58, -5.2);
-    const spaTubWater = new THREE.Mesh(new THREE.PlaneGeometry(1.0, 1.7), this.waterMat);
-    spaTubWater.rotation.x = -Math.PI / 2;
-    spaTubWater.position.set(-6.4, yOff + 0.92, -5.2);
-    const spaVanity = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.85, 0.68), this.walnutAccentMat);
-    spaVanity.position.set(-4.5, yOff + 0.65, -3.4);
-    const spaMirror = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.95, 0.04), brassMat);
-    spaMirror.position.set(-4.5, yOff + 1.78, -3.08);
-    f2.add(spaFloor, spaTub, spaTubWater, spaVanity, spaMirror);
-
-    // --- ADDITIONAL BEDROOM (Northeast Core: X in [-1.0, 4.0], Z in [2.5, 6.5]) ---
-    const addBed = new THREE.Mesh(new THREE.BoxGeometry(2.0, 0.45, 2.4), this.walnutAccentMat);
-    addBed.position.set(1.5, yOff + 0.36, 4.8);
-    const addMattress = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.3, 2.2), creamMat);
-    addMattress.position.set(1.5, yOff + 0.66, 4.8);
-    const addWardrobe = new THREE.Mesh(new THREE.BoxGeometry(0.8, 2.2, 1.8), this.walnutAccentMat);
-    addWardrobe.position.set(3.6, yOff + 1.25, 4.8);
-    f2.add(addBed, addMattress, addWardrobe);
-
-    // --- FAMILY LOUNGE (Central Core: X in [-1.5, 3.8], Z in [-4.0, +1.8]) ---
-    const familySofa = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.8, 1.15), creamMat);
-    familySofa.position.set(0.4, yOff + 0.54, -1.2);
-    const familyTable = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.38, 0.85), this.travertineStoneMat);
-    familyTable.position.set(0.4, yOff + 0.34, -2.7);
-    const mediaUnit = new THREE.Mesh(new THREE.BoxGeometry(0.55, 0.65, 2.2), this.walnutAccentMat);
-    mediaUnit.position.set(-1.55, yOff + 0.46, -1.2);
-    const loungeTv = new THREE.Mesh(new THREE.BoxGeometry(0.08, 1.1, 1.85), this.charcoalBronzeMat);
-    loungeTv.position.set(-1.72, yOff + 1.45, -1.2);
-    f2.add(familySofa, familyTable, mediaUnit, loungeTv);
-
-    // --- CANTILEVERED PANORAMIC BALCONIES (South Z = -8.1 & North Z = +8.1) ---
-    for (const bz of [-8.1, 8.1]) {
-      const balcSlab = new THREE.Mesh(new THREE.BoxGeometry(15.6, 0.24, 2.2), this.travertineStoneMat);
-      balcSlab.position.set(0, yOff + 0.12, bz);
-      balcSlab.receiveShadow = true;
-      const outerZ = bz < 0 ? -9.15 : 9.15;
-      const railGlass = new THREE.Mesh(new THREE.BoxGeometry(15.6, 1.05, 0.06), this.curtainGlassMat);
-      railGlass.position.set(0, yOff + 0.72, outerZ);
-      const railCap = new THREE.Mesh(new THREE.BoxGeometry(15.6, 0.06, 0.1), this.charcoalBronzeMat);
-      railCap.position.set(0, yOff + 1.26, outerZ);
-      for (const lx of [-4.5, 4.5]) {
-        const chair = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.65, 0.95), creamMat);
-        chair.position.set(lx, yOff + 0.48, bz);
-        f2.add(chair);
-      }
-      f2.add(balcSlab, railGlass, railCap);
-    }
-
-    const light = new THREE.PointLight(0xffe9cc, 1.9, 18, 1.3);
-    light.position.set(-0.5, yOff + 2.7, 0);
-    this.floorLights.push(light);
-    f2.add(light);
-  }
-
-  // ==========================================
-  // SECOND FLOOR (LEVEL 2): MEDICAL & SURVIVAL
-  // ==========================================
-  private buildFloor3() {
-    const f3 = this.floor3Group;
-    const yOff = 6.4;
-    const brassMat = new THREE.MeshStandardMaterial({ color: 0xc8a45d, metalness: 0.85, roughness: 0.25 });
-    const bedMat = new THREE.MeshStandardMaterial({ color: 0xf1f4f5, roughness: 0.78 });
-    const frameMat = new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.65, roughness: 0.35 });
-    const shelterMat = new THREE.MeshStandardMaterial({ color: 0x2a313b, metalness: 0.82, roughness: 0.32 });
-
-    // Clean Terrazzo/Limestone Floor + Ceiling
-    f3.add(this.createSlabWithStairwell(this.warmLimestoneMat, 0.25, yOff + 0.12));
-    f3.add(this.createSlabWithStairwell(this.warmLimestoneMat, 0.2, yOff + 3.1));
-
-    // Glass & Bronze Divider separating Medical Wing (West) from Survival Vault & Command (East)
-    const divider = new THREE.Mesh(new THREE.BoxGeometry(0.2, 2.85, 6.2), this.charcoalBronzeMat);
-    divider.position.set(-1.5, yOff + 1.55, 2.9);
-    const dividerGlass = new THREE.Mesh(new THREE.BoxGeometry(0.06, 2.2, 5.8), this.curtainGlassMat);
-    dividerGlass.position.set(-1.5, yOff + 1.6, 2.9);
-    f3.add(divider, dividerGlass);
-
-    // --- 1. MEDICAL CENTRE RECEPTION & TRIAGE (West-South: -2.8, -5.2) ---
-    const reception = new THREE.Mesh(new THREE.BoxGeometry(3.0, 1.05, 0.88), this.travertineStoneMat);
-    reception.position.set(-2.8, yOff + 0.62, -5.2);
-    const receptionScreen = new THREE.Mesh(
-      new THREE.BoxGeometry(0.95, 0.55, 0.08),
-      new THREE.MeshBasicMaterial({ color: 0x37c9d8 })
-    );
-    receptionScreen.position.set(-2.8, yOff + 1.38, -5.05);
-    f3.add(reception, receptionScreen);
-
-    // --- 2. FOUR HOSPITAL PATIENT BAYS (West Wall, leaving Z = -1.8 open for West Wing Trauma Annex) ---
-    const bayPositions: Array<[number, number]> = [
-      [-6.0, -4.2],
-      [-6.0, 0.8],
-      [-6.0, 3.4],
-      [-6.0, 5.8],
-    ];
-    for (const [bx, bz] of bayPositions) {
-      const bed = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.22, 1.0), bedMat);
-      bed.position.set(bx, yOff + 0.55, bz);
-      const mattress = new THREE.Mesh(
-        new THREE.BoxGeometry(1.92, 0.18, 0.88),
-        new THREE.MeshStandardMaterial({ color: 0xffffff })
-      );
-      mattress.position.set(bx, yOff + 0.74, bz);
-      const monitor = new THREE.Mesh(
-        new THREE.BoxGeometry(0.6, 0.52, 0.16),
-        new THREE.MeshStandardMaterial({ color: 0x1e293b, emissive: 0x063e46 })
-      );
-      monitor.position.set(bx - 1.15, yOff + 1.5, bz);
-      const screen = new THREE.Mesh(new THREE.PlaneGeometry(0.44, 0.3), new THREE.MeshBasicMaterial({ color: 0x39e0a0 }));
-      screen.rotation.y = Math.PI / 2;
-      screen.position.set(bx - 1.06, yOff + 1.5, bz);
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 1.65, 8), frameMat);
-      pole.position.set(bx + 0.95, yOff + 1.15, bz - 0.55);
-      const oxygen = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.16, 0.16, 1.02, 12),
-        new THREE.MeshStandardMaterial({ color: 0x4c9f77, metalness: 0.55 })
-      );
-      oxygen.position.set(bx - 1.2, yOff + 0.75, bz + 0.52);
-      f3.add(bed, mattress, monitor, screen, pole, oxygen);
-    }
-
-    // Emergency Treatment / Operating Station & Medical Supply Cabinets
-    const examTable = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.72, 0.95), bedMat);
-    examTable.position.set(-3.1, yOff + 0.5, 3.6);
-    const surgLamp = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.5, 0.65, 0.12, 16),
-      new THREE.MeshStandardMaterial({ color: 0xf8fafc, emissive: 0x38bdf8, emissiveIntensity: 0.35 })
-    );
-    surgLamp.position.set(-3.1, yOff + 2.65, 3.6);
-    f3.add(examTable, surgLamp);
-
-    for (let i = 0; i < 3; i++) {
-      const medCab = new THREE.Mesh(
-        new THREE.BoxGeometry(1.05, 2.0, 0.55),
-        new THREE.MeshStandardMaterial({ color: 0xdce3e8, metalness: 0.25 })
-      );
-      medCab.position.set(-5.8 + i * 1.4, yOff + 1.15, 6.2);
-      f3.add(medCab);
-    }
-
-    // --- 3. SECURITY MONITORING & 5KM RADAR COMMAND STATION (Relocated from Ground Lobby) ---
-    this.commandConsoleGroup = new THREE.Group();
-    this.commandConsoleGroup.name = 'floor2_security_monitoring_centre';
-    this.commandConsoleGroup.position.set(0.3, yOff, -4.2);
-
-    const cmdDesk = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.85, 0.95), this.charcoalBronzeMat);
-    cmdDesk.position.set(0, 0.45, 0);
-    cmdDesk.castShadow = true;
-
-    const cmdKeyboard = new THREE.Mesh(
-      new THREE.BoxGeometry(1.9, 0.04, 0.42),
-      new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.4, metalness: 0.7 })
-    );
-    cmdKeyboard.position.set(0, 0.89, 0.18);
-    for (let i = 0; i < 4; i++) {
-      const led = new THREE.Mesh(
-        new THREE.SphereGeometry(0.032, 8, 8),
-        new THREE.MeshBasicMaterial({ color: [0x10b981, 0x06b6d4, 0xf59e0b, 0xef4444][i] })
-      );
-      led.position.set(-0.6 + i * 0.4, 0.92, 0.22);
-      this.commandConsoleGroup.add(led);
-    }
-
-    const screenFrame = new THREE.Mesh(new THREE.BoxGeometry(2.9, 1.65, 0.08), this.charcoalBronzeMat);
-    screenFrame.position.set(0, 1.75, -0.38);
-    const screenMat = new THREE.MeshBasicMaterial({ map: this.securityScreenTexture });
-    this.securityScreenMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.8, 1.56), screenMat);
-    this.securityScreenMesh.position.set(0, 1.75, -0.33);
-
-    const stool = new THREE.Mesh(new THREE.CylinderGeometry(0.32, 0.32, 0.55, 12), this.charcoalBronzeMat);
-    stool.position.set(0, 0.28, 0.85);
-    this.commandConsoleGroup.add(cmdDesk, cmdKeyboard, screenFrame, this.securityScreenMesh, stool);
-    f3.add(this.commandConsoleGroup);
-
-    // --- 4. SURVIVAL EQUIPMENT, ARMORY VAULT & SECURE SURVIVAL SHELTER (East Core) ---
-    // Reinforced Biometric Vault & Emergency Rations/Supply Lockers along North Wall
-    const vault = new THREE.Mesh(new THREE.BoxGeometry(2.0, 2.65, 1.1), shelterMat);
-    vault.position.set(0.2, yOff + 1.45, 5.8);
-    const vaultDial = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 0.08, 16), brassMat);
-    vaultDial.rotation.x = Math.PI / 2;
-    vaultDial.position.set(0.2, yOff + 1.5, 5.22);
-    f3.add(vault, vaultDial);
-
-    for (let x = 2.4; x <= 6.4; x += 2.0) {
-      const locker = new THREE.Mesh(new THREE.BoxGeometry(1.5, 2.3, 0.95), shelterMat);
-      locker.position.set(x, yOff + 1.3, 5.8);
-      const rackGun = new THREE.Mesh(
-        new THREE.BoxGeometry(1.1, 0.28, 0.12),
-        new THREE.MeshStandardMaterial({ color: 0x5e81ac, metalness: 0.8 })
-      );
-      rackGun.position.set(x, yOff + 1.45, 5.25);
-      f3.add(locker, rackGun);
-    }
-
-    // Emergency Supply Crates & Tactical Armor Stands
-    for (let i = 0; i < 3; i++) {
-      const armorTorso = new THREE.Mesh(
-        new THREE.BoxGeometry(0.7, 0.92, 0.36),
-        new THREE.MeshStandardMaterial({ color: 0x4c5a45, metalness: 0.25, roughness: 0.8 })
-      );
-      armorTorso.position.set(2.2 + i * 1.55, yOff + 1.15, 3.8);
-      const helmet = new THREE.Mesh(
-        new THREE.SphereGeometry(0.26, 12, 8),
-        new THREE.MeshStandardMaterial({ color: 0x56614c, metalness: 0.35 })
-      );
-      helmet.position.set(2.2 + i * 1.55, yOff + 1.88, 3.8);
-      f3.add(armorTorso, helmet);
-    }
-    for (let i = 0; i < 3; i++) {
-      const supplyCrate = new THREE.Mesh(
-        new THREE.BoxGeometry(1.0, 0.85, 0.95),
-        new THREE.MeshStandardMaterial({ color: 0x4b5563, metalness: 0.55, roughness: 0.45 })
-      );
-      supplyCrate.position.set(5.8, yOff + 0.58, -5.8 + i * 1.2);
-      f3.add(supplyCrate);
-    }
-
-    // Interactive Armory Master Terminal (Center East: X = 2.0, Z = 0.0)
-    const consolePedestal = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.6, 1.1, 8), this.charcoalBronzeMat);
-    consolePedestal.position.set(2.0, yOff + 0.65, 0.0);
-    const consoleScreen = new THREE.Mesh(
-      new THREE.BoxGeometry(1.4, 0.8, 0.1),
-      new THREE.MeshBasicMaterial({ color: 0x00e5ff })
-    );
-    consoleScreen.rotation.x = -Math.PI / 4;
-    consoleScreen.position.set(2.0, yOff + 1.45, 0.0);
-    f3.add(consolePedestal, consoleScreen);
-
-    // Cantilevered South & North Balconies on Floor 2
-    for (const bz of [-8.1, 8.1]) {
-      const balcSlab = new THREE.Mesh(new THREE.BoxGeometry(15.6, 0.24, 2.2), this.warmLimestoneMat);
-      balcSlab.position.set(0, yOff + 0.12, bz);
-      const outerZ = bz < 0 ? -9.15 : 9.15;
-      const railGlass = new THREE.Mesh(new THREE.BoxGeometry(15.6, 1.05, 0.06), this.curtainGlassMat);
-      railGlass.position.set(0, yOff + 0.72, outerZ);
-      const railCap = new THREE.Mesh(new THREE.BoxGeometry(15.6, 0.06, 0.1), this.charcoalBronzeMat);
-      railCap.position.set(0, yOff + 1.26, outerZ);
-      f3.add(balcSlab, railGlass, railCap);
-    }
-
-    const medLight = new THREE.PointLight(0xeef7ff, 2.0, 16, 1.3);
-    medLight.position.set(-4.2, yOff + 2.7, 0);
-    const survLight = new THREE.PointLight(0xffe9cc, 1.8, 16, 1.3);
-    survLight.position.set(2.2, yOff + 2.7, 0);
-    this.floorLights.push(medLight, survLight);
-    f3.add(medLight, survLight);
-  }
-
-  // ==========================================
-  // ==========================================
-  // FLOOR 4: EMERGENCY SURVIVAL FARM AND UTILITIES
-  private buildFloor4Survival() {
-    const f = this.floor4Group;
-    const y = 9.6;
-    f.add(this.createSlabWithStairwell(this.floorTileMat, 0.28, y + 0.14));
-    f.add(this.createSlabWithStairwell(this.whiteWallMat, 0.18, y + 3.1));
-
-    const soil = new THREE.MeshStandardMaterial({ color: 0x59432d, roughness: 1.0 });
-    const cropGreen = new THREE.MeshStandardMaterial({ color: 0x3b8f48, roughness: 0.9 });
-    const cropLeaf = new THREE.MeshStandardMaterial({ color: 0x4e9d42, roughness: 0.95 });
-
-    // Nine raised crop beds. The soil beds are substantial solid planters;
-    // the crops remain decorative foliage so they do not snag the player.
-    for (let r = 0; r < 3; r++) {
-      for (let c = 0; c < 3; c++) {
-        const x = -5.7 + c * 2.2;
-        const z = -4.7 + r * 2.1;
-        const bed = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.42, 1.55), soil);
-        bed.name = `farm_raised_crop_bed_${r}_${c}`;
-        bed.position.set(x, y + 0.48, z);
-        bed.castShadow = true;
-        bed.receiveShadow = true;
-        f.add(bed);
-        for (let k = 0; k < 4; k++) {
-          const px = x - 0.55 + (k % 2) * 0.7;
-          const pz = z - 0.35 + Math.floor(k / 2) * 0.65;
-          const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.06, 0.52, 8), cropGreen);
-          stem.position.set(px, y + 0.88, pz);
-          stem.castShadow = true;
-          f.add(stem);
-          const leaves = new THREE.Mesh(new THREE.SphereGeometry(0.23, 8, 7), cropLeaf);
-          leaves.position.set(px, y + 1.12, pz);
-          leaves.castShadow = true;
-          f.add(leaves);
-        }
-      }
-    }
-
-    // LARGE RAW-WATER / CLEAN-WATER STORAGE: two industrial steel tanks.
-    // Each tank is 2.1m diameter x 2.65m tall, with a solid base, domed cap,
-    // access hatch, ladder and visible inlet/outlet pipework.
-    const tankSteel = new THREE.MeshStandardMaterial({ color: 0x547f8c, metalness: 0.72, roughness: 0.32 });
-    const tankDark = new THREE.MeshStandardMaterial({ color: 0x293940, metalness: 0.78, roughness: 0.38 });
-    const pipeSteel = new THREE.MeshStandardMaterial({ color: 0x8a969b, metalness: 0.82, roughness: 0.28 });
-    const tankPositions = [
-      { x: 5.25, z: -5.65, name: 'raw_water' },
-      { x: 5.25, z: 5.55, name: 'treated_water' },
-    ];
-    tankPositions.forEach((tp, index) => {
-      const base = new THREE.Mesh(new THREE.CylinderGeometry(1.18, 1.22, 0.22, 20), tankDark);
-      base.position.set(tp.x, y + 0.18, tp.z);
-      base.castShadow = true;
-      base.receiveShadow = true;
-      f.add(base);
-
-      const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.02, 1.02, 2.55, 24), tankSteel);
-      tank.name = `large_${tp.name}_storage_tank`;
-      tank.position.set(tp.x, y + 1.56, tp.z);
-      tank.castShadow = true;
-      tank.receiveShadow = true;
-      f.add(tank);
-
-      const roof = new THREE.Mesh(new THREE.CylinderGeometry(0.98, 1.02, 0.22, 24), tankDark);
-      roof.position.set(tp.x, y + 2.86, tp.z);
-      roof.castShadow = true;
-      f.add(roof);
-      const hatch = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 0.12, 16), pipeSteel);
-      hatch.position.set(tp.x, y + 2.99, tp.z);
-      f.add(hatch);
-
-      // Reinforcing hoops make the tank read as heavy industrial equipment.
-      for (let band = 0; band < 3; band++) {
-        const hoop = new THREE.Mesh(new THREE.TorusGeometry(1.035, 0.045, 8, 24), tankDark);
-        hoop.rotation.x = Math.PI / 2;
-        hoop.position.set(tp.x, y + 0.78 + band * 0.78, tp.z);
-        f.add(hoop);
-      }
-
-      // Front inspection gauge and valve assembly.
-      const gauge = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, 0.09, 16), pipeSteel);
-      gauge.rotation.x = Math.PI / 2;
-      gauge.position.set(tp.x, y + 2.12, tp.z + 1.04);
-      f.add(gauge);
-      const valvePipe = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.09, 0.72, 12), pipeSteel);
-      valvePipe.rotation.x = Math.PI / 2;
-      valvePipe.position.set(tp.x, y + 0.55, tp.z + 1.12);
-      f.add(valvePipe);
-      const valveWheel = new THREE.Mesh(new THREE.TorusGeometry(0.22, 0.045, 8, 16), tankDark);
-      valveWheel.position.set(tp.x, y + 0.55, tp.z + 1.5);
-      f.add(valveWheel);
-
-      // A fixed access ladder attached to the tank shell.
-      const ladderX = tp.x + 0.72;
-      for (let side = 0; side < 2; side++) {
-        const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.035, 0.035, 2.25, 8), tankDark);
-        rail.position.set(ladderX + side * 0.28, y + 1.55, tp.z + 1.0);
-        f.add(rail);
-      }
-      for (let rung = 0; rung < 8; rung++) {
-        const step = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.28, 8), pipeSteel);
-        step.rotation.z = Math.PI / 2;
-        step.position.set(ladderX + 0.14, y + 0.58 + rung * 0.27, tp.z + 1.0);
-        f.add(step);
-      }
-      if (index === 0) {
-        const labelPlate = new THREE.Mesh(new THREE.BoxGeometry(0.78, 0.28, 0.06), tankDark);
-        labelPlate.position.set(tp.x, y + 2.45, tp.z + 1.04);
-        f.add(labelPlate);
-      }
-    });
-
-    // LARGE WATER-TREATMENT PLANT: a complete skid-mounted treatment train,
-    // not a small placeholder box. It includes sediment and carbon vessels,
-    // membrane housings, pump motors, control cabinet, pipe manifolds and valves.
-    const plantGroup = new THREE.Group();
-    plantGroup.name = 'large_water_treatment_plant';
-    plantGroup.position.set(-4.35, y, 1.95); // Keep the water-treatment plant clear of the stair flight and landing.
-    f.add(plantGroup);
-    const skidMat = new THREE.MeshStandardMaterial({ color: 0x38434a, metalness: 0.72, roughness: 0.42 });
-    const whitePlant = new THREE.MeshStandardMaterial({ color: 0xcbd4d7, metalness: 0.48, roughness: 0.38 });
-    const bluePlant = new THREE.MeshStandardMaterial({ color: 0x286b91, metalness: 0.55, roughness: 0.34 });
-    const plantBase = new THREE.Mesh(new THREE.BoxGeometry(4.9, 0.28, 2.45), skidMat);
-    plantBase.position.set(0, 0.16, 0);
-    plantBase.castShadow = true;
-    plantBase.receiveShadow = true;
-    plantGroup.add(plantBase);
-
-    // Four full-height treatment vessels.
-    for (let i = 0; i < 4; i++) {
-      const vessel = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.38, 1.72, 18), i < 2 ? whitePlant : bluePlant);
-      vessel.position.set(-1.65 + i * 0.95, 1.18, -0.42);
-      vessel.castShadow = true;
-      vessel.receiveShadow = true;
-      plantGroup.add(vessel);
-      const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.34, 0.34, 0.12, 18), skidMat);
-      cap.position.set(-1.65 + i * 0.95, 2.08, -0.42);
-      plantGroup.add(cap);
-      const foot = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.12, 18), skidMat);
-      foot.position.set(-1.65 + i * 0.95, 0.32, -0.42);
-      plantGroup.add(foot);
-    }
-
-    // Three horizontal membrane filter housings on the front of the skid.
-    for (let i = 0; i < 3; i++) {
-      const membrane = new THREE.Mesh(new THREE.CylinderGeometry(0.22, 0.22, 1.25, 16), whitePlant);
-      membrane.rotation.z = Math.PI / 2;
-      membrane.position.set(0.0, 0.72 + i * 0.43, 0.62);
-      membrane.castShadow = true;
-      plantGroup.add(membrane);
-      const endCap = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.08, 16), bluePlant);
-      endCap.rotation.z = Math.PI / 2;
-      endCap.position.set(0.66, 0.72 + i * 0.43, 0.62);
-      plantGroup.add(endCap);
-    }
-
-    // Pump motors and the treatment control cabinet.
-    for (let i = 0; i < 2; i++) {
-      const pump = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.62, 0.78), bluePlant);
-      pump.position.set(-1.35 + i * 2.7, 0.62, 0.82);
-      pump.castShadow = true;
-      plantGroup.add(pump);
-      const motor = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.24, 0.62, 12), skidMat);
-      motor.rotation.z = Math.PI / 2;
-      motor.position.set(-1.35 + i * 2.7, 0.66, 1.28);
-      plantGroup.add(motor);
-    }
-    const plantCabinet = new THREE.Mesh(new THREE.BoxGeometry(0.78, 1.45, 0.42), skidMat);
-    plantCabinet.position.set(2.05, 1.0, 0.72);
-    plantCabinet.castShadow = true;
-    plantGroup.add(plantCabinet);
-    const plantScreen = new THREE.Mesh(new THREE.BoxGeometry(0.48, 0.34, 0.035), new THREE.MeshStandardMaterial({ color: 0x123d49, emissive: 0x06232b, roughness: 0.35 }));
-    plantScreen.position.set(2.05, 1.28, 0.5);
-    plantGroup.add(plantScreen);
-
-    // Solid pipe manifolds between tanks and treatment equipment.
-    const makePipe = (a: THREE.Vector3, b: THREE.Vector3, radius = 0.075) => {
-      const delta = new THREE.Vector3().subVectors(b, a);
-      const pipe = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, delta.length(), 10), pipeSteel);
-      pipe.position.copy(a).add(b).multiplyScalar(0.5);
-      pipe.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), delta.normalize());
-      pipe.castShadow = true;
-      plantGroup.add(pipe);
-    };
-    makePipe(new THREE.Vector3(-2.25, 1.05, -0.95), new THREE.Vector3(-1.65, 1.05, -0.42));
-    makePipe(new THREE.Vector3(1.2, 1.55, -0.42), new THREE.Vector3(2.0, 1.55, -0.42));
-    makePipe(new THREE.Vector3(-2.2, 0.55, 0.9), new THREE.Vector3(2.0, 0.55, 0.9));
-
-    // LARGE BACKUP GENERATOR: sound-insulated industrial enclosure with
-    // radiator, exhaust stack, service panel and visible ventilation grilles.
-    const generatorGroup = new THREE.Group();
-    generatorGroup.name = 'large_emergency_backup_generator';
-    generatorGroup.position.set(1.65, y, 5.05);
-    f.add(generatorGroup);
-    const genBodyMat = new THREE.MeshStandardMaterial({ color: 0x48545a, metalness: 0.72, roughness: 0.42 });
-    const genAccentMat = new THREE.MeshStandardMaterial({ color: 0xd0a23a, metalness: 0.5, roughness: 0.48 });
-    const genBody = new THREE.Mesh(new THREE.BoxGeometry(3.25, 1.72, 1.95), genBodyMat);
-    genBody.position.set(0, 1.05, 0);
-    genBody.castShadow = true;
-    genBody.receiveShadow = true;
-    generatorGroup.add(genBody);
-    const genBase = new THREE.Mesh(new THREE.BoxGeometry(3.55, 0.24, 2.15), skidMat);
-    genBase.position.set(0, 0.16, 0);
-    genBase.castShadow = true;
-    generatorGroup.add(genBase);
-    const radiator = new THREE.Mesh(new THREE.BoxGeometry(0.78, 1.2, 1.45), skidMat);
-    radiator.position.set(-1.98, 1.0, 0);
-    radiator.castShadow = true;
-    generatorGroup.add(radiator);
-    for (let i = 0; i < 8; i++) {
-      const vent = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.82, 1.2), genAccentMat);
-      vent.position.set(1.64, 1.0, -0.56 + i * 0.16);
-      generatorGroup.add(vent);
-    }
-    const servicePanel = new THREE.Mesh(new THREE.BoxGeometry(0.58, 0.72, 0.08), skidMat);
-    servicePanel.position.set(0.78, 1.12, 1.02);
-    generatorGroup.add(servicePanel);
-    const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.15, 1.35, 12), skidMat);
-    exhaust.position.set(-1.0, 2.35, -0.55);
-    generatorGroup.add(exhaust);
-    const exhaustCap = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 0.12, 12), genAccentMat);
-    exhaustCap.position.set(-1.0, 2.83, -0.55);
-    generatorGroup.add(exhaustCap);
-
-    // Large day-tank fuel reservoir beside the generator, with a visible gauge.
-    const fuelTank = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.72, 1.95, 20), genAccentMat);
-    fuelTank.name = 'large_generator_fuel_reservoir';
-    fuelTank.position.set(5.65, y + 1.12, 5.05);
-    fuelTank.castShadow = true;
-    fuelTank.receiveShadow = true;
-    f.add(fuelTank);
-    const fuelTop = new THREE.Mesh(new THREE.CylinderGeometry(0.72, 0.72, 0.14, 20), skidMat);
-    fuelTop.position.set(5.65, y + 2.16, 5.05);
-    f.add(fuelTop);
-    const fuelGauge = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.72, 0.12), whitePlant);
-    fuelGauge.position.set(6.38, y + 1.2, 5.05);
-    f.add(fuelGauge);
-
-    // Electrical distribution cabinet, warning lights and robust storage crates.
-    const electricalCabinet = new THREE.Mesh(new THREE.BoxGeometry(1.1, 2.05, 0.62), skidMat);
-    electricalCabinet.name = 'farm_electrical_distribution_cabinet';
-    electricalCabinet.position.set(7.05, y + 1.18, 3.35); // Clear of the stairwell corridor.
-    electricalCabinet.castShadow = true;
-    f.add(electricalCabinet);
-    const panelFace = new THREE.Mesh(new THREE.BoxGeometry(0.72, 1.15, 0.045), genBodyMat);
-    panelFace.position.set(7.05, y + 1.25, 3.68);
-    f.add(panelFace);
-    for (let i = 0; i < 4; i++) {
-      const light = new THREE.Mesh(new THREE.SphereGeometry(0.09, 10, 8), new THREE.MeshStandardMaterial({ color: [0x25d07d, 0xf0c43c, 0x25a8df, 0xe34a4a][i], emissive: [0x0b542c, 0x5a4208, 0x073d58, 0x5a1010][i] }));
-      light.position.set(6.78 + i * 0.18, y + 1.72, 3.69);
-      f.add(light);
-    }
-    const crateMat = new THREE.MeshStandardMaterial({ color: 0x59664b, roughness: 0.92 });
-    for (let i = 0; i < 3; i++) {
-      const crate = new THREE.Mesh(new THREE.BoxGeometry(0.95, 0.9, 0.9), crateMat);
-      crate.name = `farm_supply_crate_${i}`;
-      crate.position.set(-1.0 + i * 1.1, y + 0.58, 5.35);
-      crate.castShadow = true;
-      crate.receiveShadow = true;
-      f.add(crate);
-    }
-
-    // Consistent hard-surface rendering: every machine and structural prop casts
-    // and receives shadows. Only actual water surfaces retain transparency.
-    f.traverse((object) => {
-      if (object instanceof THREE.Mesh) {
-        object.castShadow = true;
-        object.receiveShadow = true;
-      }
-    });
-    const utilityLight = new THREE.PointLight(0xd9f3df, 1.8, 18, 1.2);
-    utilityLight.position.set(0, y + 2.7, 0);
-    this.floorLights.push(utilityLight);
-    f.add(utilityLight);
-  }
-
-  // RETAINED BASEMENT: secure building operations and emergency stores.
-  private buildBasement() {
-    const b=this.basementGroup; const floor=new THREE.Mesh(new THREE.BoxGeometry(16,0.25,14),this.metalTrimMat);floor.position.set(0,-3.08,0);b.add(floor);
-    const wallMat=new THREE.MeshStandardMaterial({color:0x303941,roughness:0.8,side:THREE.DoubleSide});
-    for(const [x,z,w,d] of [[0,6.8,16,0.25],[0,-6.8,16,0.25],[-7.8,0,0.25,14],[7.8,0,0.25,14]] as number[][]){const wall=new THREE.Mesh(new THREE.BoxGeometry(w,3.0,d),wallMat);wall.position.set(x,-1.55,z);b.add(wall);}
-    const consoleMat=new THREE.MeshStandardMaterial({color:0x1d2b34,metalness:0.65});
-    for(let i=0;i<4;i++){const rack=new THREE.Mesh(new THREE.BoxGeometry(1.25,2.25,0.8),consoleMat);rack.position.set(-5.8+i*2.0,-1.75,5.6);b.add(rack);}
-    const desk=new THREE.Mesh(new THREE.BoxGeometry(4.5,0.85,1.4),this.metalTrimMat);desk.position.set(0,-2.55,0.8);b.add(desk);
-    for(let i=0;i<3;i++){const screen=new THREE.Mesh(new THREE.BoxGeometry(1.0,0.72,0.08),new THREE.MeshBasicMaterial({color:0x16bcd0}));screen.position.set(-1.2+i*1.2,-1.85,0.05);b.add(screen);}
-    for(let i=0;i<4;i++){const crate=new THREE.Mesh(new THREE.BoxGeometry(1.0,0.9,0.9),new THREE.MeshStandardMaterial({color:0x6a7552}));crate.position.set(5.4,-2.55,-4.5+i*1.7);b.add(crate);}
-
-    // Comfortable Leather Armchairs / Seating Area (facing South toward TV)
-    const chairMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.75 });
-    for (const cx of [-1.1, 1.1]) {
-      const chair = new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.75, 0.9), chairMat);
-      chair.position.set(cx, -2.55, -2.8);
-      chair.rotation.y = 0; // Facing South toward TV
-      const cushion = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.15, 0.8), new THREE.MeshStandardMaterial({ color: 0x334155 }));
-      cushion.position.set(cx, -2.3, -2.8);
-      b.add(chair, cushion);
-    }
-    const coffeeTable = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.38, 0.8), this.metalTrimMat);
-    coffeeTable.position.set(0, -2.75, -4.2);
-    b.add(coffeeTable);
-
-    // BASEMENT TV: Mounted directly opposite sitting chairs on South wall at seated eye level (-1.65m), facing chairs
-    const bTvStand = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.8, 0.4), this.metalTrimMat);
-    bTvStand.position.set(0, -2.6, -6.4);
-    const bTvFrame = new THREE.Mesh(new THREE.BoxGeometry(2.2, 1.3, 0.08), new THREE.MeshStandardMaterial({ color: 0x0f172a, metalness: 0.85 }));
-    bTvFrame.position.set(0, -1.65, -6.6);
-
-    const bTvMat = new THREE.MeshBasicMaterial({ map: this.basementTvTexture });
-    this.basementTvMesh = new THREE.Mesh(new THREE.PlaneGeometry(2.1, 1.2), bTvMat);
-    this.basementTvMesh.rotation.y = 0; // Directly facing North towards the chairs
-    this.basementTvMesh.position.set(0, -1.65, -6.55);
-    b.add(bTvStand, bTvFrame, this.basementTvMesh);
-    const lamp=new THREE.PointLight(0x8bd9e8,1.5,18,1.3);lamp.position.set(0,-0.6,0);b.add(lamp);
-  }
-
-  private buildFloor5Pool() {
-    const f4 = this.floor5Group;
-    const yOff = 12.8;
-    const deck = this.createSlabWithStairwell(this.floorTileMat, 0.3, yOff + 0.15);
-    f4.add(deck);
-
-    // Raised rooftop swimming pool: the surrounding deck remains dry and walkable.
-    const poolGroup = new THREE.Group();
-    poolGroup.name = 'rooftop_swimming_pool_with_exit_steps';
-    poolGroup.position.set(-2.5, 0, 0);
-    f4.add(poolGroup);
-    const poolOuterMat = new THREE.MeshStandardMaterial({ color: 0x315a68, roughness: 0.42 });
-    const poolTileMat = new THREE.MeshStandardMaterial({ color: 0x8ed4df, roughness: 0.28 });
-    const poolWaterMat = new THREE.MeshStandardMaterial({
-      color: 0x08a9d0, roughness: 0.08, metalness: 0.12,
-      transparent: true, opacity: 0.76, side: THREE.DoubleSide
-    });
-    const poolBottom = new THREE.Mesh(new THREE.BoxGeometry(6.0, 0.28, 6.0), poolOuterMat);
-    poolBottom.position.set(0, yOff - 1.25, 0);
-    poolBottom.receiveShadow = true;
-    poolGroup.add(poolBottom);
-    // Four raised basin walls; a stair opening is left on the south/east side.
-    const poolWalls = [
-      [0, yOff - 0.60, -2.92, 6.0, 1.9, 0.22],
-      [-2.92, yOff - 0.60, 0, 0.22, 1.9, 6.0],
-      [2.92, yOff - 0.60, 0, 0.22, 1.9, 6.0],
-      [-1.15, yOff - 0.60, 2.92, 3.7, 1.9, 0.22],
-      [2.35, yOff - 0.60, 2.92, 1.15, 1.9, 0.22]
-    ];
-    for (const [x,y,z,w,h,d] of poolWalls) {
-      const wall = new THREE.Mesh(new THREE.BoxGeometry(w,h,d), poolTileMat);
-      wall.position.set(x,y,z); wall.castShadow = true; wall.receiveShadow = true;
-      poolGroup.add(wall);
-    }
-    const water = new THREE.Mesh(new THREE.PlaneGeometry(5.55, 5.55), poolWaterMat);
-    water.rotation.x = -Math.PI / 2;
-    water.position.set(0, yOff + 0.02, 0);
-    poolGroup.add(water);
-    this.poolWaterMesh = water;
-    // Three broad submerged steps provide a visible, climbable entry/exit.
-    for (let i = 0; i < 4; i++) {
-      const step = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.16, 0.62), poolTileMat);
-      step.position.set(1.2, yOff - 1.02 + i * 0.28, 2.25 - i * 0.58);
-      step.receiveShadow = true;
-      poolGroup.add(step);
-    }
-
-    const glassRailMat = new THREE.MeshStandardMaterial({ color: 0xb9e7f2, roughness: 0.10, metalness: 0.16, envMapIntensity: 1.45, transparent: true, opacity: 0.34, side: THREE.DoubleSide, depthWrite: false });
-    const railFrameMat = new THREE.MeshStandardMaterial({ color: 0x59636d, metalness: 0.78, roughness: 0.28 });
-    const railSegments = [[0,6.85,16,0.12],[0,-6.85,16,0.12],[-7.85,0,0.12,13.7],[7.85,0,0.12,13.7]] as number[][];
-    for (const [x,z,w,d] of railSegments) {
-      const glass = new THREE.Mesh(new THREE.BoxGeometry(w,1.05,d), glassRailMat);
-      glass.position.set(x,yOff+0.68,z); glass.castShadow = true; glass.receiveShadow = true; f4.add(glass);
-      const cap = new THREE.Mesh(new THREE.BoxGeometry(w,0.07,d+0.04), railFrameMat);
-      cap.position.set(x,yOff+1.22,z); f4.add(cap);
-      const postCount = Math.max(2, Math.floor(Math.max(w,d)/2.5)+1);
-      for (let i=0;i<postCount;i++) {
-        const t=i/(postCount-1)-0.5;
-        const post = new THREE.Mesh(new THREE.BoxGeometry(0.09,1.28,0.09),railFrameMat);
-        post.position.set(x+(w>d?t*w:0),yOff+0.64,z+(d>=w?t*d:0)); f4.add(post);
-      }
-    }
-    const pergolaMat = new THREE.MeshStandardMaterial({ color: 0x343b42, metalness: 0.55, roughness: 0.45 });
-    // Keep pergola frame over pool lounge deck on the west, completely clear of the east stairwell opening (X >= 3.5).
-    for (const x of [-0.2, 1.8]) for (const z of [-2.4, 2.4]) {
-      const post = new THREE.Mesh(new THREE.BoxGeometry(0.16, 2.4, 0.16), pergolaMat);
-      post.position.set(x, yOff + 1.35, z);
-      f4.add(post);
-    }
-    for (let i = 0; i < 5; i++) {
-      const beam = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.12, 0.14), pergolaMat);
-      beam.position.set(0.8, yOff + 2.55, -2.4 + i * 1.2);
-      f4.add(beam);
-    }
-    const benchMat = new THREE.MeshStandardMaterial({ color: 0x7b573c, roughness: 0.8 });
-    for (const z of [-5.2, 5.2]) {
-      const bench = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.22, 0.65), benchMat);
-      bench.position.set(1.2, yOff + 0.45, z);
-      f4.add(bench);
-    }
-    // Small garden planters, outdoor lights and sun loungers sit outside the pool
-    // footprint and remain completely clear of the stairwell landing and corridor.
-    const planterMat = new THREE.MeshStandardMaterial({ color: 0x626a55, roughness: 0.88 });
-    const foliageMat = new THREE.MeshStandardMaterial({ color: 0x3d7b45, roughness: 0.9 });
-    for (const z of [-3.7, 3.7]) {
-      const planter = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.55, 1.0), planterMat);
-      planter.position.set(-6.55, yOff + 0.42, z);
-      planter.castShadow = true;
-      planter.receiveShadow = true;
-      f4.add(planter);
-      for (let i = 0; i < 3; i++) {
-        const shrub = new THREE.Mesh(new THREE.SphereGeometry(0.24, 8, 7), foliageMat);
-        shrub.position.set(-6.9 + i * 0.35, yOff + 0.9, z);
-        shrub.castShadow = true;
-        f4.add(shrub);
-      }
-    }
-    const loungerMat = new THREE.MeshStandardMaterial({ color: 0xd8e0e5, roughness: 0.72 });
-    // Lounger 1: North-East corner deck, facing south toward pool (far north of the stair landing)
-    const loungerNE = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.22, 0.78), loungerMat);
-    loungerNE.position.set(5.6, yOff + 0.34, 5.0);
-    loungerNE.rotation.y = Math.PI / 2;
-    loungerNE.castShadow = true;
-    f4.add(loungerNE);
-    const backNE = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.12, 0.78), loungerMat);
-    backNE.position.set(5.6, yOff + 0.58, 5.55);
-    backNE.rotation.x = -0.35;
-    f4.add(backNE);
-
-    // Lounger 2: Spacious West deck, facing east toward pool
-    const loungerW = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.22, 0.78), loungerMat);
-    loungerW.position.set(-5.8, yOff + 0.34, 0.0);
-    loungerW.castShadow = true;
-    f4.add(loungerW);
-    const backW = new THREE.Mesh(new THREE.BoxGeometry(0.72, 0.12, 0.78), loungerMat);
-    backW.position.set(-6.35, yOff + 0.58, 0.0);
-    backW.rotation.z = 0.35;
-    f4.add(backW);
-
-    for (const [x, z] of [[-6.8, 0], [0.8, -5.6], [0.8, 5.6]] as number[][]) {
-      const lamp = new THREE.PointLight(0xffdfad, 0.55, 7, 1.6);
-      lamp.position.set(x, yOff + 2.1, z);
-      f4.add(lamp);
-    }
-
-    // Compact solar backup array supports the apartment emergency-power storyline.
-    const solarMat = new THREE.MeshStandardMaterial({ color: 0x123b5b, metalness:0.65, roughness:0.25 });
-    for (let i=0;i<3;i++) {
-      const panel = new THREE.Mesh(new THREE.BoxGeometry(1.8,0.08,1.15),solarMat);
-      panel.position.set(-5.7+i*1.7,yOff+0.55,-4.5); panel.rotation.x=-0.12; f4.add(panel);
-    }
-  }
-
-  // ==========================================
-  // CONTINUOUS 5-FLOOR STAIRCASE
-  // ==========================================
-  private buildContinuousStaircase() {
-    const sc = this.staircaseGroup;
-    // Switchback/U-turn staircase: first flight left-to-right landing,
-    // alternating flights connect all five above-ground levels.
-    // All four ascending flights stay inside the existing stairwell opening.
-    const stairMat = new THREE.MeshStandardMaterial({ color: 0x3d4147, metalness: 0.5, roughness: 0.6 });
-    const handrailMat = new THREE.MeshStandardMaterial({ color: 0xd4af37, metalness: 0.9, roughness: 0.3 });
-    const flightZ0 = -3.5;
-    const flightZ1 = 0.7;
-    const flightDepth = flightZ1 - flightZ0;
-    const numSteps = 16;
-    const stepH = 3.2 / numSteps;
-    const stepD = flightDepth / numSteps;
-    const lanes = [5.25, 6.75, 5.25, 6.75];
-    // Short descending access flight from Floor 1 into the retained basement.
-    const basementFlight = new THREE.Group(); basementFlight.name = 'basement_access_stair_flight';
-    for (let i=0;i<numSteps;i++) {
-      const t=(i+0.5)/numSteps;
-      const step=new THREE.Mesh(new THREE.BoxGeometry(1.18,stepH,stepD+0.04),stairMat);
-      step.position.set(6.75,-(i+0.5)*stepH,flightZ0+t*flightDepth); step.castShadow=true; basementFlight.add(step);
-    }
-    sc.add(basementFlight);
-
-    for (let floorIdx = 0; floorIdx < 4; floorIdx++) {
-      const baseH = floorIdx * 3.2;
-      const laneX = lanes[floorIdx];
-      const reverse = floorIdx % 2 === 1;
-      const flightGroup = new THREE.Group();
-      flightGroup.name = `stair_flight_${floorIdx + 1}_switchback`;
-      for (let stepIndex = 0; stepIndex < numSteps; stepIndex++) {
-        const t = (stepIndex + 0.5) / numSteps;
-        const z = reverse ? flightZ1 - t * flightDepth : flightZ0 + t * flightDepth;
-        const step = new THREE.Mesh(new THREE.BoxGeometry(1.18, stepH, stepD + 0.04), stairMat);
-        step.position.set(laneX, baseH + (stepIndex + 0.5) * stepH, z);
-        step.castShadow = true;
-        step.receiveShadow = true;
-        flightGroup.add(step);
-      }
-
-      // Parallel handrails and balusters on both sides of each flight.
-      for (const sideX of [laneX - 0.66, laneX + 0.66]) {
-        const rail = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, Math.hypot(3.2, flightDepth), 8), handrailMat);
-        rail.rotation.x = Math.PI / 2 - Math.atan2(3.2, flightDepth) * (reverse ? -1 : 1);
-        rail.position.set(sideX, baseH + 1.75, (flightZ0 + flightZ1) / 2);
-        flightGroup.add(rail);
-        for (let b = 0; b <= 8; b++) {
-          const t = b / 8;
-          const baluster = new THREE.Mesh(new THREE.CylinderGeometry(0.022, 0.022, 0.9, 6), handrailMat);
-          baluster.position.set(sideX, baseH + 0.5 + t * 2.7, reverse ? flightZ1 - t * flightDepth : flightZ0 + t * flightDepth);
-          flightGroup.add(baluster);
-        }
-      }
-      sc.add(flightGroup);
-
-      // Full-width alternating landings join the ends of successive flights.
-      const landingZ = reverse ? flightZ0 : flightZ1;
-      const landing = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.25, 1.15), this.floorTileMat);
-      landing.position.set(6.0, baseH + 3.2 + 0.12, landingZ);
-      landing.receiveShadow = true;
-      sc.add(landing);
-    }
-  }
-
-  // ==========================================
-  // OPTION A: NEO-TACTICAL GLASS & GRAPHITE EXTERIOR FACADE
-  // ==========================================
-  private buildExteriorFacade() {
-    const ext = this.exteriorWalls;
-    // Luxury fortress envelope: keep the reinforced frame opaque, while the
-    // infill panels become low-iron panoramic glazing. The physics perimeter
-    // remains registered separately, so this visual-only material change does
-    // not open holes in the apartment or alter player collision.
-    const neoPanelMat = new THREE.MeshPhysicalMaterial({
-      color: 0x8fc8d8,
-      roughness: 0.12,
-      metalness: 0.18,
-      transmission: 0.18,
-      transparent: true,
-      opacity: 0.24,
-      thickness: 0.18,
-      ior: 1.46,
-      side: THREE.DoubleSide,
-      depthWrite: false,
-      envMapIntensity: 1.35,
-    });
-    const cyanAccentMat = new THREE.MeshBasicMaterial({ color: 0x5be7ff });
-    const windowFrameMat = new THREE.MeshStandardMaterial({ color: 0x151e28, metalness: 0.8, roughness: 0.3 });
-    const windowGlassMat = new THREE.MeshStandardMaterial({
-      color: 0x5cc4df,
-      metalness: 0.25,
-      roughness: 0.12,
-      transparent: true,
-      opacity: 0.4,
-      side: THREE.DoubleSide,
-    });
-
-    // Corner Pillars & Neo-Tactical Cyan Cornices for 4 enclosed floors
-    for (const [cx, cz] of [[-7.9, -6.9], [7.9, -6.9], [-7.9, 6.9], [7.9, 6.9]]) {
-      const pillar = new THREE.Mesh(new THREE.BoxGeometry(0.8, 13.0, 0.8), this.metalTrimMat);
-      pillar.position.set(cx, 6.5, cz);
-      pillar.castShadow = true;
-      ext.add(pillar);
-    }
-
-    for (let f = 1; f <= 4; f++) {
-      const cornice = new THREE.Mesh(new THREE.BoxGeometry(16.4, 0.28, 14.4), this.metalTrimMat);
-      cornice.position.set(0, f * 3.2, 0);
-      const ledN = new THREE.Mesh(new THREE.BoxGeometry(16.5, 0.06, 0.08), cyanAccentMat);
-      ledN.position.set(0, f * 3.2, 7.22);
-      const ledS = ledN.clone();
-      ledS.position.z = -7.22;
-      ext.add(cornice, ledN, ledS);
-    }
-
-    // 1. North Wall (Back) with 2.4m central doorway for rear sliding patio doors
-    this.northWallMesh = new THREE.Group();
-    const northWallF1Left = new THREE.Mesh(new THREE.BoxGeometry(6.8, 3.2, 0.5), neoPanelMat);
-    northWallF1Left.position.set(-4.6, 1.6, 6.8);
-    northWallF1Left.castShadow = true;
-    const northWallF1Right = new THREE.Mesh(new THREE.BoxGeometry(6.8, 3.2, 0.5), neoPanelMat);
-    northWallF1Right.position.set(4.6, 1.6, 6.8);
-    northWallF1Right.castShadow = true;
-    const northWallF1Lintel = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.6, 0.5), neoPanelMat);
-    northWallF1Lintel.position.set(0, 2.9, 6.8);
-    const northWallUpper = new THREE.Mesh(new THREE.BoxGeometry(16.0, 9.6, 0.5), neoPanelMat);
-    northWallUpper.position.set(0, 8.0, 6.8);
-    northWallUpper.castShadow = true;
-    this.northWallMesh.add(northWallF1Left, northWallF1Right, northWallF1Lintel, northWallUpper);
-    ext.add(this.northWallMesh);
-
-    // 2. East Wall (Stairwell Bay)
-    this.eastWallMesh = new THREE.Group();
-    const eastWall = new THREE.Mesh(new THREE.BoxGeometry(0.5, 12.8, 14.0), neoPanelMat);
-    eastWall.position.set(7.8, 6.4, 0);
-    eastWall.castShadow = true;
-    this.eastWallMesh.add(eastWall);
-    ext.add(this.eastWallMesh);
-
-    // 3. West Wall — cut a 2.0 m wide Neo-Tactical passage at Z = -1.8 (Z in [-2.8, -0.8]) on Floors 1..4 into West Wing
-    this.westWallMesh = new THREE.Group();
-    const westWallSouth = new THREE.Mesh(new THREE.BoxGeometry(0.5, 12.8, 4.2), neoPanelMat);
-    westWallSouth.position.set(-7.8, 6.4, -4.9);
-    westWallSouth.castShadow = true;
-    const westWallNorth = new THREE.Mesh(new THREE.BoxGeometry(0.5, 12.8, 7.8), neoPanelMat);
-    westWallNorth.position.set(-7.8, 6.4, 3.1);
-    westWallNorth.castShadow = true;
-    this.westWallMesh.add(westWallSouth, westWallNorth);
-    for (let fl = 0; fl < 4; fl++) {
-      const lintel = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.65, 2.0), windowFrameMat);
-      lintel.position.set(-7.8, fl * 3.2 + 2.88, -1.8);
-      this.westWallMesh.add(lintel);
-    }
-    ext.add(this.westWallMesh);
-
-    // 4. South Wall (Front Entrance Facade with Neo-Tactical Canopy)
-    this.southWallMesh = new THREE.Group();
-    const southWallLeft = new THREE.Mesh(new THREE.BoxGeometry(7.0, 12.8, 0.5), neoPanelMat);
-    southWallLeft.position.set(-4.5, 6.4, -6.8);
-    southWallLeft.castShadow = true;
-    const southWallRight = new THREE.Mesh(new THREE.BoxGeometry(7.0, 12.8, 0.5), neoPanelMat);
-    southWallRight.position.set(4.5, 6.4, -6.8);
-    southWallRight.castShadow = true;
-    const southWallTop = new THREE.Mesh(new THREE.BoxGeometry(2.0, 9.6, 0.5), neoPanelMat);
-    southWallTop.position.set(0, 8.0, -6.8);
-    const frontCanopy = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.18, 1.5), windowFrameMat);
-    frontCanopy.position.set(0, 3.08, -7.65);
-    const frontCanopyLed = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.06, 0.08), cyanAccentMat);
-    frontCanopyLed.position.set(0, 3.08, -8.4);
-    this.southWallMesh.add(southWallLeft, southWallRight, southWallTop, frontCanopy, frontCanopyLed);
-    ext.add(this.southWallMesh);
-
-    // Continuous dark-metal curtain-wall mullions visually tie the individual
-    // panes into a floor-to-ceiling glass facade while retaining the existing
-    // structural concrete/metal corner frame and all original room geometry.
-    const curtainMullionMat = new THREE.MeshStandardMaterial({ color: 0x202a34, metalness: 0.86, roughness: 0.24 });
-    for (let level = 0; level < 4; level++) {
-      const y = level * 3.2 + 1.75;
-      for (const x of [-4.5, 4.5]) {
-        const pane = new THREE.Mesh(new THREE.BoxGeometry(2.4, 1.65, 0.07), windowGlassMat);
-        pane.position.set(x, y, -7.075);
-        const frame = new THREE.Mesh(new THREE.BoxGeometry(2.58, 1.82, 0.12), windowFrameMat);
-        frame.position.set(x, y, -7.12);
-        const mullion = new THREE.Mesh(new THREE.BoxGeometry(0.07, 1.65, 0.14), windowFrameMat);
-        mullion.position.set(x, y, -7.13);
-        this.southWallMesh.add(frame, pane, mullion);
-      }
-      for (const z of [-4.2, 0, 4.2]) {
-        const paneN = new THREE.Mesh(new THREE.BoxGeometry(2.1, 1.55, 0.07), windowGlassMat);
-        paneN.position.set(z, y, 7.075);
-        const frameN = new THREE.Mesh(new THREE.BoxGeometry(2.26, 1.72, 0.12), windowFrameMat);
-        frameN.position.set(z, y, 7.12);
-        this.northWallMesh.add(frameN, paneN);
-      }
-      // Fine vertical mullions at each bay edge create a premium curtain-wall rhythm.
-      for (const x of [-7.45, -5.3, -2.65, 0, 2.65, 5.3, 7.45]) {
-        const southMullion = new THREE.Mesh(new THREE.BoxGeometry(0.075, 2.75, 0.16), curtainMullionMat);
-        southMullion.position.set(x, level * 3.2 + 1.6, -7.13);
-        const northMullion = southMullion.clone();
-        northMullion.position.z = 7.13;
-        this.southWallMesh.add(southMullion);
-        this.northWallMesh.add(northMullion);
-      }
-    }
-
-    // Premium residential finish package. These are facade-only visual details:
-    // they sit outside the existing envelope and do not replace rooms, doors,
-    // stairs, interactive objects, or the established physics perimeter.
-    const stoneCladdingMat = new THREE.MeshStandardMaterial({
-      color: 0xd7cbbb,
-      roughness: 0.72,
-      metalness: 0.04,
-    });
-    const bronzeFinMat = new THREE.MeshStandardMaterial({
-      color: 0x34343a,
-      roughness: 0.3,
-      metalness: 0.82,
-    });
-    const planterMat = new THREE.MeshStandardMaterial({ color: 0x343b3d, roughness: 0.78 });
-    const foliageMat = new THREE.MeshStandardMaterial({ color: 0x47764b, roughness: 0.92 });
-    const warmLightMat = new THREE.MeshStandardMaterial({
-      color: 0xffe4b8,
-      emissive: 0xffb65d,
-      emissiveIntensity: 1.15,
-      roughness: 0.3,
-    });
-
-    // Travertine feature piers and recessed bronze fins give the glass facade
-    // a clear structural rhythm without changing the building footprint.
-    for (const x of [-7.35, 7.35]) {
-      const pier = new THREE.Mesh(new THREE.BoxGeometry(0.42, 12.55, 0.22), stoneCladdingMat);
-      pier.position.set(x, 6.38, -7.17);
-      pier.castShadow = true;
-      pier.receiveShadow = true;
-      this.southWallMesh.add(pier);
-      for (let fin = 0; fin < 4; fin++) {
-        const verticalFin = new THREE.Mesh(new THREE.BoxGeometry(0.055, 2.55, 0.18), bronzeFinMat);
-        verticalFin.position.set(x + (x < 0 ? 0.34 : -0.34), 1.6 + fin * 3.2, -7.23);
-        this.southWallMesh.add(verticalFin);
-      }
-    }
-
-    // Slim planted facade ledges on upper levels. They are kept above the
-    // ground-floor entrance and clear of the pre-existing balcony decks.
-    for (const level of [2, 3]) {
-      const y = level * 3.2 - 0.22;
-      for (const z of [-7.58, 7.58]) {
-        const trough = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.38, 0.62), planterMat);
-        trough.position.set(0, y, z);
-        trough.castShadow = true;
-        trough.receiveShadow = true;
-        ext.add(trough);
-        for (let plant = 0; plant < 5; plant++) {
-          const shrub = new THREE.Mesh(new THREE.SphereGeometry(0.22, 9, 7), foliageMat);
-          shrub.position.set(-1.65 + plant * 0.82, y + 0.34, z);
-          shrub.scale.set(1.15, 0.8, 0.9);
-          shrub.castShadow = true;
-          ext.add(shrub);
-        }
-      }
-    }
-
-    // Warm architectural sconces at the front corners and discreet security
-    // cameras under the upper overhangs reinforce the luxury-fortress theme.
-    for (const x of [-7.35, -2.2, 2.2, 7.35]) {
-      for (const level of [0, 1, 2, 3]) {
-        const y = level * 3.2 + 2.55;
-        const sconce = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.48, 0.12), warmLightMat);
-        sconce.position.set(x, y, -7.34);
-        this.southWallMesh.add(sconce);
-        if (level === 0 || level === 2) {
-          const glow = new THREE.PointLight(0xffc987, 0.32, 4.2, 2);
-          glow.position.set(x, y - 0.18, -7.55);
-          this.southWallMesh.add(glow);
-        }
-      }
-    }
-    for (const x of [-7.0, 7.0]) {
-      const cameraHousing = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.12, 0.28), bronzeFinMat);
-      cameraHousing.position.set(x, 12.35, -7.42);
-      cameraHousing.rotation.x = -0.18;
-      this.southWallMesh.add(cameraHousing);
-      const lens = new THREE.Mesh(new THREE.SphereGeometry(0.055, 8, 8), cyanAccentMat);
-      lens.position.set(x, 12.31, -7.56);
-      this.southWallMesh.add(lens);
-    }
-
-    // A restrained stone portal frames the existing front door without
-    // narrowing its opening or moving the original entrance interaction.
-    for (const x of [-1.55, 1.55]) {
-      const portal = new THREE.Mesh(new THREE.BoxGeometry(0.24, 3.05, 0.34), stoneCladdingMat);
-      portal.position.set(x, 1.55, -7.2);
-      portal.castShadow = true;
-      this.southWallMesh.add(portal);
-    }
-    const portalHeader = new THREE.Mesh(new THREE.BoxGeometry(3.34, 0.22, 0.42), stoneCladdingMat);
-    portalHeader.position.set(0, 3.08, -7.2);
-    this.southWallMesh.add(portalHeader);
-  }
 
   // ==========================================
   // ENCLOSED RESIDENTIAL PROPERTY + BACKYARD POOL
@@ -3302,48 +961,176 @@ export class ApartmentBuilding {
 
 // UPDATE LOOP & CAMERA-AWARE VISIBILITY
   // ==========================================
+  public setEnvironmentState(gameTimeMinutes: number, weatherType: string): void {
+    this.currentGameTimeMinutes = gameTimeMinutes;
+    this.currentWeatherType = weatherType;
+  }
+
+  public getAurelionSnapshot(): AurelionDashboardSnapshot | null {
+    if (!this.aurelion) return null;
+    const telemetry = this.turrets?.getTurretsTelemetry() || [];
+    const turretsOnline = telemetry.filter((t) => t.health > 0).length;
+    const turretKills = telemetry.reduce((sum, t) => sum + t.killsCount, 0);
+    const gatesOpenCount =
+      (this.compoundGateOpen ? 1 : 0) +
+      (this.compoundPedestrianDoorsOpen[0] ? 1 : 0) +
+      (this.compoundPedestrianDoorsOpen[1] ? 1 : 0) +
+      (this.vehicleGateOpen ? 1 : 0) +
+      (this.vehicleGate2Open ? 1 : 0);
+    return this.aurelion.systems.getSnapshot({
+      turretsOnline,
+      turretKills,
+      gatesOpenCount,
+      doorsSecured: !this.state.doorOpen && !this.patioDoorOpen,
+    });
+  }
+
+  public exportAurelionState(): AurelionSaveState | undefined {
+    return this.aurelion?.systems.exportState();
+  }
+
+  public restoreAurelionState(saved?: AurelionSaveState | null): void {
+    this.aurelion?.systems.restoreState(saved);
+  }
+
+  public exportNexusState(): NexusSaveState | undefined {
+    return this.nexus?.systems.exportState();
+  }
+
+  public restoreNexusState(saved?: NexusSaveState | null): void {
+    this.nexus?.systems.restoreState(saved);
+    if (this.nexus) {
+      UnifiedPhysicsManager.getInstance()?.setDoorOpenState(
+        'nexus_f1_restricted_gate',
+        this.nexus.systems.restrictedRoomsUnlocked
+      );
+    }
+  }
+
+  public getLocationSummary(playerPos: THREE.Vector3): { level: string; roomName: string } | null {
+    const rel = new THREE.Vector3(
+      playerPos.x - this.origin.x,
+      playerPos.y - this.origin.y,
+      playerPos.z - this.origin.z
+    );
+    const nexusRel = new THREE.Vector3(rel.x + 48, rel.y, rel.z - 24);
+    const nexusLoc = this.nexus?.getLocationSummary(nexusRel);
+    if (nexusLoc) {
+      return { level: nexusLoc.level, roomName: nexusLoc.roomName };
+    }
+    if (!this.aurelion) return null;
+    return this.aurelion.getLocationSummary(rel);
+  }
+
+  public nexusLiveProvider?: () => NexusLiveContext;
+
   public update(
     delta: number,
     playerPos: THREE.Vector3 = this.origin,
     cameraPos: THREE.Vector3 = this.origin,
     zombieMgr?: ZombieManager | null,
     wildlifeMgr?: WildlifeManager | null,
-    aiTrainMgr?: any
+    aiTrainMgr?: any,
+    nexusLiveCtx?: NexusLiveContext
   ) {
     this.objectAnimator.update(delta);
     for (const binding of this.apartmentObjectBindings.values()) binding.sync();
     this.turrets?.update(delta, zombieMgr || null, wildlifeMgr || null, playerPos);
     this.basementRoom?.update(delta, aiTrainMgr || null);
-    this.commandScreens?.update(delta, aiTrainMgr || null, {
-      mainGateOpen: this.compoundGateOpen,
-      vehicleGate1Open: this.vehicleGateOpen,
-      vehicleGate2Open: this.vehicleGate2Open,
-      westPedOpen: this.compoundPedestrianDoorsOpen[0],
-      eastPedOpen: this.compoundPedestrianDoorsOpen[1],
-      garageShutterOpen: this.garageShutterOpen,
-      turretCount: 20,
-      activeThreats: zombieMgr ? Math.min(99, zombieMgr.zombies.filter((z) => z.state !== 'dead').length) : 0,
-    });
+    if (this.nexus) {
+      const playerRelNexus = new THREE.Vector3(
+        playerPos.x - this.origin.x + 48,
+        playerPos.y - this.origin.y,
+        playerPos.z - this.origin.z - 24
+      );
+      const camRelNexus = new THREE.Vector3(
+        cameraPos.x - this.origin.x + 48,
+        cameraPos.y - this.origin.y,
+        cameraPos.z - this.origin.z - 24
+      );
+      const resolvedCtx = nexusLiveCtx || this.nexusLiveProvider?.();
+      const fallbackLive: NexusLiveContext = resolvedCtx || {
+        gameTimeMinutes: this.currentGameTimeMinutes,
+        dayCount: 1,
+        isNight: false,
+        isDusk: false,
+        trains: aiTrainMgr?.getDispatchTelemetry?.() || [],
+        stationSnapshot: aiTrainMgr?.getStationOperationsSnapshot?.() || null,
+        compound: {
+          mainGateOpen: this.compoundGateOpen,
+          westPedOpen: this.compoundPedestrianDoorsOpen[0],
+          eastPedOpen: this.compoundPedestrianDoorsOpen[1],
+          vehicleGate1Open: this.vehicleGateOpen,
+          vehicleGate2Open: this.vehicleGate2Open,
+          garageShutterOpen: this.garageShutterOpen,
+          turrets: this.turrets?.getTurretsTelemetry() || [],
+          aurelionSnapshot: this.getAurelionSnapshot(),
+          vehicles: [],
+        },
+        player: {
+          position: [playerPos.x, playerPos.y, playerPos.z],
+          yaw: 0,
+          health: 100,
+          maxHealth: 100,
+          infection: 0,
+          radiation: 0,
+        },
+        npcs: [],
+        outbreak: {
+          isLocalOutbreakActive: false,
+          globalMetrics: {
+            apocalypticSeverity: 0,
+            powerGridStability: 1,
+            totalHealthy: 0,
+            totalTransforming: 0,
+            totalInfected: 0,
+            totalEvacuated: 0,
+            overrunCitiesCount: 0,
+            activeLocalPedestrians: 0,
+          },
+          cities: [],
+          activeZombies: [],
+          wildlifeCount: wildlifeMgr?.creatures?.length ?? 0,
+          territorialWildlifeCount: 0,
+          weather: {
+            weather: (this.currentWeatherType as any) || 'clear',
+            intensity: 0,
+            visibilityPercent: 100,
+            temperatureDelta: 0,
+            fogDensityMultiplier: 1,
+            rainCatchmentBonus: 0,
+            isHazardousToxic: false,
+            lightningFlash: 0,
+            overcast: 0,
+            windStrength: 0,
+            rainIntensity: 0,
+          },
+          supplyDrop: null,
+          extraction: { active: false, beaconUid: null, remainingSeconds: 0, totalSeconds: 90, completed: false },
+          discoveredChunksCount: 0,
+          exploredBounds: null,
+          baseAlarmArmed: false,
+          baseResearchUnlockedCount: 0,
+          baseResearchTotalCount: 0,
+          baseLevel: 2,
+        },
+      };
+      this.nexus.update(delta, playerRelNexus, camRelNexus, fallbackLive, { x: this.origin.x, z: this.origin.z }, (unlocked) => {
+        UnifiedPhysicsManager.getInstance()?.setDoorOpenState('nexus_f1_restricted_gate', unlocked);
+      });
+    }
+
     // 1. Ceiling Fan Rotation
     if (this.state.fanOn && this.fanBlades) {
       this.fanBlades.rotation.y += this.state.fanSpeed * delta;
     }
 
     // 2. Dynamic House & Bathroom Animations
-    // 2A. Pool Water Wave Ripple Animation
-    if (this.poolWaterMesh) {
-      const t = performance.now() * 0.002;
-      this.poolWaterMesh.position.y = 12.82 + Math.sin(t) * 0.025;
-      if (this.backyardPoolWaterMesh) this.backyardPoolWaterMesh.position.y = 0.48 + Math.sin(t * 0.8) * 0.018;
-    }
-
-    // 2B. Bathroom Door Hinge Smooth Swing
     if (this.bathroomDoorGroup) {
       const targetAngle = this.bathroomDoorOpen ? -Math.PI / 2 : 0;
       this.bathroomDoorGroup.rotation.y = THREE.MathUtils.damp(this.bathroomDoorGroup.rotation.y, targetAngle, 8, delta);
     }
 
-    // 2C. Wardrobe Doors Hinge Smooth Swing
     if (this.wardrobeLeftDoor && this.wardrobeRightDoor) {
       const targetL = this.wardrobeOpen ? -1.5 : 0;
       const targetR = this.wardrobeOpen ? 1.5 : 0;
@@ -3351,13 +1138,11 @@ export class ApartmentBuilding {
       this.wardrobeRightDoor.rotation.y = THREE.MathUtils.damp(this.wardrobeRightDoor.rotation.y, targetR, 8, delta);
     }
 
-    // 2D. Medicine Cabinet Mirror Door Hinge Smooth Swing
     if (this.bathroomCabinetDoor) {
       const targetC = this.bathroomCabinetOpen ? -1.4 : 0;
       this.bathroomCabinetDoor.rotation.y = THREE.MathUtils.damp(this.bathroomCabinetDoor.rotation.y, targetC, 8, delta);
     }
 
-    // 2E. Bathroom Shower Falling Spray & Steam
     if (this.bathroomShowerRunning && this.bathroomShowerWaterGroup) {
       this.bathroomShowerWaterGroup.children.forEach((drop, idx) => {
         drop.position.y = -0.95 + Math.sin(performance.now() * 0.02 + idx) * 0.15;
@@ -3368,12 +1153,10 @@ export class ApartmentBuilding {
       }
     }
 
-    // 2F. Bathtub Warm Water Ripples
     if (this.bathtubWaterMesh) {
       this.bathtubWaterMesh.position.y = 0.72 + Math.sin(performance.now() * 0.0025) * 0.012;
     }
 
-    // 2G. Toilet Flush Swirl Effect
     if (this.toiletFlushing && this.toiletWaterMesh) {
       this.toiletFlushTimer -= delta;
       this.toiletWaterMesh.rotation.z += delta * 15.0;
@@ -3386,7 +1169,6 @@ export class ApartmentBuilding {
       }
     }
 
-    // 2H. Kitchen Stove Burner Flame Flicker
     if (this.kitchenStoveOn && this.kitchenStoveBurners.length > 0) {
       const flicker = 1.0 + Math.sin(performance.now() * 0.01) * 0.25;
       this.kitchenStoveBurners.forEach((burner) => {
@@ -3395,47 +1177,24 @@ export class ApartmentBuilding {
       });
     }
 
-    // 3. Camera-Aware Cutaway Architecture:
-    const relX = playerPos.x - this.origin.x;
-    const relY = playerPos.y - this.origin.y;
-    const relZ = playerPos.z - this.origin.z;
-
-    const isInsideBuilding = Math.abs(relX) < 15.2 && Math.abs(relZ) < 12.2 && relY >= -3.5 && relY <= 17.0;
-
-    if (isInsideBuilding) {
-      // In 3rd person mode, hide the wall between camera and player so the interior is NEVER obstructed
-      const camRelZ = cameraPos.z - this.origin.z;
-      const camRelX = cameraPos.x - this.origin.x;
-
-      this.southWallMesh.visible = !(camRelZ < relZ - 0.5);
-      this.northWallMesh.visible = !(camRelZ > relZ + 0.5);
-      this.westWallMesh.visible = !(camRelX < relX - 0.5);
-      this.eastWallMesh.visible = !(camRelX > relX + 0.5);
-
-      // Basement cutaway and exact floor-aware visibility.
-      this.basementGroup.visible = relY < 0;
-      const activeFloor = relY < 3.2 ? 1
-        : relY < 6.4 ? 2
-        : relY < 9.6 ? 3
-        : relY < 12.8 ? 4 : 5;
-      this.floor1Group.visible = activeFloor === 1;
-      this.floor2Group.visible = activeFloor === 2;
-      this.floor3Group.visible = activeFloor === 3;
-      this.floor4Group.visible = activeFloor === 4;
-      this.floor5Group.visible = activeFloor === 5;
-    } else {
-      // Player is outside: all exterior walls and floors visible
-      this.southWallMesh.visible = true;
-      this.northWallMesh.visible = true;
-      this.westWallMesh.visible = true;
-      this.eastWallMesh.visible = true;
-      this.floor1Group.visible = true;
-      this.floor2Group.visible = true;
-      this.floor3Group.visible = true;
-      this.floor4Group.visible = true;
-      this.floor5Group.visible = true;
-      this.basementGroup.visible = true;
-    }
+    // 3. THE AURELION 9-Level Simulation, Elevators, Hydroponics & Camera-Aware Cutaway
+    const playerRelPos = new THREE.Vector3(
+      playerPos.x - this.origin.x,
+      playerPos.y - this.origin.y,
+      playerPos.z - this.origin.z
+    );
+    const cameraRelPos = new THREE.Vector3(
+      cameraPos.x - this.origin.x,
+      cameraPos.y - this.origin.y,
+      cameraPos.z - this.origin.z
+    );
+    this.aurelion.update(delta, playerRelPos, cameraRelPos, this.currentGameTimeMinutes, this.currentWeatherType, {
+      tapsActive: (this.bathroomTapRunning ? 1 : 0) + (this.kitchenTapRunning ? 1 : 0),
+      showerActive: this.bathroomShowerRunning,
+      stoveOn: this.kitchenStoveOn,
+      acOn: this.state.acOn,
+      basementTvOn: this.basementTvOn,
+    });
   }
 
   // ==========================================
@@ -3486,9 +1245,34 @@ export class ApartmentBuilding {
       | 'wardrobe'
       | 'computer'
       | 'wallClock'
-      | 'bedsideLamp';
+      | 'bedsideLamp'
+      | 'aurelionElevator'
+      | 'aurelionGenerator'
+      | 'aurelionRefuel'
+      | 'aurelionWaterPurifier'
+      | 'aurelionMaintenance'
+      | 'aurelionHydroBed'
+      | 'aurelionCinema'
+      | 'aurelionGym'
+      | 'aurelionRefreshment'
+      | 'aurelionWeather'
+      | 'aurelionDocument'
+      | 'nexusElevator'
+      | 'nexusFloor1Terminal'
+      | 'nexusCompoundRadar'
+      | 'nexusOutbreakRadar'
+      | 'nexusScreen'
+      | 'nexusStaff';
     label: string;
     prompt: string;
+    elevatorId?: ElevatorId;
+    nexusElevatorId?: NexusElevatorId;
+    nexusFloor?: NexusFloorNumber;
+    nexusScreenId?: string;
+    nexusFloor1Tab?: 'visitor' | 'staff' | 'directory' | 'building' | 'security';
+    staffBriefing?: string;
+    hydroBedId?: number;
+    documentId?: string;
   } | null {
     if (this.basementRoom) {
       const basementInteraction = this.basementRoom.getInteraction(pos);
@@ -3521,49 +1305,36 @@ export class ApartmentBuilding {
     if (Math.abs(relX + 24) < 5.0 && Math.abs(relZ - 51.0) < 3.0 && relY < 5.0) {
       return { id: 'vehicleGate2', label: 'Gate 5 — North Vehicle Entrance', prompt: `Press [E] to ${this.vehicleGate2Open ? 'Close' : 'Open'} North Vehicle Gate` };
     }
-    if (
-      (Math.hypot(relX + 53.8, relZ - 22.8) < 2.2 && relY < 29.0) ||
-      (Math.hypot(relX + 55.2, relZ - 22.8) < 2.2 && relY < 29.0)
-    ) {
-      return { id: 'commandElevator', label: 'Railway Command Elevator (8 Floors)', prompt: `Press [E] to travel to the next command-centre floor (current ${this.commandElevatorFloor + 1}/8)` };
-    }
-    // Floor 3 West Surveillance Desk opens 5km Security Radar; all other Command Center consoles & video walls open Railway Operations
-    if (relX >= -56.0 && relX <= -50.2 && Math.abs(relZ - 26.25) < 2.6 && relY >= 7.0 && relY <= 10.8) {
-      return { id: 'securityCommandCenter', label: 'Perimeter Security & 20-Turret Console', prompt: 'Press [E] to Access 5km Security Radar & Compound Controls' };
-    }
-    if (relX >= -56.5 && relX <= -41.5 && (Math.abs(relZ - 26.25) < 2.6 || Math.abs(relZ - 32.0) < 2.6) && relY >= 0.4 && relY <= 28.2) {
-      return { id: 'railwayOperations', label: 'Railway Command 25-Screen Terminal', prompt: 'Press [E] to access live 6-train dispatch, telemetry and schedules' };
+    // Structure 2: THE NEXUS (8-Floor Intelligence Tower at local -48, +24)
+    const nexusHit: NexusInteractionResult | null = this.nexus?.getInteraction(relX + 48, relY, relZ - 24) ?? null;
+    if (nexusHit) {
+      return {
+        id: nexusHit.id,
+        label: nexusHit.label,
+        prompt: nexusHit.prompt,
+        nexusElevatorId: nexusHit.elevatorId,
+        nexusFloor: nexusHit.floor,
+        nexusScreenId: nexusHit.screenId,
+        nexusFloor1Tab: nexusHit.floor1Tab,
+        staffBriefing: nexusHit.staffBriefing,
+      };
     }
     // Level 2 Vertical Garage Diagnostic Workbench
     if (Math.abs(relX + 43.8) < 3.0 && Math.abs(relZ + 35.2) < 2.4 && relY >= 4.2 && relY <= 7.8) {
       return { id: 'garageDoor', label: 'Vertical Garage Bay & Armor Terminal', prompt: `Press [E] to ${this.garageShutterOpen ? 'Lower' : 'Raise'} All 4 Garage Bay Shutters` };
     }
 
-    // --- BASEMENT INTERACTIONS ---
-    if (relY < -1.0) {
-      if (Math.hypot(relX - 0, relZ - (-5.2)) < 3.2) {
-        return {
-          id: 'basementTV',
-          label: 'Basement Media Television',
-          prompt: `Press [E] to Turn ${this.basementTvOn ? 'OFF' : 'ON'} Basement Screen`,
-        };
-      }
+    // THE AURELION bounds check (Structure 1: 30x24m)
+    if (Math.abs(relX) > 15.8 || Math.abs(relZ) > 13.2) return null;
+
+    // Elevators & multi-level Aurelion interactions checked first (so elevator calls work on every served floor including F1)
+    const aurHit = this.aurelion?.getInteraction(relX, relY, relZ) as AurelionInteractionResult | null;
+    if (aurHit && (aurHit.id === 'aurelionElevator' || relY < -1.8 || relY >= 3.0)) {
+      return aurHit as any;
     }
 
-    // Apartment interactions are limited to the building footprint.
-    if (Math.abs(relX) > 11 || Math.abs(relZ) > 10) return null;
-
-    // --- FLOOR 1 INTERACTIONS ---
-    if (relY < 3.0) {
-      // Rear sliding glass patio doors at (0, 6.8)
-      if (Math.hypot(relX - 0, relZ - 6.8) < 2.6) {
-        return {
-          id: 'patioDoor',
-          label: 'Rear Patio Sliding Doors',
-          prompt: `Press [E] to ${this.patioDoorOpen ? 'Close' : 'Open'} Rear Patio Doors`,
-        };
-      }
-
+    // --- PRESERVED FLOOR 1 RESIDENTIAL & BATHROOM INTERACTIONS (y ~ 0.245) ---
+    if (relY >= -1.8 && relY < 3.4) {
       // Security Command Center Screen at (2.38, -0.5)
       if (Math.hypot(relX - 2.38, relZ - (-0.5)) < 2.8) {
         return {
@@ -3572,13 +1343,9 @@ export class ApartmentBuilding {
           prompt: 'Press [E] to Access 5km Security Radar & Command Center',
         };
       }
-
-      // 1. Double Bed at (-5.5, 3.8)
       if (Math.hypot(relX - (-5.5), relZ - 3.8) < 2.5) {
         return { id: 'bed', label: 'Apartment Bed', prompt: 'Press [E] to Sleep in Bed' };
       }
-
-      // 2. Bedside Lamp at (-7.2, 4.8)
       if (Math.hypot(relX - (-7.2), relZ - 4.8) < 1.8) {
         return {
           id: 'bedsideLamp',
@@ -3586,8 +1353,6 @@ export class ApartmentBuilding {
           prompt: `Press [E] to ${this.bedsideLampOn ? 'Turn OFF' : 'Turn ON'} Night Lamp`,
         };
       }
-
-      // 3. Bedroom Wardrobe at (-7.2, 1.4)
       if (Math.hypot(relX - (-7.2), relZ - 1.4) < 2.2) {
         return {
           id: 'wardrobe',
@@ -3595,13 +1360,9 @@ export class ApartmentBuilding {
           prompt: `Press [E] to ${this.wardrobeOpen ? 'Close' : 'Open'} Wardrobe Doors`,
         };
       }
-
-      // 4. Study Computer Desk at (-3.5, 0.6)
       if (Math.hypot(relX - (-3.5), relZ - 0.6) < 2.0) {
         return { id: 'computer', label: 'Personal Computer', prompt: 'Press [E] to Sit & Use Computer Terminal' };
       }
-
-      // 5. Smart TV at (-5.5, 0.0)
       if (Math.hypot(relX - (-5.5), relZ - 0.0) < 2.5) {
         return {
           id: 'tv',
@@ -3609,28 +1370,18 @@ export class ApartmentBuilding {
           prompt: `Press [E] to Turn ${this.state.tvOn ? 'OFF' : 'ON'} News Television`,
         };
       }
-
-      // 6. Living Room Sofa at (0, 0.5)
       if (Math.hypot(relX - 0, relZ - 0.5) < 2.2) {
         return { id: 'sofa', label: 'Living Room Sofa', prompt: 'Press [E] to Sit on Living Room Sofa' };
       }
-
-      // 7. Smartphone on Coffee Table at (0.3, -1.2)
       if (Math.hypot(relX - 0.3, relZ - (-1.2)) < 1.8) {
         return { id: 'phone', label: 'Smartphone', prompt: 'Press [E] to Check In-Game Phone Messages' };
       }
-
-      // 8. Living Room Wall Clock at (-1.2, -1.8)
       if (Math.hypot(relX - (-1.2), relZ - (-1.8)) < 2.2) {
         return { id: 'wallClock', label: 'Living Room Wall Clock', prompt: 'Press [E] to Check Wall Clock Time' };
       }
-
-      // 9. Dining Table & Chairs at (2.2, 1.2)
       if (Math.hypot(relX - 2.2, relZ - 1.2) < 2.4) {
         return { id: 'diningChair', label: 'Dining Area', prompt: 'Press [E] to Sit at Dining Table' };
       }
-
-      // 10. Kitchen Stove at (5.8, 4.6)
       if (Math.hypot(relX - 5.8, relZ - 4.6) < 2.0) {
         return {
           id: 'kitchenStove',
@@ -3638,18 +1389,12 @@ export class ApartmentBuilding {
           prompt: `Press [E] to ${this.kitchenStoveOn ? 'Turn OFF' : 'Ignite'} Stove Burners`,
         };
       }
-
-      // 11. Kitchen Sink at (5.8, 2.5)
       if (Math.hypot(relX - 5.8, relZ - 2.5) < 2.0) {
         return { id: 'kitchenSink', label: 'Kitchen Sink', prompt: 'Press [E] to Wash Dishes & Drink Water' };
       }
-
-      // 12. Refrigerator at (4.5, 5.8)
       if (Math.hypot(relX - 4.5, relZ - 5.8) < 2.2) {
         return { id: 'fridge', label: 'Apartment Refrigerator', prompt: 'Press [E] to Open Refrigerator Food Storage' };
       }
-
-      // 13. Relocated First-Aid Medical Bed at (3.6, -5.2)
       if (Math.hypot(relX - 3.6, relZ - (-5.2)) < 2.2) {
         return {
           id: 'medicalBed',
@@ -3657,11 +1402,6 @@ export class ApartmentBuilding {
           prompt: 'Press [E] to Rest on First-Aid Bed & Heal',
         };
       }
-
-      // ==============================================================
-      // BATHROOM SUITE INTERACTIONS (West Wing: X in [-7.5, -3.2], Z in [-6.6, -3.2])
-      // ==============================================================
-      // Bathroom Door at (-3.5, -4.1)
       if (Math.hypot(relX - (-3.5), relZ - (-4.1)) < 2.0) {
         return {
           id: 'bathroomDoor',
@@ -3669,8 +1409,6 @@ export class ApartmentBuilding {
           prompt: `Press [E] to ${this.bathroomDoorOpen ? 'Close' : 'Open'} Bathroom Door`,
         };
       }
-
-      // Bathroom Light Switch at (-3.6, -3.7)
       if (Math.hypot(relX - (-3.6), relZ - (-3.7)) < 1.8) {
         return {
           id: 'bathroomLight',
@@ -3678,8 +1416,6 @@ export class ApartmentBuilding {
           prompt: `Press [E] to ${this.bathroomLightOn ? 'Turn OFF' : 'Turn ON'} Bathroom Light`,
         };
       }
-
-      // Medicine Cabinet at (-5.6, -3.4)
       if (Math.hypot(relX - (-5.6), relZ - (-3.4)) < 2.0) {
         return {
           id: 'bathroomCabinet',
@@ -3687,8 +1423,6 @@ export class ApartmentBuilding {
           prompt: `Press [E] to ${this.bathroomCabinetOpen ? 'Close' : 'Open'} Medicine Cabinet`,
         };
       }
-
-      // Vanity Sink & Tap at (-4.5, -3.45)
       if (Math.hypot(relX - (-4.5), relZ - (-3.45)) < 2.0) {
         if (Math.hypot(relX - (-4.5), relZ - (-3.45)) < 1.3) {
           return {
@@ -3699,33 +1433,21 @@ export class ApartmentBuilding {
         }
         return { id: 'washSink', label: 'Bathroom Washbasin', prompt: 'Press [E] to Wash Hands & Face at Sink' };
       }
-
-      // Bathroom Mirror at (-4.5, -3.32)
       if (Math.hypot(relX - (-4.5), relZ - (-3.32)) < 2.2) {
         return { id: 'mirrorLook', label: 'Bathroom Mirror', prompt: 'Press [E] to Look in Bathroom Mirror' };
       }
-
-      // Towel Rack at (-3.6, -5.2)
       if (Math.hypot(relX - (-3.6), relZ - (-5.2)) < 1.8) {
         return { id: 'towel', label: 'Bath Towel Rack', prompt: 'Press [E] to Dry Hands with Clean Towel' };
       }
-
-      // Glass Shower Stall at (-6.75, -3.95)
       if (Math.hypot(relX - (-6.75), relZ - (-3.95)) < 2.2) {
         return { id: 'shower', label: 'Shower Stall', prompt: 'Press [E] to Take Refreshing Warm Shower' };
       }
-
-      // Freestanding Porcelain Bathtub at (-6.5, -5.7)
       if (Math.hypot(relX - (-6.5), relZ - (-5.7)) < 2.2) {
         return { id: 'bathtub', label: 'Porcelain Bathtub', prompt: 'Press [E] to Relax in Warm Bathtub' };
       }
-
-      // Modern Ceramic Toilet at (-4.4, -6.0)
       if (Math.hypot(relX - (-4.4), relZ - (-6.0)) < 2.0) {
         return { id: 'toilet', label: 'Ceramic Toilet', prompt: 'Press [E] to Use Toilet & Flush' };
       }
-
-      // 14. Ceiling fan switch
       if (Math.hypot(relX - 0, relZ - 0.5) < 2.2) {
         return {
           id: 'fan',
@@ -3733,8 +1455,6 @@ export class ApartmentBuilding {
           prompt: `Press [E] to ${this.state.fanOn ? 'Stop' : 'Start'} Ceiling Fan`,
         };
       }
-
-      // 15. Air conditioner switch at (-2.5, -6.6)
       if (Math.hypot(relX - (-2.5), relZ - (-6.6)) < 2.2) {
         return {
           id: 'ac',
@@ -3742,61 +1462,10 @@ export class ApartmentBuilding {
           prompt: `Press [E] to ${this.state.acOn ? 'Turn OFF' : 'Turn ON'} Air Conditioner`,
         };
       }
-
-      // 16. Front entrance door at (0, -6.9)
-      if (Math.hypot(relX - 0, relZ - (-6.9)) < 2.2) {
-        return {
-          id: 'door',
-          label: 'Apartment Front Door',
-          prompt: `Press [E] to ${this.state.doorOpen ? 'Close' : 'Open'} Entrance Door`,
-        };
-      }
     }
 
-    // --- FLOOR 2 (MEDICAL CENTRE) INTERACTION ---
-    if (relY >= 3.0 && relY < 6.2) {
-      if (Math.hypot(relX - 2.6, relZ - (-4.8)) < 3.4) {
-        return { id: 'medicalClinic', label: 'Medical Centre Reception', prompt: 'Press [E] to Access Medical Centre' };
-      }
-      // Four patient beds on Floor 2
-      if (
-        Math.hypot(relX - (-5.7), relZ - (-3.5)) < 2.0 ||
-        Math.hypot(relX - (-2.7), relZ - (-3.5)) < 2.0 ||
-        Math.hypot(relX - (-5.7), relZ - 1.5) < 2.0 ||
-        Math.hypot(relX - (-2.7), relZ - 1.5) < 2.0
-      ) {
-        return { id: 'medicalBed', label: 'Hospital Patient Bed', prompt: 'Press [E] to Rest on Hospital Bed & Heal' };
-      }
-    }
-
-    // --- FLOOR 3 (ARMORY) INTERACTIONS ---
-    if (relY >= 6.0 && relY < 9.4) {
-      if (Math.hypot(relX - 2.0, relZ - 0.0) < 3.2 || Math.hypot(relX - (-5.0), relZ - 0.0) < 4.0) {
-        return {
-          id: 'armory',
-          label: 'Sector Armory & Weapon Vault',
-          prompt: 'Press [E] to Access 100-Item Fictional Armory Vault',
-        };
-      }
-    }
-
-    // --- FLOOR 4 (SURVIVAL FARM / UTILITIES) ---
-    if (relY >= 9.2 && relY < 12.6 && Math.abs(relX) < 7.5 && Math.abs(relZ) < 6.8) {
-      return { id: 'apartmentStatus', label: 'Survival Farm Utility Controls', prompt: 'Press [E] to Inspect Farm, Water and Power Controls' };
-    }
-
-    // --- FLOOR 5 (ROOFTOP POOL) INTERACTIONS ---
-    if (relY >= 12.4) {
-      if (Math.hypot(relX - (-2.5), relZ - 0.0) < 5.0) {
-        return {
-          id: 'pool',
-          label: 'Rooftop Swimming Pool',
-          prompt: 'Press [E] to Dive into Rooftop Swimming Pool',
-        };
-      }
-    }
-
-    return null;
+    // Fallback to Aurelion coordinator (F1 grand entrance / patio doors / concierge desk)
+    return aurHit as any;
   }
 
   public togglePatioDoor(): boolean {
@@ -4317,60 +1986,86 @@ export class ApartmentBuilding {
     return points;
   }
 
-  /** Floor support for companion NPCs on the apartment's five-floor switchback stairs. */
+  /** Floor support for companion NPCs across THE AURELION's 9 levels and switchback staircase. */
   public getCompanionSurfaceHeight(position: THREE.Vector3, currentY: number, targetY: number): number {
     const relX = position.x - this.origin.x;
     const relZ = position.z - this.origin.z;
-    const inBuilding = relX >= -7.8 && relX <= 7.8 && relZ >= -6.8 && relZ <= 6.8;
+    const inBuilding = relX >= -15.2 && relX <= 15.2 && relZ >= -12.2 && relZ <= 12.2;
     if (!inBuilding) return getTerrainHeight(position.x, position.z);
-    const stairwell = relX >= 4.5 && relX <= 7.5 && relZ >= -3.8 && relZ <= 1.0;
-    const currentFloor = THREE.MathUtils.clamp(Math.floor(Math.max(0,currentY-0.245)/3.2),0,4);
-    const targetFloor = THREE.MathUtils.clamp(Math.round(Math.max(0,targetY-0.245)/3.2),0,4);
-    if (stairwell && currentFloor < 4 && targetFloor > currentFloor) {
-      const flight=currentFloor, laneX=[5.25,6.75,5.25,6.75][flight];
-      if (Math.abs(relX-laneX)<1.25) { const p=THREE.MathUtils.clamp((relZ+3.5)/4.2,0,1); const progress=flight%2===0?p:1-p; return 0.245+flight*3.2+progress*3.2; }
+
+    const curSpec = getLevelForLocalY(currentY);
+    const tgtSpec = getLevelForLocalY(targetY);
+    const stairwell =
+      relX >= AURELION_STAIR_VOID.minX - 0.3 &&
+      relX <= AURELION_STAIR_VOID.maxX + 0.3 &&
+      relZ >= AURELION_STAIR_VOID.minZ - 0.6 &&
+      relZ <= AURELION_STAIR_VOID.maxZ + 0.6;
+
+    if (stairwell && curSpec.index !== tgtSpec.index) {
+      const ascending = tgtSpec.index > curSpec.index;
+      const flightIdx = ascending ? curSpec.index : curSpec.index - 1;
+      if (flightIdx >= 0 && flightIdx < AURELION_LEVEL_ORDER.length - 1) {
+        const fromLvl = AURELION_LEVELS[AURELION_LEVEL_ORDER[flightIdx]];
+        const toLvl = AURELION_LEVELS[AURELION_LEVEL_ORDER[flightIdx + 1]];
+        const p = THREE.MathUtils.clamp(
+          (relZ - AURELION_STAIR_VOID.zStart) / (AURELION_STAIR_VOID.zEnd - AURELION_STAIR_VOID.zStart),
+          0,
+          1
+        );
+        const progress = flightIdx % 2 === 0 ? p : 1 - p;
+        return fromLvl.floorY + progress * (toLvl.floorY - fromLvl.floorY);
+      }
     }
-    if (stairwell && currentFloor > 0 && targetFloor < currentFloor) {
-      const flight=currentFloor-1, laneX=[5.25,6.75,5.25,6.75][flight];
-      if (Math.abs(relX-laneX)<1.25) { const p=THREE.MathUtils.clamp((relZ+3.5)/4.2,0,1); const progress=flight%2===1?p:1-p; return 0.245+(flight+1)*3.2-progress*3.2; }
-    }
-    return 0.245+currentFloor*3.2;
+
+    return curSpec.floorY;
   }
 
   /**
    * Return a legal doorway waypoint when a companion and its destination are
-   * on opposite sides of the mansion or compound boundary. Closed access points
+   * on opposite sides of THE AURELION or compound boundary. Closed access points
    * are deliberately excluded, so the companion remains blocked by the wall.
    */
   public getCompanionNavigationWaypoint(from: THREE.Vector3, to: THREE.Vector3): THREE.Vector3 | null {
     const ox = this.origin.x;
     const oz = this.origin.z;
-    const buildingFrontZ = oz - 6.9;
-    const insideBuilding = (p: THREE.Vector3) => p.x > ox - 8.2 && p.x < ox + 8.2 && p.z > buildingFrontZ && p.z < oz + 7.2;
+    const buildingFrontZ = oz - 11.9;
+    const insideBuilding = (p: THREE.Vector3) =>
+      p.x > ox - 15.2 && p.x < ox + 15.2 && p.z > buildingFrontZ && p.z < oz + 12.2;
     const fromInBuilding = insideBuilding(from);
     const toInBuilding = insideBuilding(to);
 
-    // Follow the actual switchback staircase when player and companion occupy different floors.
-    if (fromInBuilding && toInBuilding && Math.abs(from.y-to.y)>1.6) {
-      const currentFloor=THREE.MathUtils.clamp(Math.floor(Math.max(0,from.y-0.245)/3.2),0,4);
-      const targetFloor=THREE.MathUtils.clamp(Math.round(Math.max(0,to.y-0.245)/3.2),0,4);
-      if (currentFloor!==targetFloor) {
-        const ascending=targetFloor>currentFloor, flight=ascending?currentFloor:currentFloor-1;
-        if (flight>=0 && flight<=3) {
-          const reverse=flight%2===1, laneX=[5.25,6.75,5.25,6.75][flight];
-          const startZ=ascending?(reverse?0.7:-3.5):(reverse?-3.5:0.7);
-          const endZ=ascending?(reverse?-3.5:0.7):(reverse?0.7:-3.5);
-          const inFlight=Math.abs((from.x-ox)-laneX)<1.25 && from.z>=oz-3.9 && from.z<=oz+1.1;
-          return new THREE.Vector3(ox+laneX,from.y,oz+(inFlight?endZ:startZ));
+    // Follow the actual 9-level switchback staircase when player and companion occupy different floors.
+    if (fromInBuilding && toInBuilding && Math.abs(from.y - to.y) > 1.8) {
+      const curSpec = getLevelForLocalY(from.y);
+      const tgtSpec = getLevelForLocalY(to.y);
+      if (curSpec.index !== tgtSpec.index) {
+        const ascending = tgtSpec.index > curSpec.index;
+        const flightIdx = ascending ? curSpec.index : curSpec.index - 1;
+        if (flightIdx >= 0 && flightIdx < AURELION_LEVEL_ORDER.length - 1) {
+          const reverse = flightIdx % 2 === 1;
+          const laneX = flightIdx % 2 === 0 ? AURELION_STAIR_VOID.eastLaneX : AURELION_STAIR_VOID.westLaneX;
+          const zS = AURELION_STAIR_VOID.zStart;
+          const zE = AURELION_STAIR_VOID.zEnd;
+          const startZ = ascending ? (reverse ? zE : zS) : (reverse ? zS : zE);
+          const endZ = ascending ? (reverse ? zS : zE) : (reverse ? zE : zS);
+          const inFlight =
+            Math.abs((from.x - ox) - laneX) < 1.1 &&
+            from.z >= oz + zS - 0.5 &&
+            from.z <= oz + zE + 0.5;
+          return new THREE.Vector3(ox + laneX, from.y, oz + (inFlight ? endZ : startZ));
         }
       }
     }
 
-    // Mansion front entrance: both leaves must be open for traversal.
+    // THE AURELION Grand Front Entrance (South Portal at oz - 11.9): both leaves must be open.
     if (fromInBuilding !== toInBuilding && this.state.doorOpen) {
-      const insideZ = buildingFrontZ + 1.15;
-      const outsideZ = buildingFrontZ - 1.15;
-      return new THREE.Vector3(ox, Math.max(0, getTerrainHeight(ox, fromInBuilding ? outsideZ : insideZ)), fromInBuilding ? outsideZ : insideZ);
+      const insideZ = buildingFrontZ + 1.35;
+      const outsideZ = buildingFrontZ - 1.35;
+      return new THREE.Vector3(
+        ox,
+        Math.max(0, getTerrainHeight(ox, fromInBuilding ? outsideZ : insideZ)),
+        fromInBuilding ? outsideZ : insideZ
+      );
     }
 
     const isInsideCompound = (p: THREE.Vector3) =>
@@ -4396,17 +2091,7 @@ export class ApartmentBuilding {
     return null;
   }
 
-  /** Operates the 8-floor command-centre lift and returns the player's destination. */
-  public cycleCommandElevator(): THREE.Vector3 {
-    this.commandElevatorFloor = (this.commandElevatorFloor + 1) % 8;
-    const localY = 0.78 + this.commandElevatorFloor * 3.45;
-    if (this.commandElevatorPlatform) this.commandElevatorPlatform.position.y = localY;
-    UnifiedPhysicsManager.getInstance()?.updateColliderPosition(
-      'rebirth_command_elevator_platform',
-      [this.origin.x - 55.2, localY, this.origin.z + 22.8]
-    );
-    return new THREE.Vector3(this.origin.x - 55.2, 1.05 + this.commandElevatorFloor * 3.45, this.origin.z + 22.8);
-  }
+  /** Operates THE NEXUS dual-lift system cleanly. */
 
   public toggleGarageShutter(): boolean {
     this.garageShutterOpen = !this.garageShutterOpen;
@@ -4484,10 +2169,24 @@ export class ApartmentBuilding {
   public isFrontDoorOpen(): boolean { return this.state.doorOpen; }
 
   public checkPlayerInPool(playerPos: THREE.Vector3): boolean {
-    // The redesigned compound uses the rooftop infinity pool; the former backyard pool is removed.
-    return playerPos.x >= this.origin.x - 5.5 && playerPos.x <= this.origin.x + 0.5 &&
-      playerPos.z >= this.origin.z - 2.8 && playerPos.z <= this.origin.z + 2.8 &&
-      playerPos.y >= 11.2 && playerPos.y <= 14.0;
+    const rx = playerPos.x - this.origin.x;
+    const rz = playerPos.z - this.origin.z;
+    const ry = playerPos.y - this.origin.y;
+    const inF7Pool =
+      rx >= AURELION_ROOFTOP_INFINITY_POOL.localMinX &&
+      rx <= AURELION_ROOFTOP_INFINITY_POOL.localMaxX &&
+      rz >= AURELION_ROOFTOP_INFINITY_POOL.localMinZ &&
+      rz <= AURELION_ROOFTOP_INFINITY_POOL.localMaxZ &&
+      ry >= AURELION_ROOFTOP_INFINITY_POOL.basinBottomY - 0.1 &&
+      ry <= AURELION_ROOFTOP_INFINITY_POOL.deckY + 1.2;
+    const inF6Pool =
+      rx >= AURELION_F6_INDOOR_POOL.localMinX &&
+      rx <= AURELION_F6_INDOOR_POOL.localMaxX &&
+      rz >= AURELION_F6_INDOOR_POOL.localMinZ &&
+      rz <= AURELION_F6_INDOOR_POOL.localMaxZ &&
+      ry >= AURELION_F6_INDOOR_POOL.basinBottomY - 0.1 &&
+      ry <= AURELION_F6_INDOOR_POOL.deckY + 1.2;
+    return inF7Pool || inF6Pool;
   }
 
   // ==========================================
@@ -4502,60 +2201,12 @@ export class ApartmentBuilding {
     // support. Registering these slabs as ordinary solid boxes made the movement
     // resolver push the player out through the nearest exterior wall.
 
-    // 1. Exterior perimeter walls.
-    // North wall has 2.4m central doorway with sliding glass patio doors to the backyard
-    physMgr.registerBoxCollider('apt_wall_north_l', 'wall', [ox - 4.6, 1.6, oz + 6.8], 6.8, 3.2, 0.6);
-    physMgr.registerBoxCollider('apt_wall_north_r', 'wall', [ox + 4.6, 1.6, oz + 6.8], 6.8, 3.2, 0.6);
-    physMgr.registerBoxCollider('apt_wall_north_upper', 'wall', [ox, 8.0, oz + 6.8], 16.0, 9.6, 0.6);
-    physMgr.registerBoxCollider(
-      'apt_patio_door',
-      'wall',
-      [ox, 1.4, oz + 6.8],
-      2.4,
-      2.6,
-      0.2,
-      0,
-      this.patioDoorOpen
-    );
-    physMgr.registerBoxCollider('apt_wall_east', 'wall', [ox + 7.8, 6.4, oz], 0.6, 12.8, 14.0);
-    // West wall split at Z=-1.8 so Floors 1-4 connect openly into the explorable West Wing
-    physMgr.registerBoxCollider('apt_wall_west_s', 'wall', [ox - 7.8, 6.4, oz - 4.9], 0.6, 12.8, 4.2);
-    physMgr.registerBoxCollider('apt_wall_west_n', 'wall', [ox - 7.8, 6.4, oz + 3.1], 0.6, 12.8, 7.8);
-    physMgr.registerBoxCollider('apt_wall_south_l', 'wall', [ox - 4.5, 6.4, oz - 6.8], 7.0, 12.8, 0.6);
-    physMgr.registerBoxCollider('apt_wall_south_r', 'wall', [ox + 4.5, 6.4, oz - 6.8], 7.0, 12.8, 0.6);
-
-    // Front double entrance door
-    physMgr.registerBoxCollider(
-      'apt_front_door',
-      'wall',
-      [ox, 1.4, oz - 6.9],
-      1.96,
-      2.38,
-      0.22,
-      0,
-      this.state.doorOpen
-    );
-    // 2. Rooftop pool basin walls. The water surface is a swim zone;
-    // the dry deck remains supported at y=9.9 by PlayerController.
-    physMgr.registerBoxCollider('apt_pool_rim_n', 'wall', [ox - 2.5, 12.2, oz - 2.92], 6.0, 1.9, 0.22);
-    physMgr.registerBoxCollider('apt_pool_rim_w', 'wall', [ox - 5.42, 12.2, oz], 0.22, 1.9, 6.0);
-    physMgr.registerBoxCollider('apt_pool_rim_e', 'wall', [ox + 0.42, 12.2, oz], 0.22, 1.9, 6.0);
-    physMgr.registerBoxCollider('apt_pool_rim_s_l', 'wall', [ox - 3.65, 12.2, oz + 2.92], 3.7, 1.9, 0.22);
-    physMgr.registerBoxCollider('apt_pool_rim_s_r', 'wall', [ox - 0.15, 12.2, oz + 2.92], 1.15, 1.9, 0.22);
-
-    physMgr.registerBoxCollider('apt_roof_glass_rail_n', 'wall', [ox, 13.48, oz + 6.85], 16.0, 1.05, 0.12);
-    physMgr.registerBoxCollider('apt_roof_glass_rail_s', 'wall', [ox, 13.48, oz - 6.85], 16.0, 1.05, 0.12);
-    physMgr.registerBoxCollider('apt_roof_glass_rail_w', 'wall', [ox - 7.85, 13.48, oz], 0.12, 1.05, 13.7);
-    physMgr.registerBoxCollider('apt_roof_glass_rail_e', 'wall', [ox + 7.85, 13.48, oz], 0.12, 1.05, 13.7);
-    for (let i=0;i<4;i++) physMgr.registerBoxCollider(`apt_roof_pool_step_${i}`, 'prop', [ox - 1.3, 11.78+i*0.28, oz + 2.25-i*0.58], 1.35, 0.16, 0.62);
-    for (const z of [-5.2, 5.2]) physMgr.registerBoxCollider(`apt_roof_bench_${z}`, 'prop', [ox + 1.2, 13.25, oz + z], 2.2, 0.22, 0.65);
-    for (const x of [-0.2, 1.8]) for (const z of [-2.4, 2.4]) physMgr.registerBoxCollider(`apt_roof_pergola_post_${x}_${z}`, 'prop', [ox + x, 14.15, oz + z], 0.16, 2.4, 0.16);
-    for (let i = 0; i < 5; i++) physMgr.registerBoxCollider(`apt_roof_pergola_beam_${i}`, 'prop', [ox + 0.8, 15.35, oz - 2.4 + i * 1.2], 3.6, 0.12, 0.14);
-    for (let i = 0; i < 3; i++) physMgr.registerBoxCollider(`apt_roof_solar_panel_${i}`, 'prop', [ox - 5.7 + i * 1.7, 13.35, oz - 4.5], 1.8, 0.08, 1.15);
-    for (const z of [-3.7, 3.7]) physMgr.registerBoxCollider(`apt_roof_planter_${z}`, 'prop', [ox - 6.55, 13.22, oz + z], 1.2, 0.55, 1.0);
-    // Rooftop loungers placed safely away from stair landing opening (X in [3.5, 8.0], Z in [-5.5, 2.5])
-    physMgr.registerBoxCollider('apt_roof_lounger_ne', 'prop', [ox + 5.6, 13.14, oz + 5.0], 0.78, 0.22, 1.8);
-    physMgr.registerBoxCollider('apt_roof_lounger_w', 'prop', [ox - 5.8, 13.14, oz], 1.8, 0.22, 0.78);
+    // 1. Register THE AURELION Structure 1 colliders (9 levels: B2, B1, F1..F7, shafts, atrium, pools, furniture)
+    registerAurelionStructure1Colliders(physMgr, this.origin, {
+      doorOpen: this.state.doorOpen,
+      patioDoorOpen: this.patioDoorOpen,
+      bathroomDoorOpen: this.bathroomDoorOpen,
+    });
 
     // Four-bay garage shutter collision (Building 3 at local -48, -32); one command controls the four coordinated bay panels.
     physMgr.registerBoxCollider('apt_garage_shutter', 'wall', [ox - 48, 1.65, oz - 39.08], 20, 3.3, 0.18, 0, this.garageShutterOpen);
@@ -4579,43 +2230,10 @@ export class ApartmentBuilding {
     physMgr.registerBoxCollider('apt_compound_door_right', 'wall', [ox + 18, 1.7, oz - 24], 2, 3.4, 0.2, -Math.PI / 2, this.compoundPedestrianDoorsOpen[1]);
     physMgr.registerBoxCollider('apt_vehicle_gate', 'wall', [ox - 48, 2.4, oz - 75.5], 8, 4.8, 0.3, 0, this.vehicleGateOpen);
     physMgr.registerBoxCollider('apt_vehicle_gate_2', 'wall', [ox - 24, 2.4, oz + 51.0], 8, 4.8, 0.3, 0, this.vehicleGate2Open);
-    // Explorable Mansion West & East Wings (perimeter-only walls with open South glass doors)
-    for (const side of [-1, 1] as const) {
-      const tag = side < 0 ? 'west' : 'east';
-      const wx = ox + side * 11.5;
-      physMgr.registerBoxCollider(`rebirth_wing_${tag}_outer`, 'wall', [ox + side * 14.92, 6.5, oz], 0.36, 13.0, 24.0);
-      physMgr.registerBoxCollider(`rebirth_wing_${tag}_north`, 'wall', [wx, 6.5, oz + 11.86], 7.0, 13.0, 0.3);
-      physMgr.registerBoxCollider(`rebirth_wing_${tag}_south_l`, 'wall', [wx - 2.35, 6.5, oz - 11.86], 2.1, 13.0, 0.3);
-      physMgr.registerBoxCollider(`rebirth_wing_${tag}_south_r`, 'wall', [wx + 2.35, 6.5, oz - 11.86], 2.1, 13.0, 0.3);
-      physMgr.registerBoxCollider(`rebirth_wing_${tag}_south_upper`, 'wall', [wx, 8.0, oz - 11.86], 2.6, 9.6, 0.3);
-    }
+    // (Building 1 colliders handled above by registerAurelionStructure1Colliders)
 
-    // Building 2: 8-storey Neo-Tactical Railway Command Centre at local (-48, 0, 24)
-    physMgr.registerBoxCollider('rebirth_command_west_wall', 'wall', [ox - 58.92, 14.2, oz + 24], 0.36, 28.4, 18);
-    physMgr.registerBoxCollider('rebirth_command_east_wall', 'wall', [ox - 37.08, 14.2, oz + 24], 0.36, 28.4, 18);
-    physMgr.registerBoxCollider('rebirth_command_north_wall', 'wall', [ox - 48, 14.2, oz + 32.82], 22, 28.4, 0.36);
-    physMgr.registerBoxCollider('rebirth_command_south_wall_left', 'wall', [ox - 54.6, 14.2, oz + 15.18], 8.8, 28.4, 0.36);
-    physMgr.registerBoxCollider('rebirth_command_south_wall_right', 'wall', [ox - 41.4, 14.2, oz + 15.18], 8.8, 28.4, 0.36);
-    for (let f = 1; f < 8; f++) {
-      physMgr.registerBoxCollider(`rebirth_command_south_upper_${f}`, 'wall', [ox - 48, 0.65 + f * 3.45 + 1.72, oz + 15.18], 22, 3.28, 0.36);
-    }
-    for (let f = 0; f < 8; f++) {
-      const fy = 0.65 + f * 3.45;
-      if (f === 0) {
-        physMgr.registerBoxCollider('rebirth_command_f1_desk', 'prop', [ox - 48.8, fy + 0.58, oz + 26.25], 3.4, 0.95, 0.95);
-      } else if (f <= 2) {
-        for (const dx of [-4.0, -0.8, 2.4]) {
-          if (f === 2 && dx > 0) continue;
-          physMgr.registerBoxCollider(`rebirth_command_desk_${f}_${dx}`, 'prop', [ox - 48 + dx, fy + 0.52, oz + 26.25], 2.35, 0.85, 0.9);
-        }
-      } else if (f <= 5) {
-        physMgr.registerBoxCollider(`rebirth_command_desk_${f}`, 'prop', [ox - 48.8, fy + 0.52, oz + 26.25], 2.8, 0.85, 0.95);
-      } else if (f === 6) {
-        physMgr.registerBoxCollider('rebirth_command_holo_table', 'prop', [ox - 50.0, fy + 0.54, oz + 25.5], 4.2, 0.88, 2.0);
-      } else {
-        physMgr.registerBoxCollider('rebirth_command_exec_desk', 'prop', [ox - 50.0, fy + 0.54, oz + 25.5], 3.4, 0.88, 1.1);
-      }
-    }
+    // Building 2: THE NEXUS 8-Floor Grand Railway Intelligence Headquarters at local (-48, 0, 24)
+    registerNexusStructure2Colliders(physMgr, this.origin, this.nexus?.systems.restrictedRoomsUnlocked ?? false);
 
     // Building 3: 3-level Neo-Tactical Vertical Security Garage at local (-48, 0, -32)
     physMgr.registerBoxCollider('rebirth_garage_back_wall', 'wall', [ox - 48, 4.55, oz - 25.18], 20, 9.0, 0.35);
@@ -4629,113 +2247,13 @@ export class ApartmentBuilding {
     physMgr.registerBoxCollider('rebirth_garage_l2_bench', 'prop', [ox - 43.8, 5.1, oz - 35.2], 3.6, 0.92, 1.1);
     physMgr.registerBoxCollider('rebirth_garage_l2_rack', 'prop', [ox - 55.6, 5.8, oz - 34.5], 1.1, 2.3, 3.2);
 
-    // 3. Solid interior furniture and bathroom suite on Floor 1.
-    physMgr.registerBoxCollider('apt_bed', 'prop', [ox - 5.5, 0.45, oz + 3.8], 2.4, 0.9, 2.8);
-    physMgr.registerBoxCollider('apt_nightstand', 'prop', [ox - 7.2, 0.45, oz + 4.8], 0.75, 0.7, 0.75);
-    physMgr.registerBoxCollider('apt_wardrobe', 'prop', [ox - 7.2, 1.15, oz + 1.4], 0.9, 2.3, 1.65);
-    physMgr.registerBoxCollider('apt_computer_desk', 'prop', [ox - 3.5, 0.55, oz + 0.6], 1.65, 0.9, 0.9);
-    physMgr.registerBoxCollider('apt_computer_chair', 'prop', [ox - 3.5, 0.45, oz + 0.18], 0.55, 0.8, 0.55);
-    physMgr.registerBoxCollider('apt_sofa', 'prop', [ox, 0.55, oz + 0.5], 2.8, 0.85, 1.2);
-    physMgr.registerBoxCollider('apt_coffee_table', 'prop', [ox, 0.35, oz - 1.2], 1.85, 0.5, 0.95);
-    physMgr.registerBoxCollider('apt_tvstand', 'prop', [ox - 5.5, 0.45, oz], 2.4, 0.65, 0.6);
-    physMgr.registerBoxCollider('apt_dining_table', 'prop', [ox + 2.2, 0.55, oz + 1.2], 1.85, 0.85, 1.25);
-    physMgr.registerBoxCollider('apt_dining_chair_0', 'prop', [ox + 1.6, 0.45, oz + 0.45], 0.46, 0.85, 0.46);
-    physMgr.registerBoxCollider('apt_dining_chair_1', 'prop', [ox + 2.8, 0.45, oz + 0.45], 0.46, 0.85, 0.46);
-    physMgr.registerBoxCollider('apt_dining_chair_2', 'prop', [ox + 1.6, 0.45, oz + 1.95], 0.46, 0.85, 0.46);
-    physMgr.registerBoxCollider('apt_dining_chair_3', 'prop', [ox + 2.8, 0.45, oz + 1.95], 0.46, 0.85, 0.46);
-    physMgr.registerBoxCollider('apt_kitchen', 'prop', [ox + 5.8, 0.55, oz + 3.2], 3.6, 0.9, 1.1);
-    physMgr.registerBoxCollider('apt_kitchen_stove', 'prop', [ox + 5.8, 0.55, oz + 4.6], 1.15, 0.95, 1.15);
-    physMgr.registerBoxCollider('apt_fridge', 'prop', [ox + 4.5, 1.2, oz + 5.8], 1.25, 2.2, 1.05);
-    physMgr.registerBoxCollider('apt_f1_medical_bed', 'prop', [ox + 3.6, 0.45, oz - 5.2], 2.25, 0.85, 1.15);
-    physMgr.registerBoxCollider('apt_f1_security_desk', 'prop', [ox + 2.38, 0.55, oz - 0.5], 1.0, 0.9, 3.4);
-
-    // Bathroom Enclosing Walls and Solid Fixtures
-    physMgr.registerBoxCollider('apt_bath_wall_n', 'wall', [ox - 5.45, 1.55, oz - 3.2], 3.9, 2.8, 0.22);
-    physMgr.registerBoxCollider('apt_bath_wall_e', 'wall', [ox - 3.5, 1.55, oz - 5.7], 0.22, 2.8, 1.85);
-    physMgr.registerBoxCollider('apt_bath_door', 'wall', [ox - 3.5, 1.35, oz - 4.1], 0.22, 2.3, 0.95, 0, this.bathroomDoorOpen);
-    physMgr.registerBoxCollider('apt_bath_vanity', 'prop', [ox - 4.5, 0.6, oz - 3.55], 1.25, 0.9, 0.7);
-    physMgr.registerBoxCollider('apt_bath_toilet', 'prop', [ox - 4.4, 0.55, oz - 6.0], 0.7, 1.1, 0.8);
-    physMgr.registerBoxCollider('apt_bath_tub', 'prop', [ox - 6.5, 0.55, oz - 5.7], 1.25, 0.75, 1.85);
-    physMgr.registerBoxCollider('apt_bath_shower_tray', 'prop', [ox - 6.75, 0.22, oz - 3.95], 1.35, 0.25, 1.35);
-    physMgr.registerBoxCollider('apt_bath_shower_glass', 'wall', [ox - 6.1, 1.35, oz - 3.95], 0.08, 2.3, 1.35);
-
-    // Floor 2 medical centre: beds, treatment stations, cabinets and equipment
-    // are solid props, while the small monitor screens remain visual surfaces.
-    const medicalY = 3.2;
-    physMgr.registerBoxCollider('apt_medical_reception', 'prop', [ox + 2.6, medicalY + 0.62, oz - 4.8], 3.4, 1.05, 0.9);
-    for (let i = 0; i < 4; i++) {
-      const x = -5.7 + (i % 2) * 3.0;
-      const z = -3.5 + Math.floor(i / 2) * 5.0;
-      physMgr.registerBoxCollider(`apt_medical_patient_bed_${i}`, 'prop', [ox + x, medicalY + 0.65, oz + z], 2.15, 0.72, 1.0);
-      physMgr.registerCylinderCollider(`apt_medical_oxygen_${i}`, 'prop', [ox + x + 1.25, medicalY + 0.225, oz + z + 0.55], 0.2, 1.05);
-    }
-    for (let i = 0; i < 3; i++) {
-      const z = [-5.8, 4.2, 5.8][i];
-      physMgr.registerBoxCollider(`apt_medical_exam_table_${i}`, 'prop', [ox + 5.6, medicalY + 0.55, oz + z], 1.8, 0.82, 0.85);
-      physMgr.registerBoxCollider(`apt_medical_exam_cabinet_${i}`, 'prop', [ox + 7.0, medicalY + 0.9, oz + z], 0.8, 1.6, 0.65);
-    }
-    for (let i = 0; i < 5; i++) {
-      physMgr.registerBoxCollider(`apt_medical_supply_cabinet_${i}`, 'prop', [ox - 5.8 + i * 2.6, medicalY + 1.15, oz + 6.0], 1.05, 2.0, 0.55);
-    }
-    physMgr.registerBoxCollider('apt_medical_operating_table', 'prop', [ox + 5.5, medicalY + 0.72, oz + 2.0], 2.0, 0.55, 1.0);
-    physMgr.registerBoxCollider('apt_medical_diagnostic_machine', 'prop', [ox + 2.2, medicalY + 0.95, oz - 1.0], 1.0, 1.35, 0.8);
-    physMgr.registerBoxCollider('apt_medical_emergency_box', 'prop', [ox, medicalY + 0.55, oz - 5.4], 1.5, 0.8, 0.7);
-
-    // Floor 3 armory: lockers, ammunition crates, equipment cabinets, vault and
-    // master terminal physically block movement rather than behaving as decals.
-    const armoryY = 6.4;
-    let lockerIndex = 0;
-    for (let z = -4.5; z <= 4.5; z += 2.2) {
-      physMgr.registerBoxCollider(`apt_armory_locker_${lockerIndex++}`, 'prop', [ox - 6.5, armoryY + 1.35, oz + z], 1.2, 2.4, 1.8);
-    }
-    let ammoIndex = 0;
-    for (let x = -4.5; x <= 2.5; x += 2.4) {
-      physMgr.registerBoxCollider(`apt_armory_ammo_crate_${ammoIndex++}`, 'prop', [ox + x, armoryY + 0.6, oz + 5.8], 1.6, 0.9, 1.1);
-    }
-    for (let i = 0; i < 4; i++) {
-      physMgr.registerBoxCollider(`apt_armory_equipment_cabinet_${i}`, 'prop', [ox + 1.0 + i * 1.45, armoryY + 1.3, oz - 5.8], 1.0, 2.35, 0.85);
-    }
-    physMgr.registerBoxCollider('apt_armory_secure_vault', 'prop', [ox - 3.8, armoryY + 1.45, oz - 5.7], 2.0, 2.65, 1.1);
-    physMgr.registerCylinderCollider('apt_armory_master_terminal', 'prop', [ox + 2.0, armoryY + 0.10, oz], 0.62, 1.1);
-
-    // Basement operations room: server racks, command desk and emergency crates.
-    physMgr.registerBoxCollider('apt_basement_command_desk', 'prop', [ox, -2.55, oz + 0.8], 4.5, 0.85, 1.4);
-    for (let i = 0; i < 4; i++) {
-      physMgr.registerBoxCollider(`apt_basement_server_rack_${i}`, 'prop', [ox - 5.8 + i * 2.0, -1.75, oz + 5.6], 1.25, 2.25, 0.8);
-    }
-    for (let i = 0; i < 4; i++) {
-      physMgr.registerBoxCollider(`apt_basement_emergency_crate_${i}`, 'prop', [ox + 5.4, -2.55, oz - 4.5 + i * 1.7], 1.0, 0.9, 0.9);
-    }
-
-    // Floor 4: every large farm/utility installation is a real blocking prop.
-    // These world-space colliders match the visible tank, plant, generator and storage meshes.
-    const farmY = 9.6;
-    const farmBedXs = [-5.7, -3.5, -1.3];
-    const farmBedZs = [-4.7, -2.6, -0.5];
-    for (let r = 0; r < farmBedZs.length; r++) {
-      for (let c = 0; c < farmBedXs.length; c++) {
-        physMgr.registerBoxCollider(
-          `apt_farm_crop_bed_${r}_${c}`, 'prop',
-          [ox + farmBedXs[c], farmY + 0.48, oz + farmBedZs[r]], 1.8, 0.84, 1.55
-        );
-      }
-    }
-    physMgr.registerCylinderCollider('apt_raw_water_tank_large', 'prop', [ox + 5.25, farmY + 1.56, oz - 5.65], 1.08, 2.75);
-    physMgr.registerCylinderCollider('apt_treated_water_tank_large', 'prop', [ox + 5.25, farmY + 1.56, oz + 5.55], 1.08, 2.75);
-    // The visible plant is on the west side; the previous collider sat in the east stairwell.
-    physMgr.registerBoxCollider('apt_large_water_treatment_plant', 'prop', [ox - 4.35, farmY + 1.2, oz + 1.95], 4.9, 2.4, 2.45);
-    physMgr.registerBoxCollider('apt_large_backup_generator', 'prop', [ox + 1.28, farmY + 1.05, oz + 5.05], 4.0, 1.96, 2.15);
-    physMgr.registerCylinderCollider('apt_generator_fuel_reservoir', 'prop', [ox + 5.65, farmY + 0.145, oz + 5.05], 0.76, 1.95);
-    physMgr.registerBoxCollider('apt_farm_electrical_cabinet', 'prop', [ox + 7.05, farmY + 1.18, oz + 3.35], 1.1, 2.05, 0.62);
-    for (let i = 0; i < 3; i++) {
-      physMgr.registerBoxCollider(`apt_farm_supply_crate_${i}`, 'prop', [ox - 1.0 + i * 1.1, farmY + 0.58, oz + 5.35], 0.95, 0.9, 0.9);
-    }
   }
 
   public dispose() {
+    this.aurelion?.dispose();
     this.turrets?.dispose();
     this.basementRoom?.dispose();
-    this.commandScreens?.dispose();
+    this.nexus?.dispose();
     this.group.traverse((o) => {
       if (o instanceof THREE.Mesh) {
         o.geometry.dispose();

@@ -68,6 +68,13 @@ import { IndiaRailwayNetworkModal } from './components/IndiaRailwayNetworkModal'
 import { RailwayTicket } from './types/game';
 import { MedicalClinicModal } from './components/MedicalClinicModal';
 import { ApartmentStatusModal } from './components/ApartmentStatusModal';
+import { AurelionElevatorModal, AurelionDocumentModal } from './components/AurelionModals';
+import type { AurelionDashboardSnapshot, ElevatorId } from './engine/aurelion/AurelionSystems';
+import { NexusElevatorModal } from './components/nexus/NexusElevatorModal';
+import { NexusFloor1Modal, type NexusFloor1Tab } from './components/nexus/NexusFloor1Modal';
+import { NexusDepartmentModal } from './components/nexus/NexusDepartmentModal';
+import type { NexusElevatorId, NexusFloorNumber } from './engine/nexus/NexusConfig';
+import type { NexusDashboardSnapshot } from './engine/nexus/NexusSystems';
 import { SecurityCommandCenterModal } from './components/SecurityCommandCenterModal';
 import { CornerMinimap } from './components/CornerMinimap';
 import { ArmoryCatalogItem } from './data/armoryCatalog';
@@ -234,6 +241,17 @@ export default function App() {
   const [activeFacilityWaypoint, setActiveFacilityWaypoint] = useState<{ label: string; distanceMeters: number } | null>(null);
   const [isMedicalClinicOpen, setIsMedicalClinicOpen] = useState(false);
   const [isApartmentStatusOpen, setIsApartmentStatusOpen] = useState(false);
+  const [activeElevatorModal, setActiveElevatorModal] = useState<ElevatorId | null>(null);
+  const [activeAurelionDocId, setActiveAurelionDocId] = useState<string | null>(null);
+  const [aurelionLocation, setAurelionLocation] = useState<{ level: string; roomName: string } | null>(null);
+  const [aurelionSnapshot, setAurelionSnapshot] = useState<AurelionDashboardSnapshot | null>(null);
+  const [nexusElevatorModal, setNexusElevatorModal] = useState<NexusElevatorId | null>(null);
+  const [nexusFloor1Tab, setNexusFloor1Tab] = useState<NexusFloor1Tab | null>(null);
+  const [nexusDepartmentState, setNexusDepartmentState] = useState<{
+    floor: Exclude<NexusFloorNumber, 1>;
+    screenId?: string;
+  } | null>(null);
+  const [nexusSnapshot, setNexusSnapshot] = useState<NexusDashboardSnapshot | null>(null);
   const [isSecurityCommandCenterOpen, setIsSecurityCommandCenterOpen] = useState(false);
   const [isRailwayNetworkMapOpen, setIsRailwayNetworkMapOpen] = useState(false);
   const [isBaseDashboardOpen, setIsBaseDashboardOpen] = useState(false);
@@ -733,7 +751,32 @@ export default function App() {
         onOpenRailwayOperations: () => setIsRailwayOperationsOpen(true),
         onOpenRailwayTickets: () => setIsRailwayTicketsOpen(true),
         onOpenMedicalClinic: () => setIsMedicalClinicOpen(true),
-        onOpenApartmentStatus: () => setIsApartmentStatusOpen(true),
+        onOpenApartmentStatus: () => {
+          setAurelionSnapshot(engineRef.current?.getAurelionSnapshot() ?? null);
+          setIsApartmentStatusOpen(true);
+        },
+        onOpenAurelionElevator: (elevatorId: ElevatorId) => {
+          setAurelionSnapshot(engineRef.current?.getAurelionSnapshot() ?? null);
+          setActiveElevatorModal(elevatorId);
+        },
+        onOpenAurelionDocument: (docId: string) => setActiveAurelionDocId(docId),
+        onAurelionLocationChange: (loc: { level: string; roomName: string } | null) => setAurelionLocation(loc),
+        onOpenNexusElevator: (elevatorId: NexusElevatorId) => {
+          setNexusSnapshot(engineRef.current?.getNexusSnapshot() ?? null);
+          setNexusElevatorModal(elevatorId);
+        },
+        onOpenNexusFloor1: (tab: 'visitor' | 'staff' | 'directory' | 'building' | 'security') => {
+          setNexusSnapshot(engineRef.current?.getNexusSnapshot() ?? null);
+          setNexusFloor1Tab(tab);
+        },
+        onOpenNexusDepartment: (floor: NexusFloorNumber, screenId?: string) => {
+          setNexusSnapshot(engineRef.current?.getNexusSnapshot() ?? null);
+          if (floor === 1) {
+            setNexusFloor1Tab('visitor');
+          } else {
+            setNexusDepartmentState({ floor, screenId });
+          }
+        },
         onOpenSecurityCommandCenter: () => setIsSecurityCommandCenterOpen(true),
         onTrainChange: (data: any | null) => setTrainHUDData(data),
         onOpenFriendModal: (friend: StoryCompanion) => setActiveFriendModal(friend),
@@ -1059,6 +1102,26 @@ export default function App() {
     return { med, food, water };
   }, [hotbar, inventory]);
 
+  useEffect(() => {
+    if (!isApartmentStatusOpen && !activeElevatorModal) return;
+    const timer = window.setInterval(() => {
+      if (engineRef.current) {
+        setAurelionSnapshot(engineRef.current.getAurelionSnapshot());
+      }
+    }, 400);
+    return () => window.clearInterval(timer);
+  }, [isApartmentStatusOpen, activeElevatorModal]);
+
+  useEffect(() => {
+    if (!nexusElevatorModal && !nexusFloor1Tab && !nexusDepartmentState) return;
+    const timer = window.setInterval(() => {
+      if (engineRef.current) {
+        setNexusSnapshot(engineRef.current.getNexusSnapshot());
+      }
+    }, 250);
+    return () => window.clearInterval(timer);
+  }, [nexusElevatorModal, nexusFloor1Tab, nexusDepartmentState]);
+
   const handleCaptureScreenshot = useCallback(() => {
     const engine = engineRef.current;
     if (!engine) return;
@@ -1095,6 +1158,11 @@ export default function App() {
     isRailwayTicketsOpen ||
     isMedicalClinicOpen ||
     isApartmentStatusOpen ||
+    !!activeElevatorModal ||
+    !!activeAurelionDocId ||
+    !!nexusElevatorModal ||
+    !!nexusFloor1Tab ||
+    !!nexusDepartmentState ||
     isSecurityCommandCenterOpen ||
     isRailwayNetworkMapOpen ||
     isBaseDashboardOpen ||
@@ -1363,6 +1431,11 @@ export default function App() {
           isRailwayTicketsOpen ||
           isMedicalClinicOpen ||
           isApartmentStatusOpen ||
+          !!activeElevatorModal ||
+          !!activeAurelionDocId ||
+          !!nexusElevatorModal ||
+          !!nexusFloor1Tab ||
+          !!nexusDepartmentState ||
           isSecurityCommandCenterOpen ||
           isRailwayNetworkMapOpen ||
           isBaseDashboardOpen ||
@@ -1391,6 +1464,11 @@ export default function App() {
           setIsRailwayTicketsOpen(false);
           setIsMedicalClinicOpen(false);
           setIsApartmentStatusOpen(false);
+          setActiveElevatorModal(null);
+          setActiveAurelionDocId(null);
+          setNexusElevatorModal(null);
+          setNexusFloor1Tab(null);
+          setNexusDepartmentState(null);
           setIsSecurityCommandCenterOpen(false);
           setIsRailwayNetworkMapOpen(false);
           setIsBaseDashboardOpen(false);
@@ -1929,6 +2007,16 @@ export default function App() {
       {/* In-Game HUD & Modals */}
       {gameState === 'playing' && (
         <>
+          {/* Compact Estate Floor & Room Location Strip while inside THE AURELION */}
+          {aurelionLocation && !isPhotoMode && (
+            <div className="pointer-events-none fixed top-3 left-1/2 z-30 -translate-x-1/2 border border-amber-500/40 bg-neutral-950/90 px-4 py-1.5 rounded-lg shadow-lg text-center">
+              <div className="text-[10px] font-mono uppercase tracking-[0.2em] text-amber-400">
+                THE AURELION · {aurelionLocation.level}
+              </div>
+              <div className="text-xs font-semibold text-neutral-100">{aurelionLocation.roomName}</div>
+            </div>
+          )}
+
           {/* Prologue Cinematic & Subtitle Overlay */}
           <CinematicOverlay
             phase={prologuePhase}
@@ -2814,29 +2902,33 @@ export default function App() {
             }}
           />
 
-          {/* Ground Floor Sanctuary Building Management & Defense Terminal Modal */}
+          {/* THE AURELION 9-Level Estate Management & Engineering Terminal Modal */}
           <ApartmentStatusModal
             isOpen={isApartmentStatusOpen}
             onClose={() => setIsApartmentStatusOpen(false)}
+            snapshot={aurelionSnapshot ?? engineRef.current?.getAurelionSnapshot() ?? null}
             compoundGateOpen={engineRef.current?.prologueManager.townMgr.apartmentBuilding.compoundGateOpen ?? false}
             onToggleCompoundGate={() => {
               if (engineRef.current) {
                 const open = engineRef.current.prologueManager.townMgr.apartmentBuilding.toggleCompoundGate();
                 engineRef.current.callbacks.onInteractionPrompt(open ? 'Compound Gate: OPEN' : 'Compound Gate: CLOSED');
+                setAurelionSnapshot(engineRef.current.getAurelionSnapshot());
               }
             }}
             garageShutterOpen={engineRef.current?.prologueManager.townMgr.apartmentBuilding.garageShutterOpen ?? false}
             onToggleGarageShutter={() => {
               if (engineRef.current) {
                 const open = engineRef.current.prologueManager.townMgr.apartmentBuilding.toggleGarageShutter();
-                engineRef.current.callbacks.onInteractionPrompt(open ? 'Backyard Garage Shutter: OPEN' : 'Backyard Garage Shutter: LOWERED');
+                engineRef.current.callbacks.onInteractionPrompt(open ? '4-Bay Garage Shutters: OPEN' : '4-Bay Garage Shutters: LOWERED');
+                setAurelionSnapshot(engineRef.current.getAurelionSnapshot());
               }
             }}
             frontDoorOpen={engineRef.current?.prologueManager.townMgr.apartmentBuilding.state.doorOpen ?? false}
             onToggleFrontDoor={() => {
               if (engineRef.current) {
                 const open = engineRef.current.prologueManager.townMgr.apartmentBuilding.toggleDoor();
-                engineRef.current.callbacks.onInteractionPrompt(open ? 'Front Residence Doors: OPEN' : 'Front Residence Doors: CLOSED');
+                engineRef.current.callbacks.onInteractionPrompt(open ? 'Aurelion Entrance Doors: OPEN' : 'Aurelion Entrance Doors: CLOSED');
+                setAurelionSnapshot(engineRef.current.getAurelionSnapshot());
               }
             }}
             fanOn={engineRef.current?.prologueManager.townMgr.apartmentBuilding.state.fanOn ?? false}
@@ -2844,6 +2936,7 @@ export default function App() {
               if (engineRef.current) {
                 const on = engineRef.current.prologueManager.townMgr.apartmentBuilding.toggleFan();
                 engineRef.current.callbacks.onInteractionPrompt(on ? 'Ceiling Fan: ACTIVE' : 'Ceiling Fan: STOPPED');
+                setAurelionSnapshot(engineRef.current.getAurelionSnapshot());
               }
             }}
             acOn={engineRef.current?.prologueManager.townMgr.apartmentBuilding.state.acOn ?? false}
@@ -2851,11 +2944,326 @@ export default function App() {
               if (engineRef.current) {
                 const on = engineRef.current.prologueManager.townMgr.apartmentBuilding.toggleAC();
                 engineRef.current.callbacks.onInteractionPrompt(on ? 'Air Conditioner: ON' : 'Air Conditioner: OFF');
+                setAurelionSnapshot(engineRef.current.getAurelionSnapshot());
               }
             }}
             turretKills={
               engineRef.current?.prologueManager.townMgr.apartmentBuilding.turrets?.getTotalNeutralizedCount() ?? 0
             }
+            onToggleGenerator={() => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              const running = sys.toggleGenerator();
+              soundEngine.playSwitchClick();
+              if (!running && sys.fuelLiters <= 0.1) {
+                eng.callbacks.onInteractionPrompt('B2 Diesel Fuel exhausted — refuel in B2 Fuel Room first.');
+              }
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onRefuelGenerator={() => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              sys.refuelGenerator(120);
+              soundEngine.playUIClick();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onSetPowerPriority={(mode) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              sys.setPowerPriority(mode);
+              soundEngine.playSwitchClick();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onTogglePurifier={() => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              sys.togglePurifier();
+              soundEngine.playSwitchClick();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onDrawWaterBottle={() => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              if (sys.drawPurifiedWaterBottle()) {
+                eng.callbacks.onItemCollected('clean_water', 1);
+                soundEngine.playWaterRunning(1.5);
+                eng.callbacks.onInteractionPrompt('Filled +1 Clean Water Canteen from B2 RO/UV Plant.');
+              } else {
+                eng.callbacks.onInteractionPrompt('Potable cistern reserve too low to bottle.');
+              }
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onRepairMaintenance={() => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              sys.repairMaintenance();
+              soundEngine.playBuildSnap();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onSetHvacMode={(mode) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              sys.hvacMode = mode;
+              soundEngine.playSwitchClick();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onToggleCinema={() => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              sys.cinemaOn = !sys.cinemaOn;
+              soundEngine.playSwitchClick();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onToggleAquariumLights={() => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              sys.aquariumLightsOn = !sys.aquariumLightsOn;
+              soundEngine.playSwitchClick();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onToggleFloorLight={(key) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              sys.toggleFloorLight(key);
+              soundEngine.playSwitchClick();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onPlantHydroBed={(bedId) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              sys.plantHydroBed(bedId);
+              soundEngine.playBuildSnap();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onHarvestHydroBed={(bedId) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              const res = sys.harvestHydroBed(bedId);
+              if (res) {
+                eng.callbacks.onItemCollected(res.itemId, res.count);
+                eng.addXP(25);
+                soundEngine.playDawnVictoryChime();
+                eng.callbacks.onInteractionPrompt(`Harvested +${res.count} Fresh ${res.itemId.replace(/_/g, ' ')} (+25 XP)!`);
+              }
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onCommandElevator={(elevatorId, floor) => {
+              const eng = engineRef.current;
+              if (!eng) return;
+              eng.callAurelionElevatorToFloor(elevatorId, floor);
+              soundEngine.playUIClick();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+          />
+
+          <AurelionElevatorModal
+            elevatorId={activeElevatorModal}
+            snapshot={aurelionSnapshot ?? engineRef.current?.getAurelionSnapshot() ?? null}
+            onSelectFloor={(elevatorId, floor) => {
+              engineRef.current?.callAurelionElevatorToFloor(elevatorId, floor);
+              soundEngine.playUIClick();
+              setAurelionSnapshot(engineRef.current?.getAurelionSnapshot() ?? null);
+            }}
+            onClose={() => setActiveElevatorModal(null)}
+          />
+
+          <AurelionDocumentModal
+            doc={activeAurelionDocId ? engineRef.current?.getAurelionDocument(activeAurelionDocId) ?? null : null}
+            onClose={() => setActiveAurelionDocId(null)}
+          />
+
+          <NexusElevatorModal
+            elevatorId={nexusElevatorModal}
+            snapshot={nexusSnapshot ?? engineRef.current?.getNexusSnapshot() ?? null}
+            onSelectFloor={(elevatorId, floor) => {
+              engineRef.current?.callNexusElevatorToFloor(elevatorId, floor);
+              soundEngine.playUIClick();
+              setNexusSnapshot(engineRef.current?.getNexusSnapshot() ?? null);
+            }}
+            onToggleMaintenance={(elevatorId) => {
+              const sys = engineRef.current?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!sys || !engineRef.current) return;
+              sys.toggleElevatorMaintenance(elevatorId);
+              soundEngine.playSwitchClick();
+              setNexusSnapshot(engineRef.current.getNexusSnapshot());
+            }}
+            onClose={() => setNexusElevatorModal(null)}
+          />
+
+          <NexusFloor1Modal
+            initialTab={nexusFloor1Tab}
+            snapshot={nexusSnapshot ?? engineRef.current?.getNexusSnapshot() ?? null}
+            onRegisterVisitor={(name, purpose) => {
+              const sys = engineRef.current?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!sys || !engineRef.current) return;
+              sys.registerVisitor(name, purpose);
+              soundEngine.playUIClick();
+              setNexusSnapshot(engineRef.current.getNexusSnapshot());
+            }}
+            onVerifyStaff={(badgeId, clearance) => {
+              const sys = engineRef.current?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!sys || !engineRef.current) return;
+              sys.verifyStaffId(badgeId, clearance);
+              soundEngine.playDawnVictoryChime();
+              setNexusSnapshot(engineRef.current.getNexusSnapshot());
+            }}
+            onSetClearance={(clearance) => {
+              const sys = engineRef.current?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!sys || !engineRef.current) return;
+              sys.setClearanceLevel(clearance);
+              soundEngine.playSwitchClick();
+              setNexusSnapshot(engineRef.current.getNexusSnapshot());
+            }}
+            onCallElevator={(elevatorId, floor) => {
+              engineRef.current?.callNexusElevatorToFloor(elevatorId, floor);
+              soundEngine.playUIClick();
+              setNexusSnapshot(engineRef.current?.getNexusSnapshot() ?? null);
+            }}
+            onOpenFloorDepartment={(floor) => {
+              if (floor === 1) return;
+              setNexusSnapshot(engineRef.current?.getNexusSnapshot() ?? null);
+              setNexusDepartmentState({ floor });
+            }}
+            onClose={() => setNexusFloor1Tab(null)}
+          />
+
+          <NexusDepartmentModal
+            floor={nexusDepartmentState?.floor ?? null}
+            initialScreenId={nexusDepartmentState?.screenId}
+            snapshot={nexusSnapshot ?? engineRef.current?.getNexusSnapshot() ?? null}
+            onTrainHold={(trainId) => {
+              const eng = engineRef.current;
+              if (!eng?.aiTrainManager) return;
+              const res = eng.aiTrainManager.requestTrainHold(trainId);
+              eng.callbacks.onInteractionPrompt(res.message);
+              soundEngine.playSwitchClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onTrainRelease={(trainId) => {
+              const eng = engineRef.current;
+              if (!eng?.aiTrainManager) return;
+              const res = eng.aiTrainManager.releaseTrainHold(trainId);
+              eng.callbacks.onInteractionPrompt(res.message);
+              soundEngine.playSwitchClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onTrainAckWarning={(trainId) => {
+              const eng = engineRef.current;
+              if (!eng?.aiTrainManager) return;
+              const res = eng.aiTrainManager.acknowledgeWarning(trainId);
+              eng.callbacks.onInteractionPrompt(res.message);
+              soundEngine.playUIClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onToggleLineHold={(line) => {
+              const eng = engineRef.current;
+              if (!eng?.aiTrainManager) return;
+              const held = eng.aiTrainManager.toggleServiceHold(line);
+              eng.callbacks.onInteractionPrompt(`Line ${line} service ${held ? 'HELD' : 'ACTIVE'}`);
+              soundEngine.playSwitchClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onToggleWorkOrder={(orderId) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!eng || !sys) return;
+              sys.toggleWorkOrderStatus(orderId, eng.gameTimeMinutes);
+              soundEngine.playSwitchClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onSendComms={(channel, message) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!eng || !sys) return;
+              sys.recordComms(channel, message, eng.gameTimeMinutes);
+              soundEngine.playUIClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onPinNote={(note) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!eng || !sys) return;
+              if (note.startsWith('Outbreak Brief')) {
+                sys.recordOutbreakIntel(note);
+              } else {
+                sys.pinAlertNote(note);
+              }
+              soundEngine.playUIClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onRemoveNote={(idx) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!eng || !sys) return;
+              sys.removeAlertNote(idx);
+              soundEngine.playUIClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onToggleCompoundLayer={(layerId) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!eng || !sys) return;
+              sys.toggleCompoundLayer(layerId);
+              soundEngine.playSwitchClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onToggleOutbreakLayer={(layerId) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!eng || !sys) return;
+              sys.toggleOutbreakLayer(layerId);
+              soundEngine.playSwitchClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onToggleCompoundGate={(gateKey) => {
+              const eng = engineRef.current;
+              const apt = eng?.prologueManager.townMgr.apartmentBuilding;
+              if (!eng || !apt) return;
+              if (gateKey === 'main') apt.toggleCompoundGate();
+              else if (gateKey === 'westPed') apt.toggleWestPedestrianDoor();
+              else if (gateKey === 'eastPed') apt.toggleEastPedestrianDoor();
+              else if (gateKey === 'veh1') apt.toggleVehicleGate();
+              else if (gateKey === 'veh2') apt.toggleSecondVehicleGate();
+              else if (gateKey === 'garage') apt.toggleGarageShutter();
+              soundEngine.playSwitchClick();
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onSelectScreen={(fl, screenId) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!eng || !sys) return;
+              sys.setSelectedScreen(fl, screenId);
+              setNexusSnapshot(eng.getNexusSnapshot());
+            }}
+            onCompoundPrefsChange={(rot, zoom) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!eng || !sys) return;
+              sys.updateCompoundRadarPrefs(rot, zoom);
+            }}
+            onOutbreakPrefsChange={(lon, zoom, continent) => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.nexus?.systems;
+              if (!eng || !sys) return;
+              sys.updateOutbreakRadarPrefs(lon, zoom, continent);
+            }}
+            onOpenFloor1Staff={() => {
+              setNexusSnapshot(engineRef.current?.getNexusSnapshot() ?? null);
+              setNexusFloor1Tab('staff');
+            }}
+            onClose={() => setNexusDepartmentState(null)}
           />
 
           {/* Dedicated 5 km Security & Tactical Command Center */}

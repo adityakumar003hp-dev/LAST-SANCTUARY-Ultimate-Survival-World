@@ -144,16 +144,21 @@ export class BasementControlRoom {
     ceiling.position.set(0, -0.1, 0);
     this.group.add(ceiling);
 
-    // Heavy Exterior Concrete Perimeter Walls
-    const wallN = new THREE.Mesh(new THREE.BoxGeometry(16, 3.9, 0.4), concreteWallMat);
-    wallN.position.set(0, -2.05, 6.8);
-    const wallS = new THREE.Mesh(new THREE.BoxGeometry(16, 3.9, 0.4), concreteWallMat);
-    wallS.position.set(0, -2.05, -6.8);
-    const wallW = new THREE.Mesh(new THREE.BoxGeometry(0.4, 3.9, 14), concreteWallMat);
-    wallW.position.set(-7.8, -2.05, 0);
-    const wallE = new THREE.Mesh(new THREE.BoxGeometry(0.4, 3.9, 14), concreteWallMat);
-    wallE.position.set(7.8, -2.05, 0);
-    this.group.add(wallN, wallS, wallW, wallE);
+    // Reinforced Concrete Core Walls with 2.8m centered arch passages connecting to the 30x24m B1 Operations Ring
+    for (const [wx, wz, ww, wd] of [
+      [-4.6, 6.8, 6.8, 0.4],
+      [4.6, 6.8, 6.8, 0.4],
+      [-4.6, -6.8, 6.8, 0.4],
+      [4.6, -6.8, 6.8, 0.4],
+      [-7.8, -4.1, 0.4, 5.8],
+      [-7.8, 4.1, 0.4, 5.8],
+      [7.8, -4.1, 0.4, 5.8],
+      [7.8, 4.1, 0.4, 5.8],
+    ] as const) {
+      const w = new THREE.Mesh(new THREE.BoxGeometry(ww, 3.9, wd), concreteWallMat);
+      w.position.set(wx, -2.05, wz);
+      this.group.add(w);
+    }
 
     // Hazard Demarcation Walkway Border along the floor
     const hazardStripe = new THREE.Mesh(new THREE.BoxGeometry(9.0, 0.02, 6.0), yellowStripeMat);

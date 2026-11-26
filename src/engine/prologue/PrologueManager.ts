@@ -467,7 +467,7 @@ export class PrologueManager {
             this.setSubtitle({
               speaker: 'Marcus Cole',
               role: 'The Leader',
-              text: 'We have to get up to the Floor 5 rooftop terrace to see where it’s coming from!',
+              text: 'We have to get up to the Floor 7 Crown Rooftop to see where it’s coming from!',
               duration: 4.5,
             });
             this.startEvent('D2_E14_SKY_CHANGES');
@@ -478,12 +478,12 @@ export class PrologueManager {
 
       // EVENT 14: THE SKY CHANGES
       case 'D2_E14_SKY_CHANGES': {
-        // Player climbs continuous staircase to Floor 5 rooftop terrace (y >= 12.4)
+        // Player climbs staircase or takes elevator to Floor 7 Crown Sky Palace (y >= 22.0)
         const dRooftop = Math.hypot(
           this.engine.player.position.x - (-26),
           this.engine.player.position.z - 38
         );
-        if (this.engine.player.position.y >= 9.0 && dRooftop < 7.0) {
+        if (this.engine.player.position.y >= 20.5 && dRooftop < 12.5) {
           this.startEvent('D2_E15_METEORITE_IMPACT');
         }
         break;
@@ -909,14 +909,14 @@ export class PrologueManager {
           day: 'DAY 2 — 08:15 AM',
         });
         setTimeout(() => this.callbacks.onTitleBanner(null), 3500);
-        this.callbacks.onObjectiveUpdate('Mission: CLIMB TO ROOFTOP — Take the continuous staircase up to Floor 5 rooftop pool terrace');
+        this.callbacks.onObjectiveUpdate('Mission: CLIMB TO CROWN ROOFTOP — Take the staircase or elevator up to Floor 7 Crown Sky Palace');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d2_e14_rooftop',
-          title: 'FLOOR 5 ROOFTOP DECK',
-          instruction: 'Take the staircase to Floor 5 rooftop pool terrace with your friends.',
-          destinationName: 'Rooftop Pool Deck',
-          position: [-26, 13.2, 38],
-          arrivalRadius: 4.5,
+          title: 'FLOOR 7 CROWN ROOFTOP',
+          instruction: 'Take the staircase or main elevator to Floor 7 Crown Sky Palace with your friends.',
+          destinationName: 'Crown Sky Palace Deck',
+          position: [-26, 22.1, 38],
+          arrivalRadius: 5.5,
         });
         break;
       }
@@ -1610,14 +1610,14 @@ export class PrologueManager {
         });
         break;
       case 'D2_E14_SKY_CHANGES':
-        this.callbacks.onObjectiveUpdate('Mission: CLIMB TO ROOFTOP — Take the continuous staircase up to Floor 5 rooftop pool terrace');
+        this.callbacks.onObjectiveUpdate('Mission: CLIMB TO CROWN ROOFTOP — Take the staircase or elevator up to Floor 7 Crown Sky Palace');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d2_e14_rooftop',
-          title: 'FLOOR 5 ROOFTOP DECK',
-          instruction: 'Take the staircase to Floor 5 rooftop pool terrace with your friends.',
-          destinationName: 'Rooftop Pool Deck',
-          position: [-26, 13.2, 38],
-          arrivalRadius: 4.5,
+          title: 'FLOOR 7 CROWN ROOFTOP',
+          instruction: 'Take the staircase or main elevator to Floor 7 Crown Sky Palace with your friends.',
+          destinationName: 'Crown Sky Palace Deck',
+          position: [-26, 22.1, 38],
+          arrivalRadius: 5.5,
         });
         break;
       case 'D2_E15_METEORITE_IMPACT':
