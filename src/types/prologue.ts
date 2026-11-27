@@ -60,10 +60,10 @@ export interface StoryChapter {
 }
 
 export interface StoryCompanion {
-  id: 'marcus' | 'chloe' | 'maya';
+  id: 'marcus' | 'chloe' | 'maya' | 'rohan';
   name: string;
   title: string;
-  role: 'Leader' | 'Technician' | 'Medic';
+  role: 'Leader' | 'Technician' | 'Medic' | 'Explorer' | 'Doctor' | 'Saviour' | 'Armoury & Tactical';
   color: number;
   jacketColor: number;
   pantColor: number;
@@ -74,7 +74,7 @@ export interface StoryCompanion {
   maxHealth: number;
   dialogueState: number;
   isFollowing: boolean;
-  station: 'follow' | 'town' | 'shelter_guard' | 'shelter_tech' | 'shelter_med';
+  station: 'follow' | 'town' | 'shelter_guard' | 'shelter_tech' | 'shelter_med' | 'shelter_armory';
   relationshipScore: number;
   isFriend?: boolean;
 }
@@ -138,6 +138,7 @@ export interface PrologueSaveData {
     marcus: boolean;
     chloe: boolean;
     maya: boolean;
+    rohan: boolean;
   };
   shelterUnlocked: boolean;
   shelterDoorClosed: boolean;

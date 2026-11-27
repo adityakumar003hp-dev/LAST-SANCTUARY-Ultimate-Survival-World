@@ -25,7 +25,7 @@ export const CinematicOverlay: React.FC<CinematicOverlayProps> = ({
     phase === 'ch13_the_world_awaits' ||
     phase === 'day2_meteorite_cinematic' ||
     phase === 'day2_impact_aftermath' ||
-    phase === 'day2_final_cinematic';
+    phase === 'day2_final_cinematic' || Boolean(titleBanner?.day?.includes('CINEMATIC'));
 
   if (phase === 'completed' && !subtitle && !objective && !titleBanner) return null;
 
@@ -46,7 +46,7 @@ export const CinematicOverlay: React.FC<CinematicOverlayProps> = ({
             <span className="flex h-2 w-2 rounded-full bg-amber-400 shrink-0 animate-pulse" />
             <div className="flex flex-col min-w-0">
               <span className="font-bold text-amber-400 uppercase tracking-wider text-[9px] sm:text-[10px]">
-                {phase.startsWith('day1') ? 'DAY 1 OBJECTIVE' : 'DAY 2 OBJECTIVE'}
+                {titleBanner?.day?.split('•')[0]?.trim() || 'STORY OBJECTIVE'}
               </span>
               <span className="text-neutral-200 text-xs font-medium truncate">{objective}</span>
             </div>

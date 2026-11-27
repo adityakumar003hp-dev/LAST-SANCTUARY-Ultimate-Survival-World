@@ -2547,8 +2547,9 @@ export default function App() {
             isOpen={isJournalOpen}
             onClose={() => setIsJournalOpen(false)}
             quests={quests}
-            currentDay={dayCount}
+            currentDay={engineRef.current?.storylineManager.campaignDay ?? dayCount}
             prologuePhase={prologuePhase}
+            onSelectEnding={(choice) => engineRef.current?.storylineManager.setEndingChoice(choice)}
           />
 
           {/* Character Progression Modal */}

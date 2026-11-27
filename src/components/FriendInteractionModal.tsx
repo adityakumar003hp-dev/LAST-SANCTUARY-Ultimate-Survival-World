@@ -15,16 +15,19 @@ function getFriendReply(friendId: string, text: string): string {
   const value = text.toLowerCase();
   if (/water|clean water|thirst|drink/.test(value)) {
     if (friendId === 'maya') return 'Our clean water reserves are on Floor 4. Always filter rainwater before drinking.';
-    if (friendId === 'chloe') return 'The roof tanks and filtration plumbing are holding steady. I can run an inspection.';
+    if (friendId === 'chloe') return 'I can inspect the route and communications equipment.';
+    if (friendId === 'rohan') return 'I will check our water-carrying equipment and secure the supply run.';
     return 'Water is life. Let’s keep our containers filled and check the storage filters.';
   }
   if (/food|hunger|eat|crop|farm/.test(value)) {
     if (friendId === 'chloe') return 'The Floor 4 indoor farm has fresh crops growing. We’ll have a harvest soon.';
     if (friendId === 'maya') return 'Nutrition maintains immune strength. Keep rations balanced between protein and clean water.';
+    if (friendId === 'rohan') return 'I will organise the food stores and make sure the supply inventory is clear.';
     return 'We have canned provisions and crop beds. Ration wisely until our perimeter is secure.';
   }
   if (/medical|health|hurt|injury|wound|bandage/.test(value)) {
-    if (friendId === 'maya') return 'The Floor 2 clinic has trauma beds, IV bags and sterile supplies. Rest on a medical bed if you’re injured.';
+    if (friendId === 'maya') return 'The medical area has the supplies we have catalogued. I will organise triage.';
+    if (friendId === 'rohan') return 'I will secure the route so the medical team can work safely.';
     return 'Dr. Maya has the medical station prepped on the second floor. Take no unnecessary risks.';
   }
   if (/power|electric|generator|solar/.test(value)) {
@@ -33,7 +36,8 @@ function getFriendReply(friendId: string, text: string): string {
   }
   if (/weapon|gun|ammo|defense|turret|sentry/.test(value)) {
     if (friendId === 'marcus') return 'Both rooftop sentry turrets are online. The Floor 3 armory vault has weapons ready.';
-    if (friendId === 'chloe') return 'Turret sensors are synced with the 5km radar in the security center. Watch the monitor.';
+    if (friendId === 'chloe') return 'I can check the available communications and monitoring systems.';
+    if (friendId === 'rohan') return 'I will audit the available protective equipment and help organise the team’s defensive positions.';
     return 'Keep firearms loaded and check ammo counts before opening the main gate.';
   }
   if (/zombie|infected|horde|danger|safe/.test(value)) {
@@ -46,8 +50,9 @@ function getFriendReply(friendId: string, text: string): string {
     return 'Good call. I’ll coordinate the watch schedule and keep our defenses tight.';
   }
   if (friendId === 'chloe') {
-    return 'Understood! I’ll check the diagnostics and make sure all mechanical systems are running smoothly.';
+    return 'Understood! I’ll check the route information and communications.';
   }
+  if (friendId === 'rohan') return 'I will review our equipment and help the team prepare safely.';
   return 'Stay sharp. Let’s make sure everyone in the sanctuary remains safe and well-supplied.';
 }
 

@@ -10,7 +10,8 @@ export type CameraTrackMode =
   | 'open_world_reveal'
   | 'shelter_seal'
   | 'friends_meet'
-  | 'highway_overlook';
+  | 'highway_overlook'
+  | 'campaign_orbit';
 
 export class CinematicCameraManager {
   public camera: THREE.PerspectiveCamera;
@@ -89,6 +90,21 @@ export class CinematicCameraManager {
     this.camera.position.copy(this.currentPos);
     this.currentLook.copy(this.startLook);
     this.camera.lookAt(this.currentLook);
+  }
+
+  /** A location-relative cinematic orbit for campaign milestone scenes. */
+  public playCampaignOrbit(center: THREE.Vector3, durationSeconds = 5.5) {
+    this.mode = 'campaign_orbit';
+    this.isCinematicActive = true;
+    this.trackTimer = 0;
+    this.duration = Math.max(1.5, durationSeconds);
+    this.onCompleteCallback = null;
+    this.currentPos.copy(center).add(new THREE.Vector3(7.5, 4.2, 9.5));
+    this.targetPos.copy(center).add(new THREE.Vector3(-6.5, 3.2, 7.0));
+    this.startLook.copy(center).add(new THREE.Vector3(0, 1.6, 0));
+    this.lookTarget.copy(center).add(new THREE.Vector3(0, 1.4, 0));
+    this.camera.position.copy(this.currentPos);
+    this.camera.lookAt(this.startLook);
   }
 
   public update(delta: number): boolean {

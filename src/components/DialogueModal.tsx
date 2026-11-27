@@ -16,6 +16,7 @@ function friendReply(friendId: string, text: string) {
   if (/thank|thanks/.test(value)) return 'You’re welcome. We are in this together.';
   if (friendId === 'marcus') return 'I hear you. Let’s think it through and decide our next step together.';
   if (friendId === 'chloe') return 'I can look into that. Give me a moment to think through the practical details.';
+  if (friendId === 'rohan') return 'I will organise our protective equipment, check the available supplies and help plan a safe route.';
   return 'I understand. Let’s take it one step at a time.';
 }
 

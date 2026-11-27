@@ -3,9 +3,9 @@
 ## Integrated source changes
 - `src/engine/base/ResearchComplexManager.ts` creates the authored 3D campus inside the military base protected footprint.
 - `src/data/researchFacilities.ts` defines the ten named facilities and their functions/classification.
-- `src/data/researchComplex.ts` maps Day 8 missions 50–56 to facility-specific discoveries and classified files.
+- `src/data/researchComplex.ts` maps Day 9 missions 65–71 to facility-specific discoveries and classified files.
 - `src/engine/prologue/PrologueManager.ts` creates and disposes the campus with the world lifecycle.
-- `src/components/QuestJournalModal.tsx` displays each Day 8 mission's research facility, classification and discovery clue.
+- `src/components/QuestJournalModal.tsx` displays each Day 9 mission's research facility, classification and discovery clue.
 
 ## Physical campus contents
 1. Biology Laboratory

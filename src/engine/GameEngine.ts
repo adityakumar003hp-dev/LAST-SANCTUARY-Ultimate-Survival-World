@@ -579,7 +579,7 @@ export class GameEngine {
       isCompleted: isMissionBeyondPrologue,
       day: initialSave.storyCheckpoint?.campaignDay ?? initialSave.dayCount,
       craterFormed: isMissionBeyondPrologue || missionNum >= 9,
-      friendsMet: { marcus: true, chloe: true, maya: true },
+      friendsMet: { marcus: true, chloe: true, maya: true, rohan: true },
       shelterUnlocked: true,
       shelterDoorClosed: true,
       generatorOnline: true,
@@ -613,7 +613,7 @@ export class GameEngine {
     }
     this.prologueManager.townMgr.apartmentBuilding.nexusLiveProvider = () => this.buildNexusLiveContext();
 
-    // Storyline Checkpoint Manager (Handles all 70 missions and exact checkpoint restoration)
+    // Storyline Checkpoint Manager (Handles all 96 missions and exact checkpoint restoration)
     this.storylineManager = new StorylineCheckpointManager(this);
 
     // House & Furniture Universal Interaction Controller
@@ -1848,6 +1848,7 @@ export class GameEngine {
       this.prologueManager.townMgr.gridPowerFactor = this.globalOutbreakSimulator.powerGridStability;
     }
     this.prologueManager.update(delta);
+    this.storylineManager?.updateLocationProgress(this.player.position);
     const rescuedNow = this.rescueManager.update(
       delta,
       this.player.position,
@@ -2662,6 +2663,21 @@ export class GameEngine {
 
   public handleInteractKey() {
     // E Key interaction
+    if (
+      this.storylineManager?.currentMissionNumber === 27 &&
+      !this.prologueManager.baseTasks.generator &&
+      Math.hypot(this.player.position.x - 954, this.player.position.z - 18) < 3.2
+    ) {
+      if (!this.powerManager.state.isGeneratorRunning) {
+        this.toggleBaseGenerator();
+      }
+      if (this.powerManager.state.isGeneratorRunning) {
+        this.prologueManager.activateMilitaryBaseGenerator();
+        this.storylineManager.notifyMissionInteraction(this.player.position);
+      }
+      return;
+    }
+    this.storylineManager?.notifyMissionInteraction(this.player.position);
     const range = 3.8;
 
     // -1.5 If inside a streamed Real-Earth building interior, prioritize interior loot/rest/exit
@@ -3517,7 +3533,7 @@ export class GameEngine {
     const pointer = new THREE.Vector2(((clientX - rect.left) / rect.width) * 2 - 1, -((clientY - rect.top) / rect.height) * 2 + 1);
     const raycaster = new THREE.Raycaster();
     raycaster.setFromCamera(pointer, this.camera);
-    const candidates: Array<{ id: 'marcus' | 'chloe' | 'maya'; distance: number }> = [];
+    const candidates: Array<{ id: 'marcus' | 'chloe' | 'maya' | 'rohan'; distance: number }> = [];
     this.prologueManager.companionMgr.companionMeshes.forEach((mesh, id) => {
       const knownFriend = this.prologueManager.isCompleted || this.prologueManager.friendsMet[id];
       if (!knownFriend || !mesh.visible) return;
@@ -3544,7 +3560,7 @@ export class GameEngine {
 
   public resolveSurvivorChoice(id: string, choice: string) {
     if (id.startsWith('friend_')) {
-      const friendId = id.slice(7) as 'marcus' | 'chloe' | 'maya';
+      const friendId = id.slice(7) as 'marcus' | 'chloe' | 'maya' | 'rohan';
       const manager = this.prologueManager.companionMgr;
       const friend = manager.companions.get(friendId);
       if (!friend) return;
@@ -4398,6 +4414,7 @@ export class GameEngine {
 
   public updateQuestProgress(objectiveId: string, amount: number = 1) {
     this.storylineManager?.updateObjective(objectiveId, amount);
+    this.storylineManager?.notifyMissionInteraction(this.player.position, amount);
 
     let changed = false;
     this.quests.forEach((q) => {

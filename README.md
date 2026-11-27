@@ -4,7 +4,7 @@ This is the updated Google AI Studio project ZIP, based on the original `deadzon
 
 ## Current campaign — LAST SANCTUARY: REBIRTH (November 2026)
 
-The active campaign catalogue and in-game Chronicle have been upgraded to **10 days / 70 missions (7 per day)**, followed by permanent Free Exploration. This supersedes the older six-day and eight-day campaign notes further down this historical README. See `TEN_DAY_CAMPAIGN_IMPLEMENTATION.md` for changed files and validation. The research POI is upgraded into the Apex Biomedical Research Complex containment campus.
+The active campaign catalogue and in-game Chronicle have been upgraded to **12 days / 96 missions (8 per day)**, followed by permanent Free Exploration. This replaces the former campaign structure. See `CAMPAIGN_12_DAY_IMPLEMENTATION.md` for the active storyline, four companion roles, cinematic milestones, branching endings and continuity rules. The research POI is upgraded into the Apex Biomedical Research Complex containment campus.
 
 ## Quick start
 1. Open/import the complete project in Google AI Studio.
@@ -23,8 +23,8 @@ Read `IMPLEMENTATION_UPDATE.md` for the exact implementation scope and known lim
 **Honest status:** this package contains integrated gameplay foundations and procedural placeholder models. It is not a photorealistic finished release. A complete build and mobile play-test should be run in Google AI Studio after import.
 
 
-## Six-Day Campaign Update
-The authoritative opening campaign is six days / 36 missions. See `SIX_DAY_CAMPAIGN_AND_STARTER_BASE_SPEC.md` and `src/data/sixDayCampaign.ts`. The apartment and military Starter Base use protected procedural no-spawn footprints. See `src/engine/world/ProtectedSpawnZones.ts`.
+## Earlier campaign notes (historical)
+The six-day and eight-day campaign documents are retained only as historical design records. The active campaign is the 12-day / 96-mission catalogue in `src/data/lastSanctuaryCampaign.ts`.
 
 
 ## Updated source delivery
@@ -49,6 +49,6 @@ The active root `src/engine/prologue/ApartmentBuilding.ts` now builds a large in
 The active apartment physics registration now includes blocking colliders for the large utility equipment, both water tanks, crop planters, farm crates, medical beds/equipment/cabinets, armory lockers/crates/vault/terminal, and basement server racks/command desk/crates. The IV bags are opaque solid props. Intentional transparency is limited to actual glass and water surfaces; the equipment and structural props use opaque materials and cast/receive shadows.
 
 ## Outpost 7 Military Research & Science Complex (November 2026)
-The military compound now includes an authored 3D research campus inside the protected Outpost 7 footprint. Its ten facilities are Biology Laboratory, Medical Research Center, Meteor Research Lab, Infection Testing Chambers, Genetics Laboratory, Underground Sample Storage, Research Command Center, Scientist Quarters, Quarantine Ward and a Secret Underground Laboratory. The campus includes perimeter walls, a controlled access gate, signage, floodlights and a visible underground access hatch. Day 8 missions 50–56 now display their linked facility, classification and classified discovery in the in-game campaign journal. See `MILITARY_RESEARCH_COMPLEX_IMPLEMENTATION.md`.
+The military compound now includes an authored 3D research campus inside the protected Outpost 7 footprint. Its ten facilities are Biology Laboratory, Medical Research Center, Meteor Research Lab, Infection Testing Chambers, Genetics Laboratory, Underground Sample Storage, Research Command Center, Scientist Quarters, Quarantine Ward and a Secret Underground Laboratory. The campus includes perimeter walls, a controlled access gate, signage, floodlights and a visible underground access hatch. The active 12-day campaign places the Outpost 7 research sequence on Day 9 (Missions 65–72). See `MILITARY_RESEARCH_COMPLEX_IMPLEMENTATION.md`.
 
-**Scope note:** this update adds the physical facility layout and Day 8 journal/story-intel linkage. It does not claim bespoke interactive lab experiments, vaccine crafting, or fully simulated containment systems unless separately implemented in the gameplay systems.
+**Scope note:** this update adds the physical facility layout and the Day 9 journal/story-intel linkage. It does not claim bespoke interactive lab experiments, vaccine crafting, or fully simulated containment systems unless separately implemented in the gameplay systems.

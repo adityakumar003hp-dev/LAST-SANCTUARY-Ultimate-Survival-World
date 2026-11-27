@@ -2,11 +2,11 @@
  * checkpointTestSaves.ts
  *
  * Provides pre-configured test save states matching the prompt verification requirements:
- * 1. Mission 5: Day 1 "Okhla Market"
- * 2. Mission 15: Day 3 "A Signal from the Railway" (Halfway: 1 of 2 objectives completed)
- * 3. Mission 53: Day 8 "The Research Complex" (Unfinished objectives: exactly 2 of 5 completed, 3 remaining)
- * 4. Mission 55: Day 8 "The Origin of Infection"
- * 5. Mission 70: Day 10 "A New Beginning" (Completed, permanent Free Exploration mode unlocked)
+ * 1. Mission 5: Day 1 "A Doctor’s Errand"
+ * 2. Mission 17: Day 3 "A Signal from Chloe" (Halfway: 1 of 2 objectives completed)
+ * 3. Mission 67: Day 9 "Research Records" (One of two objectives completed)
+ * 4. Mission 70: Day 9 "The Origin Clue"
+ * 5. Mission 96: Day 12 "A New Dawn" (Completed, permanent Free Exploration mode unlocked)
  */
 
 import { FullGameSave } from '../types/game';
@@ -14,7 +14,7 @@ import { saveGameToSlot } from './storage';
 import { ITEMS } from '../data/items';
 
 export function createTestSave(
-  type: 'mission_5' | 'mission_15_halfway' | 'mission_53_partial' | 'mission_55' | 'mission_70_completed',
+  type: 'mission_5' | 'mission_17_halfway' | 'mission_67_partial' | 'mission_70_research' | 'mission_96_completed',
   slotId?: string
 ): FullGameSave {
   const now = Date.now();
@@ -23,7 +23,7 @@ export function createTestSave(
     return {
       metadata: {
         id: slotId || 'test_mission_5',
-        name: 'Slot 1: Day 1 • Mission 5 (Okhla Market)',
+        name: 'Slot 1: Day 1 • Mission 5 (A Doctor’s Errand)',
         characterName: 'Aria',
         dayCount: 1,
         timeString: '10:30',
@@ -32,13 +32,13 @@ export function createTestSave(
         gameMode: 'story',
         campaignDay: 1,
         missionNumber: 5,
-        missionTitle: 'Okhla Market',
-        checkpointId: 'checkpoint_m05_okhla_market',
+        missionTitle: 'A Doctor’s Errand',
+        checkpointId: 'checkpoint_m05_doctor_errand',
         progressPercent: 0,
         isFreeExploration: false,
       },
       worldSeed: 42,
-      playerPosition: [80, 0.2, 75],
+      playerPosition: [1150, 0.5, -45],
       playerRotation: 0,
       playerStats: {
         health: 100,
@@ -83,15 +83,15 @@ export function createTestSave(
         campaignDay: 1,
         missionNumber: 5,
         missionId: 'LS_D1_05',
-        missionTitle: 'Okhla Market',
-        missionDescription: 'Visit the market and purchase everyday supplies.',
-        location: 'market',
-        checkpointId: 'checkpoint_m05_okhla_market',
-        checkpointPosition: [80, 0.2, 75],
-        activeObjective: 'Reach Okhla Market',
+        missionTitle: 'A Doctor’s Errand',
+        missionDescription: 'Help Maya collect ordinary medical supplies before the day ends.',
+        location: 'hospital',
+        checkpointId: 'checkpoint_m05_doctor_errand',
+        checkpointPosition: [1150, 0.5, -45],
+        activeObjective: 'Meet Maya at the clinic',
         objectives: [
-          { id: 'obj_5_0', description: 'Reach Okhla Market', current: 0, target: 1, completed: false },
-          { id: 'obj_5_1', description: 'Purchase food and essentials', current: 0, target: 1, completed: false },
+          { id: 'obj_5_0', description: 'Meet Maya at the clinic', current: 0, target: 1, completed: false },
+          { id: 'obj_5_1', description: 'Collect the listed first-aid supplies', current: 0, target: 1, completed: false },
         ],
         completedObjectivesCount: 0,
         totalObjectivesCount: 2,
@@ -103,11 +103,11 @@ export function createTestSave(
     };
   }
 
-  if (type === 'mission_15_halfway') {
+  if (type === 'mission_17_halfway') {
     return {
       metadata: {
-        id: slotId || 'test_mission_15',
-        name: 'Slot 2: Day 3 • Mission 15 (Railway Signal - Halfway)',
+        id: slotId || 'test_mission_17',
+        name: 'Slot 2: Day 3 • Mission 17 (Railway Signal - Halfway)',
         characterName: 'Aria',
         dayCount: 3,
         timeString: '14:15',
@@ -115,14 +115,14 @@ export function createTestSave(
         difficulty: 'standard',
         gameMode: 'story',
         campaignDay: 3,
-        missionNumber: 15,
-        missionTitle: 'A Signal from the Railway',
-        checkpointId: 'checkpoint_m15_railway_signal',
+        missionNumber: 17,
+        missionTitle: 'A Signal from Chloe',
+        checkpointId: 'checkpoint_m17_railway_signal',
         progressPercent: 50,
         isFreeExploration: false,
       },
       worldSeed: 42,
-      playerPosition: [280, 0.5, 16],
+      playerPosition: [-10, 0.2, 17],
       playerRotation: Math.PI / 2,
       playerStats: {
         health: 94,
@@ -166,44 +166,44 @@ export function createTestSave(
       nightHordeCountDefeated: 2,
       storyCheckpoint: {
         campaignDay: 3,
-        missionNumber: 15,
+        missionNumber: 17,
         missionId: 'LS_D3_01',
-        missionTitle: 'A Signal from the Railway',
-        missionDescription: 'Chloe discovers a military transmission about a railway evacuation route.',
-        location: 'railway_station',
-        checkpointId: 'checkpoint_m15_railway_signal',
-        checkpointPosition: [280, 0.5, 16],
-        activeObjective: 'Listen to Chloe’s transmission',
+        missionTitle: 'A Signal from Chloe',
+        missionDescription: 'Chloe receives a military evacuation transmission mentioning an operating railway corridor.',
+        location: 'town',
+        checkpointId: 'checkpoint_m17_railway_signal',
+        checkpointPosition: [-10, 0.2, 17],
+        activeObjective: 'Listen to the recovered transmission',
         objectives: [
-          { id: 'obj_15_0', description: 'Inspect the railway signal', current: 1, target: 1, completed: true },
-          { id: 'obj_15_1', description: 'Listen to Chloe’s transmission', current: 0, target: 1, completed: false },
+          { id: 'obj_17_0', description: 'Meet Chloe', current: 1, target: 1, completed: true },
+          { id: 'obj_17_1', description: 'Listen to the recovered transmission', current: 0, target: 1, completed: false },
         ],
         completedObjectivesCount: 1,
         totalObjectivesCount: 2,
         progressPercent: 50,
-        completedMissionNumbers: Array.from({ length: 14 }, (_, i) => i + 1),
+        completedMissionNumbers: Array.from({ length: 16 }, (_, i) => i + 1),
         storyFlags: { signalFound: true },
         isFreeExplorationUnlocked: false,
       },
     };
   }
 
-  if (type === 'mission_53_partial') {
+  if (type === 'mission_67_partial') {
     return {
       metadata: {
-        id: slotId || 'test_mission_53',
-        name: 'Slot 3: Day 8 • Mission 53 (Research Complex - 2/5 Done)',
+        id: slotId || 'test_mission_67',
+        name: 'Slot 3: Day 9 • Mission 67 (Research Records - 1/2 Done)',
         characterName: 'Aria',
-        dayCount: 8,
+        dayCount: 9,
         timeString: '16:45',
         timestamp: now - 1800000,
         difficulty: 'standard',
         gameMode: 'story',
-        campaignDay: 8,
-        missionNumber: 53,
-        missionTitle: 'The Research Complex',
-        checkpointId: 'checkpoint_m53_research_lab_power',
-        progressPercent: 40,
+        campaignDay: 9,
+        missionNumber: 67,
+        missionTitle: 'Research Records',
+        checkpointId: 'checkpoint_m67_research_records',
+        progressPercent: 50,
         isFreeExploration: false,
       },
       worldSeed: 42,
@@ -248,29 +248,26 @@ export function createTestSave(
       structures: [],
       quests: [],
       gameTimeMinutes: 1005, // 16:45
-      dayCount: 8,
+      dayCount: 9,
       nightHordeCountDefeated: 7,
       storyCheckpoint: {
-        campaignDay: 8,
-        missionNumber: 53,
-        missionId: 'LS_D8_04',
-        missionTitle: 'The Research Complex',
-        missionDescription: 'Enter the military research campus and activate its laboratories.',
+        campaignDay: 9,
+        missionNumber: 67,
+        missionId: 'LS_D9_03',
+        missionTitle: 'Research Records',
+        missionDescription: 'Recover the research records.',
         location: 'research_complex',
-        checkpointId: 'checkpoint_m53_research_lab_power',
+        checkpointId: 'checkpoint_m67_research_records',
         checkpointPosition: [974, 0.5, 1],
-        activeObjective: 'Restore campus emergency breaker switches',
+        activeObjective: 'Collect the research files',
         objectives: [
-          { id: 'obj_53_0', description: 'Infiltrate research campus perimeter gate', current: 1, target: 1, completed: true },
-          { id: 'obj_53_1', description: 'Locate primary sub-level power transformer', current: 1, target: 1, completed: true },
-          { id: 'obj_53_2', description: 'Restore campus emergency breaker switches', current: 0, target: 1, completed: false },
-          { id: 'obj_53_3', description: 'Access classified biology terminal records', current: 0, target: 1, completed: false },
-          { id: 'obj_53_4', description: 'Download meteor spore sequencing telemetry', current: 0, target: 1, completed: false },
+          { id: 'obj_67_0', description: 'Search the records area', current: 1, target: 1, completed: true },
+          { id: 'obj_67_1', description: 'Collect the research files', current: 0, target: 1, completed: false },
         ],
-        completedObjectivesCount: 2,
-        totalObjectivesCount: 5,
-        progressPercent: 40,
-        completedMissionNumbers: Array.from({ length: 52 }, (_, i) => i + 1),
+        completedObjectivesCount: 1,
+        totalObjectivesCount: 2,
+        progressPercent: 50,
+        completedMissionNumbers: Array.from({ length: 66 }, (_, i) => i + 1),
         storyFlags: { transformerActive: true, campusGateOpen: true },
         isFreeExplorationUnlocked: false,
         unlockedFacilities: ['sample_storage', 'scientist_quarters', 'quarantine_ward'],
@@ -278,21 +275,21 @@ export function createTestSave(
     };
   }
 
-  if (type === 'mission_55') {
+  if (type === 'mission_70_research') {
     return {
       metadata: {
-        id: slotId || 'test_mission_55',
-        name: 'Day 8 • Mission 55 (Origin of Infection)',
+        id: slotId || 'test_mission_70',
+        name: 'Day 9 • Mission 70 (The Origin Clue)',
         characterName: 'Aria',
-        dayCount: 8,
+        dayCount: 9,
         timeString: '19:30',
         timestamp: now - 900000,
         difficulty: 'standard',
         gameMode: 'story',
-        campaignDay: 8,
-        missionNumber: 55,
-        missionTitle: 'The Origin of Infection',
-        checkpointId: 'checkpoint_m55_origin_analysis',
+        campaignDay: 9,
+        missionNumber: 70,
+        missionTitle: 'The Origin Clue',
+        checkpointId: 'checkpoint_m70_origin_analysis',
         progressPercent: 0,
         isFreeExploration: false,
       },
@@ -336,26 +333,26 @@ export function createTestSave(
       structures: [],
       quests: [],
       gameTimeMinutes: 1170, // 19:30
-      dayCount: 8,
+      dayCount: 9,
       nightHordeCountDefeated: 7,
       storyCheckpoint: {
-        campaignDay: 8,
-        missionNumber: 55,
-        missionId: 'LS_D8_06',
-        missionTitle: 'The Origin of Infection',
-        missionDescription: 'Uncover evidence linking the meteor to infection and mutations.',
+        campaignDay: 9,
+        missionNumber: 70,
+        missionId: 'LS_D9_06',
+        missionTitle: 'The Origin Clue',
+        missionDescription: 'Compare the recovered data to understand the meteorite-related outbreak.',
         location: 'research_complex',
-        checkpointId: 'checkpoint_m55_origin_analysis',
+        checkpointId: 'checkpoint_m70_origin_analysis',
         checkpointPosition: [974, 0.5, -12],
-        activeObjective: 'Analyse meteor samples',
+        activeObjective: 'Compare the research files',
         objectives: [
-          { id: 'obj_55_0', description: 'Analyse meteor samples', current: 0, target: 1, completed: false },
-          { id: 'obj_55_1', description: 'Review mutation research', current: 0, target: 1, completed: false },
+          { id: 'obj_70_0', description: 'Compare the research files', current: 0, target: 1, completed: false },
+          { id: 'obj_70_1', description: 'Identify the origin clue', current: 0, target: 1, completed: false },
         ],
         completedObjectivesCount: 0,
         totalObjectivesCount: 2,
         progressPercent: 0,
-        completedMissionNumbers: Array.from({ length: 54 }, (_, i) => i + 1),
+        completedMissionNumbers: Array.from({ length: 69 }, (_, i) => i + 1),
         storyFlags: {},
         isFreeExplorationUnlocked: false,
         unlockedFacilities: ['sample_storage', 'scientist_quarters', 'quarantine_ward', 'research_command', 'biology_lab'],
@@ -363,21 +360,21 @@ export function createTestSave(
     };
   }
 
-  // mission_70_completed
+  // mission_96_completed
   return {
     metadata: {
-      id: slotId || 'test_mission_70',
-      name: 'Day 10 • Mission 70 (A New Beginning - FREE EXPLORATION)',
+      id: slotId || 'test_mission_96',
+      name: 'Day 12 • Mission 96 (A New Dawn - FREE EXPLORATION)',
       characterName: 'Aria',
-      dayCount: 10,
+      dayCount: 12,
       timeString: '06:00',
       timestamp: now,
       difficulty: 'standard',
       gameMode: 'story',
-      campaignDay: 10,
-      missionNumber: 70,
-      missionTitle: 'A New Beginning',
-      checkpointId: 'checkpoint_m70_sanctuary_dawn',
+      campaignDay: 12,
+      missionNumber: 96,
+      missionTitle: 'A New Dawn',
+      checkpointId: 'checkpoint_m96_sanctuary_dawn',
       progressPercent: 100,
       isFreeExploration: true,
     },
@@ -423,27 +420,27 @@ export function createTestSave(
     structures: [],
     quests: [],
     gameTimeMinutes: 360, // 06:00 AM Dawn
-    dayCount: 10,
+    dayCount: 12,
     nightHordeCountDefeated: 9,
     storyCheckpoint: {
-      campaignDay: 10,
-      missionNumber: 70,
-      missionId: 'LS_D10_07',
-      missionTitle: 'A New Beginning',
+      campaignDay: 12,
+      missionNumber: 96,
+      missionId: 'LS_D12_08',
+      missionTitle: 'A New Dawn',
       missionDescription: 'Defeat the threat, send a regional rescue signal and establish the Last Sanctuary.',
       location: 'sanctuary',
-      checkpointId: 'checkpoint_m70_sanctuary_dawn',
+      checkpointId: 'checkpoint_m96_sanctuary_dawn',
       checkpointPosition: [954, 0.5, 22],
       activeObjective: 'Sanctuary Established — Infinite Free Exploration Active',
       objectives: [
-        { id: 'obj_70_0', description: 'Send the regional rescue signal', current: 1, target: 1, completed: true },
-        { id: 'obj_70_1', description: 'Complete the final defence and secure the sanctuary', current: 1, target: 1, completed: true },
+        { id: 'obj_96_0', description: 'Watch the ending scene', current: 1, target: 1, completed: true },
+        { id: 'obj_96_1', description: 'Return to the open world', current: 1, target: 1, completed: true },
       ],
       completedObjectivesCount: 2,
       totalObjectivesCount: 2,
       progressPercent: 100,
-      completedMissionNumbers: Array.from({ length: 70 }, (_, i) => i + 1),
-      storyFlags: { signalSent: true, sanctuarySecured: true },
+      completedMissionNumbers: Array.from({ length: 96 }, (_, i) => i + 1),
+      storyFlags: { signalSent: true, sanctuarySecured: true, endingChoice: 'united_survivors' },
       isFreeExplorationUnlocked: true,
       unlockedFacilities: ['sample_storage', 'scientist_quarters', 'quarantine_ward', 'research_command', 'biology_lab', 'meteor_lab', 'infection_testing', 'genetics_lab', 'medical_research', 'secret_lab'],
     },
@@ -455,8 +452,8 @@ export function createTestSave(
  */
 export async function seedAllVerificationTestSaves(): Promise<void> {
   await saveGameToSlot(createTestSave('mission_5', 'slot_1'));
-  await saveGameToSlot(createTestSave('mission_15_halfway', 'slot_2'));
-  await saveGameToSlot(createTestSave('mission_53_partial', 'slot_3'));
-  await saveGameToSlot(createTestSave('mission_55', 'slot_m55'));
-  await saveGameToSlot(createTestSave('mission_70_completed', 'slot_m70'));
+  await saveGameToSlot(createTestSave('mission_17_halfway', 'slot_2'));
+  await saveGameToSlot(createTestSave('mission_67_partial', 'slot_3'));
+  await saveGameToSlot(createTestSave('mission_70_research', 'slot_m70'));
+  await saveGameToSlot(createTestSave('mission_96_completed', 'slot_m96'));
 }

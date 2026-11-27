@@ -612,9 +612,9 @@ export interface StoryObjectiveState {
 }
 
 export interface StoryCheckpointData {
-  campaignDay: number; // 1 to 10
-  missionNumber: number; // 1 to 70
-  missionId: string; // e.g. 'LS_D8_04'
+  campaignDay: number; // 1 to 12
+  missionNumber: number; // 1 to 96
+  missionId: string; // e.g. 'LS_D12_08'
   missionTitle: string;
   missionDescription: string;
   location: string;
@@ -627,7 +627,7 @@ export interface StoryCheckpointData {
   progressPercent: number; // 0 to 100
   completedMissionNumbers: number[];
   storyFlags: Record<string, any>;
-  isFreeExplorationUnlocked: boolean; // true if Mission 70 genuinely completed
+  isFreeExplorationUnlocked: boolean; // true if Mission 96 genuinely completed
   unlockedFacilities?: string[];
   weatherState?: string;
 }

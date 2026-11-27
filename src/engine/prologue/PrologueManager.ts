@@ -54,6 +54,7 @@ export class PrologueManager {
     marcus: [],
     chloe: [],
     maya: [],
+    rohan: [],
   };
   public lastSafeCheckpointId: string = 'D1_E01_NEW_MORNING';
 
@@ -66,7 +67,7 @@ export class PrologueManager {
   // Backward compatibility with legacy 13 chapters and task objects
   public chapter: number = 1;
   public day: number = 1;
-  public friendsMet = { marcus: false, chloe: false, maya: false };
+  public friendsMet = { marcus: false, chloe: false, maya: false, rohan: false };
   public apartmentInspected = { phone: false, fridge: false, window: false, armory: false, pool: false, tv: false };
   public cityTasks = { market: false, cafe: false, park: false, broadcast: false, escapeHighway: false };
   public baseTasks = {
@@ -142,6 +143,7 @@ export class PrologueManager {
     this.companionMgr.teleportTo('marcus', [-10, 0, 16], Math.PI / 4);
     this.companionMgr.teleportTo('chloe', [-11.5, 0, 17.5], 0);
     this.companionMgr.teleportTo('maya', [-9, 0, 18], -Math.PI / 3);
+    this.companionMgr.teleportTo('rohan', [-7.2, 0, 19.4], Math.PI / 2);
     this.companionMgr.setAllFollowing(false);
 
     // Initial cinematic sweep and banner
@@ -296,7 +298,7 @@ export class PrologueManager {
           this.dialogueStep = 1;
           this.setSubtitle({
             speaker: 'Marcus Cole',
-            role: 'The Leader',
+            role: 'Saviour',
             text: 'Finally! I thought you were going to sleep through the whole morning.',
             duration: 4.0,
           });
@@ -319,7 +321,7 @@ export class PrologueManager {
           this.dialogueStep = 1;
           this.setSubtitle({
             speaker: 'Chloe Miller',
-            role: 'The Technician',
+            role: 'Explorer',
             text: 'I tested the Pine Ridge ham repeater this morning. Power was jumpy, but signal holds.',
             duration: 4.5,
           });
@@ -327,7 +329,7 @@ export class PrologueManager {
           this.dialogueStep = 2;
           this.setSubtitle({
             speaker: 'Dr. Maya Lin',
-            role: 'The Medic',
+            role: 'Doctor',
             text: 'Can we just enjoy one peaceful, normal weekend? The clinic was delightfully quiet all week.',
             duration: 4.5,
           });
@@ -335,7 +337,7 @@ export class PrologueManager {
           this.dialogueStep = 3;
           this.setSubtitle({
             speaker: 'Marcus Cole',
-            role: 'The Leader',
+            role: 'Saviour',
             text: 'Agreed! Let’s finish coffee and take a walk over to Town Square Park.',
             duration: 4.0,
           });
@@ -371,7 +373,7 @@ export class PrologueManager {
           this.dialogueStep = 2;
           this.setSubtitle({
             speaker: 'Chloe Miller',
-            role: 'The Technician',
+            role: 'Explorer',
             text: 'Unidentified celestial body? That explains the electromagnetic interference on my receiver.',
             duration: 4.5,
           });
@@ -379,7 +381,7 @@ export class PrologueManager {
           this.dialogueStep = 3;
           this.setSubtitle({
             speaker: 'Marcus Cole',
-            role: 'The Leader',
+            role: 'Saviour',
             text: 'Scientists said it’s harmless. The sun is starting to set—let’s head back to the apartment.',
             duration: 4.5,
           });
@@ -466,7 +468,7 @@ export class PrologueManager {
             this.dialogueStep = 1;
             this.setSubtitle({
               speaker: 'Marcus Cole',
-              role: 'The Leader',
+              role: 'Saviour',
               text: 'We have to get up to the Floor 7 Crown Rooftop to see where it’s coming from!',
               duration: 4.5,
             });
@@ -497,7 +499,7 @@ export class PrologueManager {
           this.meteorMgr.launchMeteorFlight();
           this.setSubtitle({
             speaker: 'Marcus Cole',
-            role: 'The Leader',
+            role: 'Saviour',
             text: 'LOOK AT THE SKY! Something is tearing through the clouds right over the eastern ridge!',
             duration: 5.0,
           });
@@ -520,7 +522,7 @@ export class PrologueManager {
             this.dialogueStep = 1;
             this.setSubtitle({
               speaker: 'Dr. Maya Lin',
-              role: 'The Medic',
+              role: 'Doctor',
               text: 'Careful! Look at how they’re stumbling... the impact fallout is causing acute neurological seizure. Keep your distance!',
               duration: 5.5,
             });
@@ -565,7 +567,7 @@ export class PrologueManager {
           this.cinematicCam.playTrack('highway_overlook', 6.0);
           this.setSubtitle({
             speaker: 'Marcus Cole',
-            role: 'The Leader',
+            role: 'Saviour',
             text: 'Look at the skyline behind us... in less than an hour, the world we knew is gone.',
             duration: 4.5,
           });
@@ -573,8 +575,8 @@ export class PrologueManager {
           this.dialogueStep = 2;
           this.setSubtitle({
             speaker: 'Chloe Miller',
-            role: 'The Technician',
-            text: 'There is an industrial compound about 350 meters ahead along this ridge. Perimeter fencing, steel gates.',
+            role: 'Explorer',
+            text: 'The railway station is our next lead. But first we need to regroup at the apartment compound and make sure everyone is safe.',
             duration: 4.5,
           });
         } else if (this.dialogueStep === 2 && this.phaseTimer > 9.5) {
@@ -582,50 +584,61 @@ export class PrologueManager {
           this.cinematicCam.endCinematic();
           this.setSubtitle({
             speaker: 'Dr. Maya Lin',
-            role: 'The Medic',
+            role: 'Doctor',
             text: 'Then that’s where we go. We survive this together.',
             duration: 4.0,
           });
+          this.callbacks.onObjectiveUpdate('Mission: RETURN HOME — regroup with all four friends at the apartment compound');
+          this.engine.objectiveNavigator.setObjective({
+            id: 'story_d2_e19_home',
+            title: 'RETURN TO THE COMPOUND',
+            instruction: 'Return to your protected apartment compound before nightfall.',
+            destinationName: 'Apartment Compound',
+            position: [-26, 0.2, 31],
+            arrivalRadius: 8.0,
+          });
         }
 
-        // Approaching Starter Base gate (954, 34)
-        const dGate = Math.hypot(
-          this.engine.player.position.x - this.baseGatePos.x,
-          this.engine.player.position.z - this.baseGatePos.z
+        // Return to the existing apartment compound for the first night. The military installation is a later Day 4 destination.
+        const dHome = Math.hypot(
+          this.engine.player.position.x - (-26),
+          this.engine.player.position.z - 31
         );
-        if (dGate < 9.0) {
+        if (dHome < 10.0) {
           this.startEvent('D2_E20_STARTER_BASE');
         }
         break;
       }
 
-      // EVENT 20: STARTER BASE ESTABLISHMENT
+      // EVENT 20: FIRST NIGHT TOGETHER — regroup at the existing apartment compound.
       case 'D2_E20_STARTER_BASE': {
-        if (
-          this.baseTasks.generator &&
-          this.baseTasks.storage &&
-          this.baseTasks.medical &&
-          this.baseTasks.gate
-        ) {
-          if (this.dialogueStep === 0 && this.phaseTimer > 1.0) {
-            this.dialogueStep = 1;
-            this.cinematicCam.playTrack('open_world_reveal', 12.0);
-            soundEngine.playDawnVictoryChime();
-            this.callbacks.onTitleBanner({
-              title: 'PROLOGUE COMPLETE: LAST SANCTUARY',
-              subtitle: 'THE WORLD ENDED. OUR STORY BEGINS.',
-              day: 'OPEN SURVIVAL WORLD UNLOCKED',
-            });
-            this.setSubtitle({
-              speaker: 'Marcus Cole',
-              role: 'The Leader',
-              text: 'We have shelter, power, and each other. The old world ended... but our new story begins now.',
-              duration: 7.0,
-            });
-          } else if (this.dialogueStep === 1 && this.phaseTimer > 11.0) {
-            this.dialogueStep = 2;
-            this.completeCampaign();
-          }
+        if (this.dialogueStep === 0 && this.phaseTimer > 1.0) {
+          this.dialogueStep = 1;
+          this.cinematicCam.playCampaignOrbit(this.engine.player.position, 6.0);
+          soundEngine.playDawnVictoryChime();
+          this.callbacks.onTitleBanner({
+            title: 'EVENT 20: FIRST NIGHT TOGETHER',
+            subtitle: 'THE APARTMENT COMPOUND — SAFE FOR TONIGHT',
+            day: 'DAY 2 — 09:30 AM',
+          });
+          this.setSubtitle({
+            speaker: 'Marcus Cole',
+            role: 'Saviour',
+            text: 'We made it back together. This compound will keep us safe tonight. Tomorrow we follow Chloe’s railway signal and find out who is still out there.',
+            duration: 6.5,
+          });
+          this.callbacks.onObjectiveUpdate('Mission: FIRST NIGHT TOGETHER — regroup with all four friends and secure the existing apartment compound');
+          this.engine.objectiveNavigator.setObjective({
+            id: 'story_d2_e20_homecoming',
+            title: 'FIRST NIGHT TOGETHER',
+            instruction: 'Regroup with Marcus, Chloe, Maya and Rohan inside the apartment compound.',
+            destinationName: 'Apartment Compound Courtyard',
+            position: [-10, 0.2, 17],
+            arrivalRadius: 5.0,
+          });
+        } else if (this.dialogueStep === 1 && this.phaseTimer > 8.0) {
+          this.dialogueStep = 2;
+          this.completeCampaign();
         }
         break;
       }
@@ -680,15 +693,15 @@ export class PrologueManager {
 
         this.setSubtitle({
           speaker: 'Marcus Cole',
-          role: 'The Leader',
+          role: 'Saviour',
           text: '“Hey! Don’t sleep in. Chloe and Maya are meeting us at Corner Roast Café at 9 sharp.”',
           duration: 4.5,
         });
-        this.callbacks.onObjectiveUpdate('Mission: MEET FRIENDS — Meet Marcus, Chloe, and Maya at Corner Roast Café');
+        this.callbacks.onObjectiveUpdate('Mission: MEET FRIENDS — Meet Marcus, Chloe, Maya, and Rohan at Corner Roast Café');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d1_e03_cafe',
           title: 'MEETING THE CREW',
-          instruction: 'Leave the apartment and meet your three friends at Corner Roast Café.',
+          instruction: 'Leave the apartment and meet all four friends at Corner Roast Café.',
           destinationName: 'Corner Roast Café',
           position: [-14, 0.2, -60],
           arrivalRadius: 5.5,
@@ -727,6 +740,7 @@ export class PrologueManager {
         this.friendsMet.marcus = true;
         this.friendsMet.chloe = true;
         this.friendsMet.maya = true;
+        this.friendsMet.rohan = true;
         this.callbacks.onTitleBanner({
           title: 'EVENT 05: THE MEETING POINT',
           subtitle: 'CORNER ROAST CAFÉ',
@@ -747,7 +761,7 @@ export class PrologueManager {
 
       case 'D1_E06_FOUR_FRIENDS': {
         this.chapter = 3;
-        this.callbacks.onObjectiveUpdate('Mission: SPEND TIME TOGETHER — Chat with your three friends at the café');
+        this.callbacks.onObjectiveUpdate('Mission: SPEND TIME TOGETHER — Chat with all four friends at the café');
         break;
       }
 
@@ -764,7 +778,7 @@ export class PrologueManager {
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d1_e07_fountain',
           title: 'TOWN SQUARE PARK',
-          instruction: 'Visit the central park fountain with Marcus, Chloe, and Maya.',
+          instruction: 'Visit the central park fountain with Marcus, Chloe, Maya, and Rohan.',
           destinationName: 'Park Fountain',
           position: [20, 0.2, 18],
           arrivalRadius: 4.5,
@@ -819,7 +833,7 @@ export class PrologueManager {
         setTimeout(() => this.callbacks.onTitleBanner(null), 3500);
         this.setSubtitle({
           speaker: 'Marcus Cole',
-          role: 'The Leader',
+          role: 'Saviour',
           text: 'Great day today. Get some rest tonight in your bed—we have that ridge hike tomorrow.',
           duration: 4.5,
         });
@@ -888,7 +902,7 @@ export class PrologueManager {
           day: 'DAY 2 — 08:10 AM',
         });
         setTimeout(() => this.callbacks.onTitleBanner(null), 3500);
-        this.callbacks.onObjectiveUpdate('Mission: REGROUP — Meet Marcus, Chloe, and Maya at the apartment front door');
+        this.callbacks.onObjectiveUpdate('Mission: REGROUP — Meet Marcus, Chloe, Maya, and Rohan at the apartment front door');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d2_e13_door',
           title: 'MEET AT FRONT DOOR',
@@ -992,11 +1006,11 @@ export class PrologueManager {
         setTimeout(() => this.callbacks.onTitleBanner(null), 3500);
         this.setSubtitle({
           speaker: 'Marcus Cole',
-          role: 'The Leader',
+          role: 'Saviour',
           text: 'Stay together! Follow the highway east out of the valley—keep moving!',
           duration: 4.5,
         });
-        this.callbacks.onObjectiveUpdate('Mission: ESCAPE THE CITY — Escort your three friends along the eastern highway corridor');
+        this.callbacks.onObjectiveUpdate('Mission: ESCAPE THE CITY — Escort all four friends along the eastern highway corridor');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d2_e18_highway',
           title: 'EASTERN HIGHWAY',
@@ -1017,7 +1031,7 @@ export class PrologueManager {
           day: 'DAY 2 — 09:10 AM',
         });
         setTimeout(() => this.callbacks.onTitleBanner(null), 3500);
-        this.callbacks.onObjectiveUpdate('Mission: REACH OVERLOOK — Regroup with Marcus, Chloe, and Maya on the highway overlook');
+        this.callbacks.onObjectiveUpdate('Mission: REACH OVERLOOK — Regroup with Marcus, Chloe, Maya, and Rohan on the highway overlook');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d2_e19_overlook',
           title: 'HIGHWAY OVERLOOK',
@@ -1032,33 +1046,31 @@ export class PrologueManager {
       case 'D2_E20_STARTER_BASE': {
         this.chapter = 11;
         this.starterBaseEstablished = false;
-        // Station companions inside the Starter Base compound at (954, 22)
-        this.companionMgr.teleportTo('marcus', [954, 0, 33], Math.PI);
-        this.companionMgr.teleportTo('chloe', [954 - 2.0, 0, 18.5], 0);
-        this.companionMgr.teleportTo('maya', [951.6, 0, 19.4], 0);
+        this.companionMgr.teleportTo('marcus', [-10, 0, 16], Math.PI / 4);
+        this.companionMgr.teleportTo('chloe', [-11.5, 0, 17.5], 0);
+        this.companionMgr.teleportTo('maya', [-9, 0, 18], -Math.PI / 3);
+        this.companionMgr.teleportTo('rohan', [-7.2, 0, 19.4], Math.PI / 2);
         this.companionMgr.setAllFollowing(false);
-
         this.callbacks.onTitleBanner({
-          title: 'EVENT 20: A NEW BEGINNING — STARTER BASE',
-          subtitle: 'ESTABLISHING OUR SANCTUARY',
+          title: 'EVENT 20: FIRST NIGHT TOGETHER',
+          subtitle: 'THE APARTMENT COMPOUND — SAFE FOR TONIGHT',
           day: 'DAY 2 — 09:30 AM',
         });
         setTimeout(() => this.callbacks.onTitleBanner(null), 4000);
-
         this.setSubtitle({
-          speaker: 'Marcus Cole',
-          role: 'The Leader',
-          text: 'This industrial compound will be our Starter Base. Let’s inspect the generator, medical corner, storage, and secure the gate.',
+          speaker: 'Dr. Maya Lin',
+          role: 'Doctor',
+          text: 'Everyone is accounted for. Let’s secure the home, check our medical supplies and rest before following the railway signal tomorrow.',
           duration: 5.5,
         });
-        this.callbacks.onObjectiveUpdate('Mission: ESTABLISH BASE — 1) Prime generator with Chloe [954, 18], 2) Medical corner [951.6, 19.4], 3) Storage chest, 4) Secure gate with Marcus');
+        this.callbacks.onObjectiveUpdate('Mission: FIRST NIGHT TOGETHER — regroup at the apartment compound');
         this.engine.objectiveNavigator.setObjective({
-          id: 'story_d2_e20_generator',
-          title: 'PRIME GENERATOR',
-          instruction: 'Inspect and start the backup diesel generator with Chloe at (954, 18).',
-          destinationName: 'Backup Diesel Generator',
-          position: [954, 0.2, 18],
-          arrivalRadius: 3.5,
+          id: 'story_d2_e20_homecoming',
+          title: 'FIRST NIGHT TOGETHER',
+          instruction: 'Regroup with all four friends at the apartment compound.',
+          destinationName: 'Apartment Compound Courtyard',
+          position: [-10, 0.2, 17],
+          arrivalRadius: 5.0,
         });
         break;
       }
@@ -1072,6 +1084,22 @@ export class PrologueManager {
   // ==========================================
   public sleepToDay2() {
     this.startEvent('D2_E11_SOMETHING_WRONG');
+  }
+
+  /** The existing military-base generator is restored during campaign Day 4, not at the railway station. */
+  public activateMilitaryBaseGenerator(): boolean {
+    if (this.baseTasks.generator) return false;
+    this.baseTasks.generator = true;
+    this.starterBaseEstablished = true;
+    soundEngine.playBuildSnap();
+    this.setSubtitle({
+      speaker: 'Chloe Miller',
+      role: 'Explorer',
+      text: 'The military base backup generator is online. We can now check the medical wing and organise the rest of the compound.',
+      duration: 5.0,
+    });
+    this.engine.triggerAutoSave();
+    return true;
   }
 
   public onMeteorImpacted() {
@@ -1101,7 +1129,8 @@ export class PrologueManager {
   public completeCampaign() {
     this.isCompleted = true;
     this.phase = 'completed';
-    this.starterBaseEstablished = true;
+    this.starterBaseEstablished = false;
+    this.baseTasks.generator = false;
     this.cinematicCam.endCinematic();
     this.callbacks.onPhaseChange('completed');
     this.callbacks.onSubtitleChange(null);
@@ -1112,10 +1141,11 @@ export class PrologueManager {
     this.engine.zombieMgr.isOutbreakActive = true;
     this.outbreakMgr.isOutbreakActive = true;
 
-    // Station companions permanently in Starter Base compound
-    this.companionMgr.teleportTo('marcus', [954, 0, 33], Math.PI); // Guarding main gate
-    this.companionMgr.teleportTo('chloe', [954 - 2.4, 0, 18.5], 0);  // Generator & workbench
-    this.companionMgr.teleportTo('maya', [951.6, 0, 19.4], 0);       // Medical triage
+    // Keep the four friends together at the existing apartment compound. The military base is introduced on campaign Day 4.
+    this.companionMgr.teleportTo('marcus', [-10, 0, 16], Math.PI / 4);
+    this.companionMgr.teleportTo('chloe', [-11.5, 0, 17.5], 0);
+    this.companionMgr.teleportTo('maya', [-9, 0, 18], -Math.PI / 3);
+    this.companionMgr.teleportTo('rohan', [-7.2, 0, 19.4], Math.PI / 2);
     this.companionMgr.setAllFollowing(false);
 
     // Spawn physical meteorite crater
@@ -1134,7 +1164,7 @@ export class PrologueManager {
         chapter: 1,
         title: 'The Road Ahead: Rebirth',
         description:
-          'You and your three companions have survived Day 1 and Day 2, outran the citywide outbreak, and established your Starter Base at Outpost 7. Fortify the compound, scavenge the 30 biomes, and survive against the nightly blood moon hordes.',
+          'You and your four friends survived the first two days and returned to the protected apartment compound. Chloe has a railway signal to investigate next; the military installation and Outpost 7 remain ahead.',
         completed: false,
         rewards: {
           xp: 500,
@@ -1146,7 +1176,7 @@ export class PrologueManager {
         objectives: [
           {
             id: 'talk_to_marcus',
-            description: 'Talk to Marcus [E] at the main gate to coordinate defense',
+            description: 'Talk to Marcus [E] in the apartment courtyard to coordinate the next move',
             current: 0,
             target: 1,
             completed: false,
@@ -1160,7 +1190,7 @@ export class PrologueManager {
           },
           {
             id: 'survive_night_one',
-            description: 'Defend the sanctuary compound against the blood moon horde at night',
+            description: 'Defend the apartment compound against the first night threat',
             current: 0,
             target: 1,
             completed: false,
@@ -1184,29 +1214,9 @@ export class PrologueManager {
     if (this.isCompleted) return null;
 
     // 1. Apartment Interactions (Day 1 E01-E03, E09-E10; Day 2 E11-E14)
-    if (this.currentDay === 1 || this.currentEventId === 'D2_E11_SOMETHING_WRONG' || this.currentEventId === 'D2_E12_EMERGENCY_BROADCAST') {
+    if (this.currentDay === 1 || this.currentEventId === 'D2_E11_SOMETHING_WRONG' || this.currentEventId === 'D2_E12_EMERGENCY_BROADCAST' || this.currentEventId === 'D2_E20_STARTER_BASE') {
       const apt = this.townMgr.getApartmentInteraction(pos);
       if (apt) return apt.prompt;
-    }
-
-    // 2. Starter Base Tasks (Event 20)
-    if (this.currentEventId === 'D2_E20_STARTER_BASE') {
-      // Generator (954, 18)
-      if (Math.hypot(pos.x - 954, pos.z - 18) < 3.2 && !this.baseTasks.generator) {
-        return 'Press [E] to Inspect & Prime Diesel Generator with Chloe';
-      }
-      // Medical (951.6, 19.4)
-      if (Math.hypot(pos.x - 951.6, pos.z - 19.4) < 3.2 && !this.baseTasks.medical) {
-        return 'Press [E] to Set Up First Aid Medical Corner with Dr. Maya';
-      }
-      // Gate (954, 34)
-      if (Math.hypot(pos.x - 954, pos.z - 34) < 3.8 && !this.baseTasks.gate) {
-        return 'Press [E] to Engage Deadbolt & Fortify Main Gate with Marcus';
-      }
-      // Cabin Storage Chest (955.8, 14.5)
-      if (Math.hypot(pos.x - 955.8, pos.z - 14.5) < 3.5 && !this.baseTasks.storage) {
-        return 'Press [E] to Organize Compound Storage Chest';
-      }
     }
 
     // 3. Companion Dialogue Prompt
@@ -1306,62 +1316,6 @@ export class PrologueManager {
       }
     }
 
-    // 2. Starter Base Tasks (Event 20)
-    if (this.currentEventId === 'D2_E20_STARTER_BASE') {
-      if (Math.hypot(pos.x - 954, pos.z - 18) < 3.2 && !this.baseTasks.generator) {
-        this.baseTasks.generator = true;
-        soundEngine.playBuildSnap();
-        this.setSubtitle({
-          speaker: 'Chloe Miller',
-          role: 'The Technician',
-          text: 'Alternator connected, fuel lines primed! Main compound power is online!',
-          duration: 4.5,
-        });
-        this.checkAllBaseTasks();
-        return true;
-      }
-      if (Math.hypot(pos.x - 951.6, pos.z - 19.4) < 3.2 && !this.baseTasks.medical) {
-        this.baseTasks.medical = true;
-        soundEngine.playDawnVictoryChime();
-        this.engine.playerStats.health = this.engine.playerStats.maxHealth;
-        this.engine.callbacks.onStatsChange({ ...this.engine.playerStats });
-        this.setSubtitle({
-          speaker: 'Dr. Maya Lin',
-          role: 'The Medic',
-          text: 'Medical triage post established! Clean bandages and sterile supplies stocked.',
-          duration: 4.5,
-        });
-        this.checkAllBaseTasks();
-        return true;
-      }
-      if (Math.hypot(pos.x - 954, pos.z - 34) < 3.8 && !this.baseTasks.gate) {
-        this.baseTasks.gate = true;
-        soundEngine.playBuildSnap();
-        this.setSubtitle({
-          speaker: 'Marcus Cole',
-          role: 'The Leader',
-          text: 'Heavy steel crossbar and deadbolts engaged. Our perimeter is secured.',
-          duration: 4.5,
-        });
-        this.checkAllBaseTasks();
-        return true;
-      }
-      if (Math.hypot(pos.x - 955.8, pos.z - 14.5) < 3.5 && !this.baseTasks.storage) {
-        this.baseTasks.storage = true;
-        soundEngine.playBuildSnap();
-        this.engine.callbacks.onItemCollected('stone_axe', 1);
-        this.engine.callbacks.onItemCollected('stone_pickaxe', 1);
-        this.engine.callbacks.onItemCollected('canned_beans', 2);
-        this.setSubtitle({
-          speaker: 'Player',
-          text: 'Found axes, pickaxes, and non-perishable rations in the compound storage.',
-          duration: 4.0,
-        });
-        this.checkAllBaseTasks();
-        return true;
-      }
-    }
-
     // 3. Companion Dialogue Interaction
     const friend = this.companionMgr.getNearestCompanion(pos, 3.8);
     if (friend) {
@@ -1374,7 +1328,7 @@ export class PrologueManager {
       if (friend.id === 'marcus') {
         this.setSubtitle({
           speaker: 'Marcus Cole',
-          role: 'The Leader',
+          role: 'Saviour',
           text: this.currentDay === 1
             ? 'Quiet mornings like this remind you how good life is.'
             : 'Stay alert. We move together and watch each other’s backs.',
@@ -1383,7 +1337,7 @@ export class PrologueManager {
       } else if (friend.id === 'chloe') {
         this.setSubtitle({
           speaker: 'Chloe Miller',
-          role: 'The Technician',
+          role: 'Explorer',
           text: this.currentDay === 1
             ? 'Shortwave repeaters are all calibrated. Ready for the hike!'
             : 'I’ve got the telemetry scanner set. Keep us moving.',
@@ -1392,10 +1346,20 @@ export class PrologueManager {
       } else if (friend.id === 'maya') {
         this.setSubtitle({
           speaker: 'Dr. Maya Lin',
-          role: 'The Medic',
+          role: 'Doctor',
           text: this.currentDay === 1
             ? 'A peaceful day in Oakridge is just what we needed.'
             : 'I have first-aid kits ready if anyone takes a hit.',
+          duration: 4.0,
+        });
+      }
+      else if (friend.id === 'rohan') {
+        this.setSubtitle({
+          speaker: 'Rohan Mehta',
+          role: 'Armoury & Tactical Specialist',
+          text: this.currentDay === 1
+            ? 'I have checked our basic emergency kit. We should know our exits before we need them.'
+            : 'I will organise the protective equipment and keep our team’s route clear.',
           duration: 4.0,
         });
       }
@@ -1456,7 +1420,9 @@ export class PrologueManager {
     this.chapter = 13;
     this.day = saveData.day || 2;
     this.currentDay = 2;
-    this.friendsMet = saveData.friendsMet || { marcus: true, chloe: true, maya: true };
+    this.friendsMet = { marcus: true, chloe: true, maya: true, rohan: true, ...(saveData.friendsMet || {}) };
+    this.starterBaseEstablished = Boolean(saveData.starterBaseEstablished && (saveData.day || 1) >= 4);
+    const legacyBaseBeforeDayFour = (saveData.day || 1) < 4;
     if (saveData.companions) {
       this.companionMgr.companions.forEach((companion, id) => {
         const saved = saveData.companions[id];
@@ -1464,7 +1430,7 @@ export class PrologueManager {
           companion.relationshipScore = saved.relationshipScore ?? companion.relationshipScore;
           if (typeof saved.isFollowing === 'boolean') companion.isFollowing = saved.isFollowing;
           if (typeof saved.isFriend === 'boolean') companion.isFriend = saved.isFriend;
-          if (saved.position && saved.position.length === 3) {
+          if (saved.position && saved.position.length === 3 && !legacyBaseBeforeDayFour) {
             this.companionMgr.teleportTo(id as any, saved.position, saved.rotationY ?? 0);
           }
         }
@@ -1476,15 +1442,18 @@ export class PrologueManager {
     this.engine.zombieMgr.isOutbreakActive = true;
     this.outbreakMgr.isOutbreakActive = true;
 
-    // Station companions permanently in Starter Base compound (954, 22) if not already positioned
-    if (!saveData.companions?.['marcus']?.position) {
-      this.companionMgr.teleportTo('marcus', [954, 0, 33], Math.PI);
+    // Keep companions at the apartment until the new campaign reaches the Day 4 military installation
+    if (legacyBaseBeforeDayFour || !saveData.companions?.['marcus']?.position) {
+      this.companionMgr.teleportTo('marcus', [-10, 0, 16], Math.PI / 4);
     }
-    if (!saveData.companions?.['chloe']?.position) {
-      this.companionMgr.teleportTo('chloe', [954 - 2.4, 0, 18.5], 0);
+    if (legacyBaseBeforeDayFour || !saveData.companions?.['chloe']?.position) {
+      this.companionMgr.teleportTo('chloe', [-11.5, 0, 17.5], 0);
     }
-    if (!saveData.companions?.['maya']?.position) {
-      this.companionMgr.teleportTo('maya', [951.6, 0, 19.4], 0);
+    if (legacyBaseBeforeDayFour || !saveData.companions?.['maya']?.position) {
+      this.companionMgr.teleportTo('maya', [-9, 0, 18], -Math.PI / 3);
+    }
+    if (legacyBaseBeforeDayFour || !saveData.companions?.['rohan']?.position) {
+      this.companionMgr.teleportTo('rohan', [-7.2, 0, 19.4], Math.PI / 2);
     }
   }
 
@@ -1513,11 +1482,11 @@ export class PrologueManager {
         });
         break;
       case 'D1_E03_FRIEND_MESSAGE':
-        this.callbacks.onObjectiveUpdate('Mission: HEAD OUTSIDE — Meet Marcus, Chloe, and Maya at Corner Roast Café');
+        this.callbacks.onObjectiveUpdate('Mission: HEAD OUTSIDE — Meet Marcus, Chloe, Maya, and Rohan at Corner Roast Café');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d1_e03_door',
           title: 'MEETING THE CREW',
-          instruction: 'Leave the apartment and meet your three friends at Corner Roast Café.',
+          instruction: 'Leave the apartment and meet all four friends at Corner Roast Café.',
           destinationName: 'Corner Roast Café',
           position: [-14, 0.2, -60],
           arrivalRadius: 5.5,
@@ -1546,14 +1515,14 @@ export class PrologueManager {
         });
         break;
       case 'D1_E06_FOUR_FRIENDS':
-        this.callbacks.onObjectiveUpdate('Mission: SPEND TIME TOGETHER — Chat with your three friends at the café');
+        this.callbacks.onObjectiveUpdate('Mission: SPEND TIME TOGETHER — Chat with all four friends at the café');
         break;
       case 'D1_E07_PARK':
         this.callbacks.onObjectiveUpdate('Mission: VISIT PARK — Walk with your friends to Town Square Park fountain');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d1_e07_fountain',
           title: 'TOWN SQUARE PARK',
-          instruction: 'Visit the central park fountain with Marcus, Chloe, and Maya.',
+          instruction: 'Visit the central park fountain with Marcus, Chloe, Maya, and Rohan.',
           destinationName: 'Park Fountain',
           position: [20, 0.2, 18],
           arrivalRadius: 4.5,
@@ -1599,7 +1568,7 @@ export class PrologueManager {
         this.callbacks.onObjectiveUpdate('Mission: EMERGENCY BROADCAST — Watch the emergency alert on your TV');
         break;
       case 'D2_E13_FRIENDS_RETURN':
-        this.callbacks.onObjectiveUpdate('Mission: REGROUP — Meet Marcus, Chloe, and Maya at the apartment front door');
+        this.callbacks.onObjectiveUpdate('Mission: REGROUP — Meet Marcus, Chloe, Maya, and Rohan at the apartment front door');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d2_e13_door',
           title: 'MEET AT FRONT DOOR',
@@ -1646,7 +1615,7 @@ export class PrologueManager {
         });
         break;
       case 'D2_E18_CITY_ESCAPE':
-        this.callbacks.onObjectiveUpdate('Mission: ESCAPE THE CITY — Escort your three friends along the eastern highway corridor');
+        this.callbacks.onObjectiveUpdate('Mission: ESCAPE THE CITY — Escort all four friends along the eastern highway corridor');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d2_e18_highway',
           title: 'EASTERN HIGHWAY',
@@ -1657,7 +1626,7 @@ export class PrologueManager {
         });
         break;
       case 'D2_E19_FINAL_ROAD':
-        this.callbacks.onObjectiveUpdate('Mission: REACH OVERLOOK — Regroup with Marcus, Chloe, and Maya on the highway overlook');
+        this.callbacks.onObjectiveUpdate('Mission: REACH OVERLOOK — Regroup with Marcus, Chloe, Maya, and Rohan on the highway overlook');
         this.engine.objectiveNavigator.setObjective({
           id: 'story_d2_e19_overlook',
           title: 'HIGHWAY OVERLOOK',
@@ -1668,14 +1637,14 @@ export class PrologueManager {
         });
         break;
       case 'D2_E20_STARTER_BASE':
-        this.callbacks.onObjectiveUpdate('Mission: ESTABLISH BASE — 1) Prime generator with Chloe [954, 18], 2) Medical corner [951.6, 19.4], 3) Storage chest, 4) Secure gate with Marcus');
+        this.callbacks.onObjectiveUpdate('Mission: FIRST NIGHT TOGETHER — regroup with all four friends at the apartment compound');
         this.engine.objectiveNavigator.setObjective({
-          id: 'story_d2_e20_generator',
-          title: 'PRIME GENERATOR',
-          instruction: 'Inspect and start the backup diesel generator with Chloe at (954, 18).',
-          destinationName: 'Backup Diesel Generator',
-          position: [954, 0.2, 18],
-          arrivalRadius: 3.5,
+          id: 'story_d2_e20_homecoming',
+          title: 'FIRST NIGHT TOGETHER',
+          instruction: 'Regroup with all four friends at the apartment compound.',
+          destinationName: 'Apartment Compound Courtyard',
+          position: [-10, 0.2, 17],
+          arrivalRadius: 5.0,
         });
         break;
     }
@@ -1691,10 +1660,15 @@ export class PrologueManager {
     this.lastSafeCheckpointId = this.currentEventId;
     this.completedEventIds = saveData.completedEventIds || [];
     this.optionalObjectivesCompleted = saveData.optionalObjectivesCompleted || [];
-    this.friendsMet = saveData.friendsMet || { marcus: false, chloe: false, maya: false };
+    this.friendsMet = { marcus: false, chloe: false, maya: false, rohan: false, ...(saveData.friendsMet || {}) };
     if (saveData.apartmentInspected) this.apartmentInspected = { ...this.apartmentInspected, ...saveData.apartmentInspected };
     if (saveData.cityTasks) this.cityTasks = { ...this.cityTasks, ...saveData.cityTasks };
     if (saveData.baseTasks) this.baseTasks = { ...this.baseTasks, ...saveData.baseTasks };
+    if ((saveData.day || 1) < 4) {
+      this.baseTasks.generator = false;
+      this.starterBaseEstablished = false;
+    }
+    const legacyBaseBeforeDayFour = (saveData.day || 1) < 4;
     if (saveData.companions) {
       this.companionMgr.companions.forEach((companion, id) => {
         const saved = saveData.companions[id];
@@ -1702,7 +1676,7 @@ export class PrologueManager {
           companion.relationshipScore = saved.relationshipScore ?? companion.relationshipScore;
           if (typeof saved.isFollowing === 'boolean') companion.isFollowing = saved.isFollowing;
           if (typeof saved.isFriend === 'boolean') companion.isFriend = saved.isFriend;
-          if (saved.position && saved.position.length === 3) {
+          if (saved.position && saved.position.length === 3 && !legacyBaseBeforeDayFour) {
             this.companionMgr.teleportTo(id as any, saved.position, saved.rotationY ?? 0);
           }
         }
@@ -1712,7 +1686,7 @@ export class PrologueManager {
     if (saveData.firstInfectionDiscovered) this.firstInfectionDiscovered = true;
     if (saveData.cityOutbreakStarted) this.cityOutbreakStarted = true;
     if (saveData.cityEscapeCompleted) this.cityEscapeCompleted = true;
-    if (saveData.starterBaseEstablished) this.starterBaseEstablished = true;
+    if (saveData.starterBaseEstablished && (saveData.day || 1) >= 4) this.starterBaseEstablished = true;
 
     const hasOutbreakBegun =
       this.meteoriteImpactTriggered ||

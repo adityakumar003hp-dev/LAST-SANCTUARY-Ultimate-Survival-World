@@ -9,8 +9,8 @@ import { buildRealisticHumanoid } from '../rendering/RealisticHumanoidBuilder';
 export class StoryCompanionManager {
   public scene: THREE.Scene;
   public group: THREE.Group;
-  public companions: Map<'marcus' | 'chloe' | 'maya', StoryCompanion> = new Map();
-  public companionMeshes: Map<'marcus' | 'chloe' | 'maya', THREE.Group> = new Map();
+  public companions: Map<'marcus' | 'chloe' | 'maya' | 'rohan', StoryCompanion> = new Map();
+  public companionMeshes: Map<'marcus' | 'chloe' | 'maya' | 'rohan', THREE.Group> = new Map();
   private walkTime: number = 0;
   private gestureTimers = new Map<string, number>();
 
@@ -28,8 +28,8 @@ export class StoryCompanionManager {
       {
         id: 'marcus',
         name: 'Marcus Cole',
-        title: 'The Leader',
-        role: 'Leader',
+        title: 'The Saviour',
+        role: 'Saviour',
         color: 0x1f3b60,
         jacketColor: 0x223a5e,
         pantColor: 0x1c2128,
@@ -46,8 +46,8 @@ export class StoryCompanionManager {
       {
         id: 'chloe',
         name: 'Chloe Miller',
-        title: 'The Technician',
-        role: 'Technician',
+        title: 'The Explorer',
+        role: 'Explorer',
         color: 0xd9822b,
         jacketColor: 0xd47a22,
         pantColor: 0x3d434a,
@@ -64,8 +64,8 @@ export class StoryCompanionManager {
       {
         id: 'maya',
         name: 'Dr. Maya Lin',
-        title: 'The Medic',
-        role: 'Medic',
+        title: 'The Doctor',
+        role: 'Doctor',
         color: 0x2e8b57,
         jacketColor: 0x2b7a4c,
         pantColor: 0xe6e6e6,
@@ -78,6 +78,24 @@ export class StoryCompanionManager {
         isFollowing: false,
         station: 'town',
         relationshipScore: 90,
+      },
+      {
+        id: 'rohan',
+        name: 'Rohan Mehta',
+        title: 'Armoury & Tactical Specialist',
+        role: 'Armoury & Tactical',
+        color: 0x8a5ac2,
+        jacketColor: 0x39404a,
+        pantColor: 0x20262d,
+        hairColor: 0x171717,
+        position: [-6.2, 0, -60.2],
+        rotationY: Math.PI / 2,
+        health: 130,
+        maxHealth: 130,
+        dialogueState: 0,
+        isFollowing: false,
+        station: 'town',
+        relationshipScore: 75,
       },
     ];
 
@@ -97,7 +115,7 @@ export class StoryCompanionManager {
     const rig = buildRealisticHumanoid({
       name: `companion_${c.id}`,
       facing: '-Z',
-      skinColor: c.id === 'marcus' ? 0xc28a66 : c.id === 'maya' ? 0xdcb494 : 0xe4b898,
+      skinColor: c.id === 'marcus' || c.id === 'rohan' ? 0xc28a66 : c.id === 'maya' ? 0xdcb494 : 0xe4b898,
       jacketColor: c.jacketColor,
       shirtColor: c.id === 'maya' ? 0xeaf2ef : 0x22272e,
       pantsColor: c.pantColor,
@@ -105,15 +123,15 @@ export class StoryCompanionManager {
       accentColor: c.color,
       eyeColor: c.id === 'chloe' ? 0x457b5b : c.id === 'maya' ? 0x2a2420 : 0x45586b,
       fabricStyle: c.id === 'maya' ? 'uniform' : 'tactical',
-      genderPresentation: c.id === 'marcus' ? 'masculine' : 'feminine',
+      genderPresentation: c.id === 'marcus' || c.id === 'rohan' ? 'masculine' : 'feminine',
       hairStyle: c.id === 'chloe' ? 'ponytail' : c.id === 'maya' ? 'bun' : 'short',
-      hasBeard: c.id === 'marcus',
-      hasHeadset: c.id === 'chloe',
+      hasBeard: c.id === 'marcus' || c.id === 'rohan',
+      hasHeadset: c.id === 'chloe' || c.id === 'rohan',
       hasStethoscope: c.id === 'maya',
       hasMedicArmband: c.id === 'maya',
-      hasHolster: c.id === 'marcus',
+      hasHolster: c.id === 'marcus' || c.id === 'rohan',
       hasBackpack: true,
-      packColor: c.id === 'maya' ? 0x1e4d3a : c.id === 'chloe' ? 0x3b352d : 0x283024,
+      packColor: c.id === 'maya' ? 0x1e4d3a : c.id === 'chloe' ? 0x3b352d : c.id === 'rohan' ? 0x49365f : 0x283024,
       hasBandana: c.id === 'marcus',
       bandanaColor: c.color,
       hasBelt: true,
@@ -142,10 +160,11 @@ export class StoryCompanionManager {
     this.walkTime += delta;
 
     // Formation offsets when following player
-    const formationOffsets: Record<'marcus' | 'chloe' | 'maya', THREE.Vector3> = {
-      marcus: new THREE.Vector3(1.6, 0, 1.8),
-      chloe: new THREE.Vector3(-1.6, 0, 1.8),
+    const formationOffsets: Record<'marcus' | 'chloe' | 'maya' | 'rohan', THREE.Vector3> = {
+      marcus: new THREE.Vector3(1.8, 0, 1.6),
+      chloe: new THREE.Vector3(-1.8, 0, 1.6),
       maya: new THREE.Vector3(0, 0, 3.2),
+      rohan: new THREE.Vector3(0, 0, -1.8),
     };
 
     this.companions.forEach((c, id) => {
@@ -298,7 +317,7 @@ export class StoryCompanionManager {
     });
   }
 
-  public teleportTo(id: 'marcus' | 'chloe' | 'maya', pos: [number, number, number], rotY: number) {
+  public teleportTo(id: 'marcus' | 'chloe' | 'maya' | 'rohan', pos: [number, number, number], rotY: number) {
     const c = this.companions.get(id);
     const mesh = this.companionMeshes.get(id);
     if (c && mesh) {
@@ -309,7 +328,7 @@ export class StoryCompanionManager {
     }
   }
 
-  public playFriendGesture(id: 'marcus' | 'chloe' | 'maya', gesture: 'handshake' | 'clap' | 'dance') {
+  public playFriendGesture(id: 'marcus' | 'chloe' | 'maya' | 'rohan', gesture: 'handshake' | 'clap' | 'dance') {
     const mesh = this.companionMeshes.get(id);
     if (!mesh) return false;
     mesh.userData.activeGesture = gesture;
@@ -318,7 +337,7 @@ export class StoryCompanionManager {
     return true;
   }
 
-  public stopFriendGesture(id: 'marcus' | 'chloe' | 'maya') {
+  public stopFriendGesture(id: 'marcus' | 'chloe' | 'maya' | 'rohan') {
     this.gestureTimers.delete(id);
     const mesh = this.companionMeshes.get(id);
     if (!mesh) return false;
@@ -334,14 +353,14 @@ export class StoryCompanionManager {
     return true;
   }
 
-  public setFriendFollowing(id: 'marcus' | 'chloe' | 'maya', following: boolean) {
+  public setFriendFollowing(id: 'marcus' | 'chloe' | 'maya' | 'rohan', following: boolean) {
     const c = this.companions.get(id);
     if (!c) return false;
     c.isFollowing = following;
     return true;
   }
 
-  public toggleCompanionFollowing(id: 'marcus' | 'chloe' | 'maya'): boolean {
+  public toggleCompanionFollowing(id: 'marcus' | 'chloe' | 'maya' | 'rohan'): boolean {
     const c = this.companions.get(id);
     if (!c) return false;
     c.isFollowing = !c.isFollowing;

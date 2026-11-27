@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { X, BookOpen, CheckCircle2, Circle, Award, Calendar, Compass, Train, MapPin, Check } from 'lucide-react';
 import { Quest } from '../types/game';
-import { LAST_SANCTUARY_CAMPAIGN, CAMPAIGN_TITLE, CAMPAIGN_DAY_COUNT, CampaignEvent } from '../data/lastSanctuaryCampaign';
+import { LAST_SANCTUARY_CAMPAIGN, CAMPAIGN_TITLE, CAMPAIGN_DAY_COUNT, CAMPAIGN_ENDINGS, CampaignEvent } from '../data/lastSanctuaryCampaign';
 import { RESEARCH_STORY_UNLOCKS, RESEARCH_FACILITY_INDEX } from '../data/researchComplex';
 import type { ResearchStoryUnlock, ResearchFacilityDefinition } from '../data/researchComplex';
 
@@ -11,6 +11,7 @@ interface QuestJournalModalProps {
   quests: Quest[];
   currentDay?: number;
   prologuePhase?: string | null;
+  onSelectEnding?: (choice: 'local_rebuild' | 'united_survivors' | 'unknown_horizon') => void;
 }
 
 export const QuestJournalModal: React.FC<QuestJournalModalProps> = ({
@@ -19,13 +20,14 @@ export const QuestJournalModal: React.FC<QuestJournalModalProps> = ({
   quests,
   currentDay = 1,
   prologuePhase,
+  onSelectEnding,
 }) => {
   const [activeTab, setActiveTab] = useState<'directives' | 'campaign'>('directives');
-  const [selectedDay, setSelectedDay] = useState<number>(Math.max(1, Math.min(10, currentDay)));
+  const [selectedDay, setSelectedDay] = useState<number>(Math.max(1, Math.min(12, currentDay)));
 
   if (!isOpen) return null;
 
-  // Filter the 10-day campaign missions for the selected day
+  // Filter the 12-day campaign missions for the selected day
   const dayEvents = LAST_SANCTUARY_CAMPAIGN.filter((e) => e.day === selectedDay);
   const currentDayTitle = dayEvents[0]?.dayTitle || `DAY ${selectedDay}`;
 
@@ -67,7 +69,7 @@ export const QuestJournalModal: React.FC<QuestJournalModalProps> = ({
                 }`}
               >
                 <Calendar className="h-3.5 w-3.5" />
-                <span>10-Day Campaign (70)</span>
+                <span>12-Day Campaign (96)</span>
               </button>
             </div>
 
@@ -89,7 +91,7 @@ export const QuestJournalModal: React.FC<QuestJournalModalProps> = ({
               <div className="flex flex-col items-center justify-center h-full text-center py-12 text-neutral-500">
                 <Compass className="h-10 w-10 mb-3 opacity-40 text-amber-500" />
                 <p className="text-sm font-semibold">No active field directives at this time.</p>
-                <p className="text-xs text-neutral-500 mt-1">Check the 10-Day Campaign tab or explore the world to receive new orders.</p>
+                <p className="text-xs text-neutral-500 mt-1">Check the 12-Day Campaign tab or explore the world to receive new orders.</p>
               </div>
             ) : (
               quests.map((quest) => (
@@ -159,7 +161,7 @@ export const QuestJournalModal: React.FC<QuestJournalModalProps> = ({
             )}
           </div>
         ) : (
-          /* 10-Day Campaign Container */
+          /* 12-Day Campaign Container */
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* Day Selector Ribbon */}
             <div className="flex items-center gap-2 px-5 py-3 border-b border-neutral-800/80 bg-neutral-900/40 overflow-x-auto">
@@ -196,22 +198,36 @@ export const QuestJournalModal: React.FC<QuestJournalModalProps> = ({
             <div className="flex items-center justify-between px-5 py-3 bg-neutral-900/60 border-b border-neutral-800/60">
               <div>
                 <span className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-400">
-                  {CAMPAIGN_TITLE} • Day {selectedDay} of 10
+                  {CAMPAIGN_TITLE} • Day {selectedDay} of 12
                 </span>
                 <h3 className="text-sm sm:text-base font-bold text-neutral-100">{currentDayTitle}</h3>
               </div>
               <span className="text-xs font-mono text-neutral-400">
-                7 Missions ({selectedDay * 7 - 6}–{selectedDay * 7} of 70)
+                8 Missions ({selectedDay * 8 - 7}–{selectedDay * 8} of 96)
               </span>
             </div>
 
             {/* Events Scroll Area */}
             <div className="flex-1 overflow-y-auto p-5 sm:p-6 grid gap-4">
+              {selectedDay === 12 && quests.some((q) => q.id === 'ls_campaign_m94') && (
+                <div className="rounded-xl border border-amber-700/50 bg-amber-950/20 p-4">
+                  <h4 className="text-sm font-bold text-amber-200">Choose the campaign ending path</h4>
+                  <p className="mt-1 text-xs text-neutral-300">This decision shapes the final cinematic. It does not remove any existing world locations or systems.</p>
+                  <div className="mt-3 grid gap-2 sm:grid-cols-3">
+                    {CAMPAIGN_ENDINGS.map((ending) => (
+                      <button key={ending.id} onClick={() => onSelectEnding?.(ending.id as 'local_rebuild' | 'united_survivors' | 'unknown_horizon')} className="rounded-lg border border-amber-700/50 bg-neutral-900 px-3 py-2 text-left hover:bg-amber-950/40">
+                        <span className="block text-xs font-bold text-amber-200">{ending.title}</span>
+                        <span className="mt-1 block text-[11px] text-neutral-400">{ending.description}</span>
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
               {(() => {
                 const campaignQuest = quests.find((q) => q.id.startsWith('ls_campaign_m'));
                 const activeMissionNumber = campaignQuest
-                  ? parseInt(campaignQuest.id.replace('ls_campaign_m', '')) || (currentDay * 7 - 6)
-                  : currentDay * 7 - 6;
+                  ? parseInt(campaignQuest.id.replace('ls_campaign_m', '')) || (currentDay * 8 - 7)
+                  : currentDay * 8 - 7;
 
                 return dayEvents.map((evt) => {
                   const isMissionDone = evt.mission < activeMissionNumber || (evt.mission === activeMissionNumber && campaignQuest?.completed);
@@ -248,6 +264,8 @@ export const QuestJournalModal: React.FC<QuestJournalModalProps> = ({
                         </div>
 
                         <div className="flex items-center gap-2 flex-wrap text-[11px]">
+                          <span className="rounded bg-violet-950/50 border border-violet-800/50 px-2 py-0.5 text-violet-200">{evt.friendFocus}</span>
+                          {evt.cinematic && <span className="rounded bg-rose-950/50 border border-rose-800/50 px-2 py-0.5 text-rose-200">Cinematic: {evt.cinematic.title}</span>}
                           {/* Location Tag */}
                           <span className="flex items-center gap-1 rounded bg-neutral-800/80 border border-neutral-700/60 px-2 py-0.5 text-neutral-300">
                             <MapPin className="h-3 w-3 text-cyan-400" />
@@ -331,10 +349,10 @@ export const QuestJournalModal: React.FC<QuestJournalModalProps> = ({
                 });
               })()}
             </div>
-            {selectedDay === 10 && (
+            {selectedDay === 12 && (
               <div className="mx-5 mb-4 rounded-xl border border-emerald-800/60 bg-emerald-950/25 p-4">
                 <div className="flex items-center gap-2 text-emerald-300 font-bold text-sm">
-                  <Compass className="h-4 w-4" /> Mission 70 unlocks permanent Free Exploration
+                  <Compass className="h-4 w-4" /> Mission 96 unlocks permanent Free Exploration
                 </div>
                 <p className="mt-1 text-xs leading-relaxed text-neutral-300">The campaign conclusion does not reset the world. Keep your apartment, companions, military base, research facilities, railway network, vehicles and sanctuary, and continue exploring, building, farming, researching and defending.</p>
               </div>
@@ -343,7 +361,7 @@ export const QuestJournalModal: React.FC<QuestJournalModalProps> = ({
         )}
 
         <footer className="border-t border-neutral-800 px-5 py-3 text-xs text-neutral-500 flex items-center justify-between bg-neutral-950">
-          <span>{CAMPAIGN_TITLE} • 10 Days × 7 Missions = 70 Story Missions • Free Exploration after Mission 70</span>
+          <span>{CAMPAIGN_TITLE} • 12 Days × 8 Missions = 96 Story Missions • Free Exploration after Mission 96</span>
           <span>Press [J] or [Esc] to exit Chronicle</span>
         </footer>
       </div>
