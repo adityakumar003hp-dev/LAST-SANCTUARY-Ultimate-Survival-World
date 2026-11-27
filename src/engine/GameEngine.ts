@@ -4,13 +4,17 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
-import { RealismShaderGlobals, CinematicPostShader } from './shaders/RealismShaders';
+import { RealismShaderGlobals, CinematicPostShader, MotionBlurPostShader, UpscaleSharpenShader } from './shaders/RealismShaders';
 import { WorldTerrain, getTerrainHeight } from './Terrain';
 import { BuildingManager } from './BuildingManager';
 import { ZombieManager } from './ZombieManager';
 import { PlayerController } from './PlayerController';
 import { soundEngine } from '../utils/audio';
-import { getWaterRippleNormalMap } from '../utils/proceduralTextures';
+import {
+  getWaterRippleNormalMap,
+  configureProceduralTextureQuality,
+  disposeProceduralTextures,
+} from '../utils/proceduralTextures';
 import { HarvestableResource, PlacedStructure, PlayerStats, Quest, SaveSlotMetadata, FullGameSave, GameMode, Difficulty, ItemDefinition, VehicleState, CompanionState, EcosystemDossier, EcosystemMetrics, InventorySlot, RailwayTicket, GraphicsQuality, GraphicsQualityMode, GraphicsManagerConfig, GraphicsManagerSnapshot, BaseLevel, BaseState, NPCRole } from '../types/game';
 import { GraphicsManager, probeGraphicsHardware } from './graphics/GraphicsManager';
 import { ITEMS } from '../data/items';
@@ -85,6 +89,7 @@ export interface GameEngineCallbacks {
   onOpenSecurityCommandCenter?: () => void;
   onOpenAurelionElevator?: (elevatorId: ElevatorId) => void;
   onOpenAurelionDocument?: (docId: string) => void;
+  onOpenAurelionCinema?: () => void;
   onAurelionLocationChange?: (loc: { level: string; roomName: string } | null) => void;
   onOpenNexusElevator?: (elevatorId: NexusElevatorId) => void;
   onOpenNexusFloor1?: (tab: 'visitor' | 'staff' | 'directory' | 'building' | 'security') => void;
@@ -167,8 +172,20 @@ export class GameEngine {
   private lastEnvPhase: string = '';
   private composer: EffectComposer | null = null;
   private bloomPass: UnrealBloomPass | null = null;
+  private motionBlurPass: ShaderPass | null = null;
   private cinematicPass: ShaderPass | null = null;
+  private upscalePass: ShaderPass | null = null;
   private usePostProcessing: boolean = false;
+  private activeComposerDpr: number = -1;
+  private activeComposerWidth: number = -1;
+  private activeComposerHeight: number = -1;
+  private prevCamForward = new THREE.Vector3(0, 0, -1);
+  private prevMotionPlayerPos = new THREE.Vector3();
+  private hasPrevMotionSample: boolean = false;
+  private smoothedMotionVel = new THREE.Vector2(0, 0);
+  private smoothedRadialBlur: number = 0;
+  private combatActionPulse: number = 0;
+  private activeCombatIntensity: number = 0;
   private wetAccum: number = 0;
   private engineClock: number = 0;
 
@@ -215,6 +232,9 @@ export class GameEngine {
   private clock: THREE.Timer;
   private localLightBudgetTimer: number = 0;
   private localLights: Array<THREE.PointLight | THREE.SpotLight> = [];
+  private lastLightSceneChildCount: number = -1;
+  private lastLightChunkTopology: number = -1;
+  private lastLightStructureCount: number = -1;
   private readonly maxActiveLocalLights: number = 4;
   public callbacks: GameEngineCallbacks;
   public activeSaveSlotId: string = 'autosave';
@@ -235,9 +255,13 @@ export class GameEngine {
   private uiSyncTimer: number = 0;
   private lastReportedBiomeId: string = '';
   private lastReportedWeather: WeatherType = 'clear';
+  private lastReportedWeatherIntensity: number = -1;
+  private lastWeatherReportTime: number = -10;
   private lastWeatherTelemetry: WeatherTelemetry | null = null;
   private weatherFogMultiplier: number = 1.0;
   private geigerTimer: number = 0;
+  private lastGeoCheckPos = new THREE.Vector3(-99999, 0, -99999);
+  private lastAurelionLocKey: string = '';
   public sandboxSettings: SandboxSettings = {
     lootMultiplier: 1.0,
     zombieDensity: 1.0,
@@ -255,6 +279,9 @@ export class GameEngine {
   private static readonly _tmpVecC = new THREE.Vector3();
   private static readonly _sunScreenVec = new THREE.Vector3();
   private static readonly _sunColor = new THREE.Color();
+  private static readonly _frustum = new THREE.Frustum();
+  private static readonly _projScreenMatrix = new THREE.Matrix4();
+  private static readonly _cullSphere = new THREE.Sphere();
   private _livingTargetsBuffer: Array<{ id: string; kind: 'citizen' | 'survivor' | 'settlement' | 'wildlife' | 'regional_npc'; position: [number, number, number] }> = [];
 
   // Input State (Supports both digital key flags and 360-degree analog touch)
@@ -465,7 +492,13 @@ export class GameEngine {
       this.rebuildComposerSafely(width, height);
     }
 
-    // 6. Subsystem Instantiation
+    // 6. Configure adaptive compressed procedural textures before building world assets
+    configureProceduralTextureQuality({
+      maxDim: this.isSoftwareGl || isMobile || hwCaps.deviceMemoryGb <= 2 ? 128 : 256,
+      maxAnisotropy: Math.max(1, Math.min(4, hwCaps.maxAnisotropy)),
+    });
+
+    // Subsystem Instantiation
     this.physicsManager = new UnifiedPhysicsManager(this.scene);
     this.dynamicPropPhysics = new DynamicPropPhysicsManager(this.scene);
     this.objectiveNavigator = new ObjectiveNavigator(this.scene);
@@ -786,11 +819,7 @@ export class GameEngine {
     this.applySafePixelRatio();
     this.renderer.setSize(w, h);
     if (this.composer) {
-      this.composer.setPixelRatio(this.renderer.getPixelRatio());
-      this.composer.setSize(w, h);
-    }
-    if (this.bloomPass) {
-      this.bloomPass.resolution.set(w, h);
+      this.applySafePixelRatio();
     }
   };
 
@@ -799,13 +828,20 @@ export class GameEngine {
   private rebuildComposerSafely(explicitW?: number, explicitH?: number) {
     if (this.isSoftwareGl) return;
     try {
+      (this.upscalePass as any)?.dispose?.();
       (this.cinematicPass as any)?.dispose?.();
+      (this.motionBlurPass as any)?.dispose?.();
       this.bloomPass?.dispose();
       this.composer?.dispose();
     } catch {}
     this.composer = null;
     this.bloomPass = null;
+    this.motionBlurPass = null;
     this.cinematicPass = null;
+    this.upscalePass = null;
+    this.activeComposerDpr = -1;
+    this.activeComposerWidth = -1;
+    this.activeComposerHeight = -1;
 
     const w = explicitW ?? (this.lastWidth || Math.max(this.container?.clientWidth || window.innerWidth, 280));
     const h = explicitH ?? (this.lastHeight || Math.max(this.container?.clientHeight || window.innerHeight, 240));
@@ -821,24 +857,59 @@ export class GameEngine {
       this.composer.addPass(new RenderPass(this.scene, this.camera));
       this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.16, 0.35, 0.94);
       this.composer.addPass(this.bloomPass);
+      this.motionBlurPass = new ShaderPass(MotionBlurPostShader);
+      this.composer.addPass(this.motionBlurPass);
       this.cinematicPass = new ShaderPass(CinematicPostShader);
       this.composer.addPass(this.cinematicPass);
       this.composer.addPass(new OutputPass());
+      this.upscalePass = new ShaderPass(UpscaleSharpenShader);
+      this.upscalePass.enabled = false;
+      this.composer.addPass(this.upscalePass);
     } catch {
       this.composer = null;
       this.bloomPass = null;
+      this.motionBlurPass = null;
       this.cinematicPass = null;
+      this.upscalePass = null;
       this.usePostProcessing = false;
     }
   }
 
-  private applySafePixelRatio() {
+  private applySafePixelRatio(dynamicScale = 1.0, upscaleActive = false) {
     const w = Math.max(this.container?.clientWidth || window.innerWidth, 280);
     const h = Math.max(this.container?.clientHeight || window.innerHeight, 240);
-    const safeDpr = this.graphicsManager.computeSafePixelRatio(this.targetDesiredDpr, w, h);
-    this.renderer.setPixelRatio(safeDpr);
-    if (this.composer) {
-      this.composer.setPixelRatio(safeDpr);
+    const safeDisplayDpr = this.graphicsManager.computeSafePixelRatio(this.targetDesiredDpr, w, h);
+
+    if (this.usePostProcessing && this.composer) {
+      if (Math.abs(this.renderer.getPixelRatio() - safeDisplayDpr) > 0.01) {
+        this.renderer.setPixelRatio(safeDisplayDpr);
+      }
+      const internalDpr = Math.max(0.35, safeDisplayDpr * dynamicScale);
+      const sizeChanged = w !== this.activeComposerWidth || h !== this.activeComposerHeight;
+      const dprChanged = Math.abs(internalDpr - this.activeComposerDpr) > 0.015;
+      if (sizeChanged || dprChanged) {
+        this.activeComposerDpr = internalDpr;
+        this.activeComposerWidth = w;
+        this.activeComposerHeight = h;
+        this.composer.setPixelRatio(internalDpr);
+        this.composer.setSize(w, h);
+        if (this.bloomPass) {
+          this.bloomPass.resolution.set(
+            Math.max(1, Math.round(w * internalDpr)),
+            Math.max(1, Math.round(h * internalDpr))
+          );
+        }
+      }
+      if (this.upscalePass) {
+        const internalW = Math.max(1, Math.round(w * internalDpr));
+        const internalH = Math.max(1, Math.round(h * internalDpr));
+        this.upscalePass.uniforms.uTexelSize.value.set(1 / internalW, 1 / internalH);
+      }
+    } else {
+      const effectiveDpr = upscaleActive ? Math.max(0.35, safeDisplayDpr * dynamicScale) : safeDisplayDpr;
+      if (Math.abs(this.renderer.getPixelRatio() - effectiveDpr) > 0.01) {
+        this.renderer.setPixelRatio(effectiveDpr);
+      }
     }
   }
 
@@ -929,32 +1000,44 @@ export class GameEngine {
       this.activeShadowMapRes = 0;
     }
 
-    // Post-processing & Bloom
-    this.usePostProcessing = effective.postProcessingEnabled && Boolean(this.composer);
+    // Post-processing, Motion Blur, Bloom & Spatial Upscaling
+    const drsUpscalingNow = effective.dynamicResolutionEnabled && effective.dynamicResolutionScale < 0.99;
+    this.usePostProcessing =
+      (effective.postProcessingEnabled || effective.motionBlurEnabled || drsUpscalingNow) && Boolean(this.composer);
     if (this.bloomPass) {
       this.bloomPass.enabled = effective.bloomEnabled;
       this.bloomPass.strength = effective.bloomStrength;
       this.bloomPass.radius = effective.bloomRadius;
       this.bloomPass.threshold = effective.bloomThreshold;
     }
+    if (this.motionBlurPass) {
+      this.motionBlurPass.enabled = this.usePostProcessing && effective.motionBlurEnabled;
+      this.motionBlurPass.uniforms.uIntensity.value = effective.motionBlurIntensity;
+    }
     if (this.cinematicPass) {
-      this.cinematicPass.enabled = this.usePostProcessing;
+      this.cinematicPass.enabled = this.usePostProcessing && effective.postProcessingEnabled;
       this.cinematicPass.uniforms.uSunShaftIntensity.value = effective.sunShaftIntensity;
     }
+    if (this.upscalePass) {
+      this.upscalePass.enabled = this.usePostProcessing && effective.dynamicResolutionEnabled && effective.upscaleSharpening > 0.01;
+      this.upscalePass.uniforms.uSharpness.value = effective.upscaleSharpening;
+    }
 
-    // Particles, Anisotropy & Chunk Streaming
+    // Particles, Anisotropy, Texture Resolution & Chunk Streaming
+    const targetTexMax =
+      this.activeQualityMode === 'performance' || effective.chunkQuality === 'low' || this.isSoftwareGl
+        ? 128
+        : this.activeQualityMode === 'balanced'
+          ? 256
+          : Math.min(512, this.maxTextureDim);
+    configureProceduralTextureQuality({
+      maxDim: targetTexMax,
+      maxAnisotropy: effective.anisotropy,
+    });
     this.weatherManager?.setParticleBudgetScale(effective.particleDensity);
     this.applyTextureAnisotropy(effective.anisotropy);
 
-    this.applySafePixelRatio();
-    const w = this.lastWidth || Math.max(this.container?.clientWidth || window.innerWidth, 280);
-    const h = this.lastHeight || Math.max(this.container?.clientHeight || window.innerHeight, 240);
-    if (this.composer) {
-      this.composer.setSize(w, h);
-    }
-    if (this.bloomPass) {
-      this.bloomPass.resolution.set(w, h);
-    }
+    this.applySafePixelRatio(effective.dynamicResolutionScale, effective.dynamicResolutionEnabled);
 
     if (this.chunkManager) {
       this.chunkManager.setQuality(effective.chunkQuality, false);
@@ -1065,24 +1148,37 @@ export class GameEngine {
         this.clock.update(now);
         const delta = Math.min(0.05, this.clock.getDelta());
         this.update(delta, rawElapsed);
+        this.updateMotionBlurUniforms(delta);
+      } else {
+        this.resetMotionBlurState();
       }
 
       this.updateLocalLightBudget();
-      this.chunkManager.updateFrustumCulling(this.camera, this.player.position);
+      this.updateWorldFrustumCulling();
       if (this.usePostProcessing && this.composer) {
-        this.composer.render();
+        try {
+          this.composer.render();
+        } catch (err) {
+          console.warn('Post-processing render failed — falling back to direct WebGL renderer:', err);
+          this.usePostProcessing = false;
+          this.renderer.render(this.scene, this.camera);
+        }
       } else {
         this.renderer.render(this.scene, this.camera);
       }
 
       const frameWorkMs = performance.now() - workStart;
-      const gov = this.graphicsManager.recordFrameAndGovern(rawElapsed, frameWorkMs, this.isPaused);
+      const gov = this.graphicsManager.recordFrameAndGovern(
+        rawElapsed,
+        frameWorkMs,
+        this.isPaused,
+        this.activeCombatIntensity
+      );
       this.rollingFps = this.graphicsManager.rollingFps;
 
       if (gov.emergencyTrimRequested) {
         const eff = this.graphicsManager.getEffectiveTarget(window.devicePixelRatio || 1, Boolean(this.composer));
         this.chunkManager?.trimDistantChunks(eff.viewDistanceChunks, this.player.position);
-        this.renderer.renderLists.dispose();
       }
       if (gov.changed) {
         this.applyGraphicsConfiguration(false);
@@ -1094,6 +1190,124 @@ export class GameEngine {
     this.graphicsManager.scheduleNextFrame(tick, this.renderer, document.hidden);
   }
 
+  private resetMotionBlurState() {
+    this.hasPrevMotionSample = false;
+    this.smoothedMotionVel.set(0, 0);
+    this.smoothedRadialBlur = 0;
+    if (this.motionBlurPass) {
+      this.motionBlurPass.uniforms.uVelocity.value.set(0, 0);
+      this.motionBlurPass.uniforms.uRadialStrength.value = 0;
+    }
+  }
+
+  private updateMotionBlurUniforms(delta: number) {
+    if (!this.motionBlurPass || !this.motionBlurPass.enabled) return;
+    this.camera.updateMatrixWorld();
+    this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
+    this.camera.getWorldDirection(GameEngine._camDir);
+
+    if (!this.hasPrevMotionSample) {
+      this.prevCamForward.copy(GameEngine._camDir);
+      this.prevMotionPlayerPos.copy(this.player.position);
+      this.hasPrevMotionSample = true;
+      this.motionBlurPass.uniforms.uVelocity.value.set(0, 0);
+      this.motionBlurPass.uniforms.uRadialStrength.value = 0;
+      return;
+    }
+
+    const safeDelta = Math.max(0.004, delta);
+    // Transform previous look direction into current camera view space to obtain exact UV reprojection velocity
+    const prevInView = GameEngine._tmpVecA
+      .copy(this.prevCamForward)
+      .transformDirection(this.camera.matrixWorldInverse);
+
+    let targetVelX = 0;
+    let targetVelY = 0;
+    if (prevInView.z < -0.15) {
+      const proj00 = this.camera.projectionMatrix.elements[0];
+      const proj11 = this.camera.projectionMatrix.elements[5];
+      const ndcX = (prevInView.x / -prevInView.z) * proj00;
+      const ndcY = (prevInView.y / -prevInView.z) * proj11;
+      const shutterScale = THREE.MathUtils.clamp((1 / 60) / safeDelta, 0.25, 1.4);
+      targetVelX = THREE.MathUtils.clamp(ndcX * 0.5 * shutterScale * 0.72, -0.032, 0.032);
+      targetVelY = THREE.MathUtils.clamp(ndcY * 0.5 * shutterScale * 0.72, -0.032, 0.032);
+    }
+
+    // Player / Vehicle / Train linear speed for radial forward-speed blur and subtle strafe flow
+    const frameDisplacement = GameEngine._tmpVecB.subVectors(this.player.position, this.prevMotionPlayerPos);
+    const moveDist = frameDisplacement.length();
+    let targetRadial = 0;
+    if (moveDist < 8.0) {
+      const speedVec = frameDisplacement.divideScalar(safeDelta);
+      const forwardSpeed = Math.abs(speedVec.dot(GameEngine._camDir));
+      const camRight = GameEngine._tmpVecC.setFromMatrixColumn(this.camera.matrixWorld, 0);
+      const strafeSpeed = speedVec.dot(camRight);
+      targetVelX = THREE.MathUtils.clamp(targetVelX + strafeSpeed * 0.00045, -0.034, 0.034);
+
+      const vehicleSpeed = this.vehicleManager?.vehicleState.isOccupied
+        ? Math.abs(this.vehicleManager.currentSpeed)
+        : 0;
+      const trainSpeed = this.aiTrainManager?.activePassengerTrain
+        ? Math.abs(this.aiTrainManager.activePassengerTrain.speed)
+        : 0;
+      const effectiveSpeed = Math.max(forwardSpeed, vehicleSpeed, trainSpeed);
+      const speedExcess = Math.max(0, effectiveSpeed - 4.8);
+      const sprintBoost = this.player.isSprinting && effectiveSpeed > 4.0 ? 0.0065 : 0;
+      targetRadial = THREE.MathUtils.clamp((speedExcess / 24.0) * 0.034 + sprintBoost, 0, 0.042);
+    } else {
+      // Teleport / fast-travel occurred: snap previous sample cleanly with zero streak
+      this.smoothedMotionVel.set(0, 0);
+      this.smoothedRadialBlur = 0;
+      targetVelX = 0;
+      targetVelY = 0;
+    }
+
+    this.smoothedMotionVel.x = THREE.MathUtils.damp(this.smoothedMotionVel.x, targetVelX, 18, delta);
+    this.smoothedMotionVel.y = THREE.MathUtils.damp(this.smoothedMotionVel.y, targetVelY, 18, delta);
+    this.smoothedRadialBlur = THREE.MathUtils.damp(this.smoothedRadialBlur, targetRadial, 14, delta);
+
+    this.motionBlurPass.uniforms.uVelocity.value.copy(this.smoothedMotionVel);
+    this.motionBlurPass.uniforms.uRadialStrength.value = this.smoothedRadialBlur;
+    this.motionBlurPass.uniforms.uTime.value = this.engineClock;
+
+    this.prevCamForward.copy(GameEngine._camDir);
+    this.prevMotionPlayerPos.copy(this.player.position);
+  }
+
+  /**
+   * Unified per-frame camera frustum culling across terrain chunks, Oakridge town props/citizens,
+   * player-built structures, zombies, and active wildlife creatures.
+   */
+  private updateWorldFrustumCulling() {
+    this.camera.updateMatrixWorld();
+    this.camera.matrixWorldInverse.copy(this.camera.matrixWorld).invert();
+    GameEngine._projScreenMatrix.multiplyMatrices(this.camera.projectionMatrix, this.camera.matrixWorldInverse);
+    GameEngine._frustum.setFromProjectionMatrix(GameEngine._projScreenMatrix);
+    const camPos = this.camera.position;
+
+    this.chunkManager.updateFrustumCulling(this.camera, this.player.position);
+    this.prologueManager?.townMgr?.updateFrustumCulling(GameEngine._frustum, camPos);
+    this.zombieMgr?.updateFrustumCulling(GameEngine._frustum, camPos);
+    this.wildlifeManager?.updateFrustumCulling(GameEngine._frustum, camPos);
+
+    if (this.buildingMgr?.structureMeshes) {
+      this.buildingMgr.structureMeshes.forEach((mesh) => {
+        const dx = mesh.position.x - camPos.x;
+        const dz = mesh.position.z - camPos.z;
+        const distSq = dx * dx + dz * dz;
+        if (distSq < 18 * 18) {
+          mesh.visible = true;
+        } else if (distSq > 200 * 200) {
+          mesh.visible = false;
+        } else {
+          GameEngine._cullSphere.center.set(mesh.position.x, mesh.position.y + 1.5, mesh.position.z);
+          GameEngine._cullSphere.radius = 4.5;
+          mesh.visible = GameEngine._frustum.intersectsSphere(GameEngine._cullSphere);
+        }
+      });
+    }
+  }
+
   /**
    * Keep the number of simultaneously compiled point/spot lights bounded.
    * Three.js adds every visible local light to MeshStandardMaterial shaders;
@@ -1103,23 +1317,48 @@ export class GameEngine {
   private updateLocalLightBudget(force: boolean = false) {
     if (!force) {
       this.localLightBudgetTimer += 1 / 60;
-      if (this.localLightBudgetTimer < 2.0 && this.localLights.length) return;
+      if (this.localLightBudgetTimer < 1.5 && this.localLights.length) return;
     }
     this.localLightBudgetTimer = 0;
 
-    const discovered: Array<THREE.PointLight | THREE.SpotLight> = [];
-    this.scene.traverse((object) => {
-      if ((object as THREE.PointLight).isPointLight || (object as THREE.SpotLight).isSpotLight) {
-        const light = object as THREE.PointLight | THREE.SpotLight;
-        if (!light.userData.__lightBudgetCulled) {
-          light.userData.__lightBudgetDesiredVisible = light.visible;
-        } else {
+    const sceneCount = this.scene.children.length;
+    const chunkTopo = this.chunkManager?.topologyVersion ?? 0;
+    const structCount = this.buildingMgr?.structures?.length ?? 0;
+    const needsRescan =
+      force ||
+      this.localLights.length === 0 ||
+      sceneCount !== this.lastLightSceneChildCount ||
+      chunkTopo !== this.lastLightChunkTopology ||
+      structCount !== this.lastLightStructureCount;
+
+    let discovered = this.localLights;
+    if (needsRescan) {
+      this.lastLightSceneChildCount = sceneCount;
+      this.lastLightChunkTopology = chunkTopo;
+      this.lastLightStructureCount = structCount;
+      discovered = [];
+      this.scene.traverse((object) => {
+        if ((object as THREE.PointLight).isPointLight || (object as THREE.SpotLight).isSpotLight) {
+          const light = object as THREE.PointLight | THREE.SpotLight;
+          if (!light.userData.__lightBudgetCulled) {
+            light.userData.__lightBudgetDesiredVisible = light.visible;
+          } else {
+            light.visible = Boolean(light.userData.__lightBudgetDesiredVisible);
+            light.userData.__lightBudgetCulled = false;
+          }
+          if (light.userData.__lightBudgetDesiredVisible) discovered.push(light);
+        }
+      });
+      this.localLights = discovered;
+    } else {
+      for (let i = 0; i < discovered.length; i++) {
+        const light = discovered[i];
+        if (light.userData.__lightBudgetCulled) {
           light.visible = Boolean(light.userData.__lightBudgetDesiredVisible);
           light.userData.__lightBudgetCulled = false;
         }
-        if (light.userData.__lightBudgetDesiredVisible) discovered.push(light);
       }
-    });
+    }
 
     this.camera.getWorldPosition(GameEngine._camDir);
     discovered.sort((a, b) => {
@@ -1129,9 +1368,9 @@ export class GameEngine {
     });
 
     const limit = this.activeLocalLightLimit;
-    const active = new Set(discovered.slice(0, limit));
-    for (const light of discovered) {
-      if (!active.has(light)) {
+    for (let i = 0; i < discovered.length; i++) {
+      const light = discovered[i];
+      if (i >= limit) {
         light.visible = false;
         light.userData.__lightBudgetCulled = true;
       } else {
@@ -1139,7 +1378,6 @@ export class GameEngine {
         light.userData.__lightBudgetCulled = false;
       }
     }
-    this.localLights = discovered;
   }
 
   // --- Core Game Update ---
@@ -1174,8 +1412,15 @@ export class GameEngine {
     this.playerStats.visibilityPercent = wx.visibilityPercent;
     if (wx.weather !== this.lastReportedWeather) {
       this.lastReportedWeather = wx.weather;
+      this.lastReportedWeatherIntensity = wx.intensity;
+      this.lastWeatherReportTime = this.engineClock;
       this.callbacks.onWeatherChange?.(wx.weather, wx.intensity);
-    } else if (Math.random() < 0.08) {
+    } else if (
+      Math.abs(wx.intensity - this.lastReportedWeatherIntensity) >= 0.08 &&
+      this.engineClock - this.lastWeatherReportTime >= 1.5
+    ) {
+      this.lastReportedWeatherIntensity = wx.intensity;
+      this.lastWeatherReportTime = this.engineClock;
       this.callbacks.onWeatherChange?.(wx.weather, wx.intensity);
     }
     if (wx.rainCatchmentBonus > 0) {
@@ -1243,27 +1488,46 @@ export class GameEngine {
     RealismShaderGlobals.uRainIntensity.value = wx.rainIntensity;
     RealismShaderGlobals.uWetness.value = this.wetAccum;
     RealismShaderGlobals.uLightningFlash.value = wx.lightningFlash;
-    RealismShaderGlobals.uSunDir.value.copy(this.dirLight.position).sub(this.player.position).normalize();
+    const sunDirVec = RealismShaderGlobals.uSunDir.value.copy(this.dirLight.position).sub(this.player.position);
+    if (sunDirVec.lengthSq() > 1e-6) {
+      sunDirVec.normalize();
+    } else {
+      sunDirVec.set(0.35, 0.85, 0.4).normalize();
+    }
     RealismShaderGlobals.uSunColor.value.copy(this.dirLight.color);
     if (this.atmosphericSky) {
       RealismShaderGlobals.uHorizonColor.value.copy(this.atmosphericSky.getHorizonColor());
     }
 
-    // Update volumetric sun-shaft & lens grading post-process uniforms
+    // Update volumetric sun-shaft & lens grading post-process uniforms (guarded against behind-camera NaN projection)
     if (this.usePostProcessing && this.cinematicPass) {
       this.camera.getWorldDirection(GameEngine._camDir);
       const sunDot = Math.max(0, GameEngine._camDir.dot(RealismShaderGlobals.uSunDir.value));
       GameEngine._sunScreenVec.copy(this.dirLight.position).project(this.camera);
-      this.cinematicPass.uniforms.uSunScreenPos.value.set(
-        GameEngine._sunScreenVec.x * 0.5 + 0.5,
-        GameEngine._sunScreenVec.y * 0.5 + 0.5
-      );
-      const baseShaft =
-        this.activeQualityMode === 'ultra_5x' ? 0.24 : this.activeQualityMode === 'quality' ? 0.18 : 0.10;
-      const dayVis = this.isNight ? 0.28 : 1.0;
-      const overcastAtten = 1.0 - wx.overcast * 0.65;
-      this.cinematicPass.uniforms.uSunShaftIntensity.value =
-        baseShaft * Math.pow(sunDot, 1.5) * dayVis * overcastAtten;
+      const sx = GameEngine._sunScreenVec.x * 0.5 + 0.5;
+      const sy = GameEngine._sunScreenVec.y * 0.5 + 0.5;
+      const sz = GameEngine._sunScreenVec.z;
+      const sunInFront =
+        sz >= -1.0 &&
+        sz < 1.0 &&
+        sunDot > 0.02 &&
+        Number.isFinite(sx) &&
+        Number.isFinite(sy);
+      if (sunInFront) {
+        this.cinematicPass.uniforms.uSunScreenPos.value.set(
+          THREE.MathUtils.clamp(sx, -0.5, 1.5),
+          THREE.MathUtils.clamp(sy, -0.5, 1.5)
+        );
+        const baseShaft =
+          this.activeQualityMode === 'ultra_5x' ? 0.24 : this.activeQualityMode === 'quality' ? 0.18 : 0.10;
+        const dayVis = this.isNight ? 0.28 : 1.0;
+        const overcastAtten = Math.max(0, 1.0 - wx.overcast * 0.65);
+        this.cinematicPass.uniforms.uSunShaftIntensity.value =
+          baseShaft * Math.pow(sunDot, 1.5) * dayVis * overcastAtten;
+      } else {
+        this.cinematicPass.uniforms.uSunScreenPos.value.set(0.5, 0.5);
+        this.cinematicPass.uniforms.uSunShaftIntensity.value = 0.0;
+      }
       this.cinematicPass.uniforms.uSunColor.value.copy(this.dirLight.color);
       this.cinematicPass.uniforms.uTime.value = this.engineClock;
       const caBoost =
@@ -1520,6 +1784,7 @@ export class GameEngine {
     this.waterManager.update(delta, this.powerManager.state.isPowered);
     this.foodManager.update(delta, this.powerManager.state.isPowered, this.npcSettlementManager.npcs.length);
     let zombiesNearPerimeter = 0;
+    let activeCombatZombies = 0;
     if (this.zombieMgr?.zombies) {
       for (let i = 0; i < this.zombieMgr.zombies.length; i++) {
         const z = this.zombieMgr.zombies[i];
@@ -1532,8 +1797,21 @@ export class GameEngine {
         ) {
           zombiesNearPerimeter++;
         }
+        if (z.state === 'chase' || z.state === 'attack_player' || z.isBoss) {
+          const pdx = z.position[0] - this.player.position.x;
+          const pdz = z.position[2] - this.player.position.z;
+          if (pdx * pdx + pdz * pdz <= 34 * 34) {
+            activeCombatZombies += z.isBoss ? 3 : 1;
+          }
+        }
       }
     }
+    this.combatActionPulse = Math.max(0, this.combatActionPulse - delta * 0.45);
+    this.activeCombatIntensity = THREE.MathUtils.clamp(
+      Math.max(this.combatActionPulse, Math.min(1, activeCombatZombies / 6)),
+      0,
+      1
+    );
     this.securityManager.update(zombiesNearPerimeter, this.isNight, this.powerManager.state.isPowered);
     this.npcSettlementManager.update(delta, this.isNight, this.powerManager.state.isPowered, (convertedPos) => {
       if (!this.zombieMgr.isOutbreakActive) return;
@@ -1631,41 +1909,53 @@ export class GameEngine {
       }
     }
 
-    // Dynamic Security Screen update (throttled every 0.25s)
+    // Dynamic Security Screen & Aurelion Location update (throttled every 0.3s, canvas redraws gated by F1 visibility)
     this.securityScreenTimer += delta;
-    if (this.securityScreenTimer >= 0.25) {
+    if (this.securityScreenTimer >= 0.3) {
       this.securityScreenTimer = 0;
       const apt = this.prologueManager?.townMgr?.apartmentBuilding;
       if (apt) {
         const aptOrigin = apt.group.position;
-        const trackedEntities: Array<{ x: number; z: number; type: 'zombie' | 'creature' }> = [];
-        if (this.zombieMgr?.zombies) {
-          for (let i = 0; i < this.zombieMgr.zombies.length; i++) {
-            const z = this.zombieMgr.zombies[i];
-            if (z.state === 'dead') continue;
-            const dist = Math.hypot(z.position[0] - aptOrigin.x, z.position[2] - aptOrigin.z);
-            if (dist <= 5000) {
-              trackedEntities.push({ x: z.position[0], z: z.position[2], type: 'zombie' });
+        const f1Visible = Boolean(apt.aurelion?.lower.f1Group.visible);
+        const nearApt =
+          Math.abs(this.player.position.x - aptOrigin.x) < 36 &&
+          Math.abs(this.player.position.z - aptOrigin.z) < 36;
+
+        if (f1Visible && nearApt) {
+          const trackedEntities: Array<{ x: number; z: number; type: 'zombie' | 'creature' }> = [];
+          if (this.zombieMgr?.zombies) {
+            for (let i = 0; i < this.zombieMgr.zombies.length; i++) {
+              const z = this.zombieMgr.zombies[i];
+              if (z.state === 'dead') continue;
+              const dist = Math.hypot(z.position[0] - aptOrigin.x, z.position[2] - aptOrigin.z);
+              if (dist <= 5000) {
+                trackedEntities.push({ x: z.position[0], z: z.position[2], type: 'zombie' });
+              }
             }
           }
-        }
-        if (this.wildlifeManager?.creatures) {
-          for (let i = 0; i < this.wildlifeManager.creatures.length; i++) {
-            const c = this.wildlifeManager.creatures[i];
-            const dist = Math.hypot(c.group.position.x - aptOrigin.x, c.group.position.z - aptOrigin.z);
-            if (dist <= 5000) {
-              trackedEntities.push({ x: c.group.position.x, z: c.group.position.z, type: 'creature' });
+          if (this.wildlifeManager?.creatures) {
+            for (let i = 0; i < this.wildlifeManager.creatures.length; i++) {
+              const c = this.wildlifeManager.creatures[i];
+              const dist = Math.hypot(c.group.position.x - aptOrigin.x, c.group.position.z - aptOrigin.z);
+              if (dist <= 5000) {
+                trackedEntities.push({ x: c.group.position.x, z: c.group.position.z, type: 'creature' });
+              }
             }
           }
+          const playerRel = {
+            x: this.player.position.x - aptOrigin.x,
+            z: this.player.position.z - aptOrigin.z
+          };
+          apt.renderSecurityScreenContent(trackedEntities, playerRel);
+          apt.renderWallClockContent(this.gameTimeMinutes, this.dayCount);
+          apt.renderComputerScreenContent(this.playerStats, this.dayCount, this.gameTimeMinutes);
         }
-        const playerRel = {
-          x: this.player.position.x - aptOrigin.x,
-          z: this.player.position.z - aptOrigin.z
-        };
-        apt.renderSecurityScreenContent(trackedEntities, playerRel);
-        apt.renderWallClockContent(this.gameTimeMinutes, this.dayCount);
-        apt.renderComputerScreenContent(this.playerStats, this.dayCount, this.gameTimeMinutes);
-        this.callbacks.onAurelionLocationChange?.(apt.getLocationSummary(this.player.position));
+        const locSummary = apt.getLocationSummary(this.player.position);
+        const locKey = locSummary ? `${locSummary.level}|${locSummary.roomName}` : '';
+        if (locKey !== this.lastAurelionLocKey) {
+          this.lastAurelionLocKey = locKey;
+          this.callbacks.onAurelionLocationChange?.(locSummary);
+        }
       }
     }
 
@@ -1803,16 +2093,19 @@ export class GameEngine {
     if (shouldSyncHud) {
       this.uiSyncTimer = 0;
       const geo = WorldCoordinates.worldToLatLon(this.player.position.x, this.player.position.z);
-      const earthSample = RealEarthDataset.sampleEarthGeography(geo.lat, geo.lon);
-      const nearCity = RealWorldCities.findNearestCity(geo.lat, geo.lon, 250);
-      const geoTile = WorldCoordinates.worldToGeoTile(this.player.position.x, this.player.position.z, 14);
       this.playerStats.latitude = geo.lat;
       this.playerStats.longitude = geo.lon;
-      this.playerStats.realElevationMeters = Math.round(earthSample.realElevationMeters);
-      this.playerStats.countryName = earthSample.country;
-      this.playerStats.continentOrOcean = earthSample.continent ?? earthSample.ocean ?? 'Earth';
-      this.playerStats.nearestCityName = nearCity?.city.name;
-      this.playerStats.geoTileKey = geoTile.key;
+      if (this.player.position.distanceToSquared(this.lastGeoCheckPos) >= 400) {
+        this.lastGeoCheckPos.copy(this.player.position);
+        const earthSample = RealEarthDataset.sampleEarthGeography(geo.lat, geo.lon);
+        const nearCity = RealWorldCities.findNearestCity(geo.lat, geo.lon, 250);
+        const geoTile = WorldCoordinates.worldToGeoTile(this.player.position.x, this.player.position.z, 14);
+        this.playerStats.realElevationMeters = Math.round(earthSample.realElevationMeters);
+        this.playerStats.countryName = earthSample.country;
+        this.playerStats.continentOrOcean = earthSample.continent ?? earthSample.ocean ?? 'Earth';
+        this.playerStats.nearestCityName = nearCity?.city.name;
+        this.playerStats.geoTileKey = geoTile.key;
+      }
 
       this.callbacks.onStatsChange({ ...this.playerStats });
       this.callbacks.onTimeChange(this.gameTimeMinutes, this.dayCount, this.isNight, this.isDusk);
@@ -2037,11 +2330,13 @@ export class GameEngine {
     this.scene.background = horizonColor;
     if (this.scene.fog instanceof THREE.FogExp2) {
       this.scene.fog.color = horizonColor;
-      this.scene.fog.density = (this.isNight ? 0.014 : 0.0068) * this.fogDensityMultiplier * this.weatherFogMultiplier;
+      const rawFog = (this.isNight ? 0.014 : 0.0068) * this.fogDensityMultiplier * this.weatherFogMultiplier;
+      this.scene.fog.density = Number.isFinite(rawFog) ? THREE.MathUtils.clamp(rawFog, 0.0005, 0.08) : 0.0068;
     }
 
     this.dirLight.color.copy(sunColor);
-    this.dirLight.intensity = sunIntensity * this.sunIntensityMultiplier;
+    const rawSunIntensity = sunIntensity * this.sunIntensityMultiplier;
+    this.dirLight.intensity = Number.isFinite(rawSunIntensity) ? THREE.MathUtils.clamp(rawSunIntensity, 0.05, 4.5) : 1.5;
 
     // Orbit sun / moon centered on the player for infinite world shadow coverage
     const sunAngle = ((hour - 6.0) / 24.0) * Math.PI * 2;
@@ -2163,6 +2458,7 @@ export class GameEngine {
       }
 
       const finalDmg = Math.round(dmg);
+      this.combatActionPulse = 1.0;
       const hitPos = GameEngine._tmpVecA.set(z.position[0], z.position[1] + (isHeadshot ? 1.55 : 1.15), z.position[2]);
       this.combatEffects.spawnImpactBurst(hitPos, 'blood', isHeadshot ? 12 : 8);
       this.spawnWorldDamageNumber(new THREE.Vector3(z.position[0], z.position[1] + 1.75, z.position[2]), finalDmg, isHeadshot, isStealth);
@@ -2252,6 +2548,7 @@ export class GameEngine {
   }
 
   private performRangedShot() {
+    this.combatActionPulse = 1.0;
     this.raycaster.setFromCamera(this.screenCenter, this.camera);
     const range = 55.0;
     const lookDir = GameEngine._camDir;
@@ -2817,6 +3114,15 @@ export class GameEngine {
           `B2 Fuel Day-Tank replenished (+120 L · Total: ${Math.round(apt.aurelion.systems.fuelLiters)} L)`
         );
         return;
+      } else if (aptInteraction.id === 'aurelionWaterPump') {
+        const pumpOn = apt.aurelion.systems.toggleWaterPump();
+        soundEngine.playSwitchClick();
+        this.callbacks.onInteractionPrompt(
+          pumpOn
+            ? `B2 Booster Water Pump: ONLINE (${apt.aurelion.systems.waterPressureBar.toFixed(1)} BAR · Feeding RO Plant & Drip Beds)`
+            : 'B2 Booster Water Pump: STANDBY (Gravity trickle mode)'
+        );
+        return;
       } else if (aptInteraction.id === 'aurelionWaterPurifier') {
         const wasPaused = !apt.aurelion.systems.purifierActive;
         apt.aurelion.systems.togglePurifier();
@@ -2856,12 +3162,38 @@ export class GameEngine {
           this.callbacks.onOpenApartmentStatus?.();
         }
         return;
+      } else if (aptInteraction.id === 'aurelionB2FarmBed') {
+        const bedId = aptInteraction.b2FarmBedId ?? 0;
+        const bed = apt.aurelion.systems.b2FarmBeds[bedId];
+        if (bed?.stage === 0) {
+          apt.aurelion.systems.plantB2FarmBed(bedId);
+          soundEngine.playBuildSnap();
+          this.callbacks.onInteractionPrompt(`Planted ${bed.cropType.toUpperCase()} in ${bed.label} (Drip irrigation ready).`);
+        } else if (bed?.stage === 3) {
+          const harvest = apt.aurelion.systems.harvestB2FarmBed(bedId);
+          if (harvest.harvested) {
+            this.callbacks.onItemCollected(harvest.itemId, harvest.count);
+            this.addXP(30);
+            soundEngine.playDawnVictoryChime();
+            this.callbacks.onInteractionPrompt(`Harvested +${harvest.count} Fresh ${harvest.itemId.replace(/_/g, ' ')} from B2 Farm Bed (+30 XP)!`);
+          }
+        } else if (bed) {
+          soundEngine.playUIClick();
+          const dripStr = apt.aurelion.systems.waterPumpActive ? 'Pressurized Drip Active' : 'Low Pressure (Turn ON Water Pump)';
+          this.callbacks.onInteractionPrompt(`${bed.label}: ${Math.round(bed.growthProgress * 100)}% grown · ${dripStr}`);
+        }
+        return;
       } else if (aptInteraction.id === 'aurelionCinema') {
-        apt.aurelion.systems.cinemaOn = !apt.aurelion.systems.cinemaOn;
-        soundEngine.playSwitchClick();
+        if (!apt.aurelion.systems.cinemaOn) {
+          apt.aurelion.systems.cinemaOn = true;
+        }
+        soundEngine.playUIClick();
         this.callbacks.onInteractionPrompt(
-          apt.aurelion.systems.cinemaOn ? 'Floor 6 Private 4K Cinema: SCREENING ACTIVE' : 'Floor 6 Private 4K Cinema: STANDBY'
+          apt.aurelion.systems.tier3LuxuryPowered
+            ? 'Opening Floor 6 Android TV 4K Smart Cinema...'
+            : 'Floor 6 Cinema opened (Start B2 Generator or switch Power Priority for Tier 3 power)'
         );
+        this.callbacks.onOpenAurelionCinema?.();
         return;
       } else if (aptInteraction.id === 'aurelionGym') {
         soundEngine.playUIClick();
@@ -3270,6 +3602,14 @@ export class GameEngine {
 
   public getAurelionDocument(docId: string): AurelionDocument | undefined {
     return this.prologueManager?.townMgr?.apartmentBuilding?.aurelion?.getDocumentById(docId);
+  }
+
+  public setAurelionCinemaMedia(
+    videoEl: HTMLVideoElement | null,
+    appLabel?: string,
+    title?: string
+  ): void {
+    this.prologueManager?.townMgr?.apartmentBuilding?.aurelion?.setCinemaMedia(videoEl, appLabel, title);
   }
 
   public callAurelionElevatorToFloor(elevatorId: ElevatorId, targetFloor: AurelionLevelId): { ok: boolean; reason?: string } {
@@ -4024,6 +4364,7 @@ export class GameEngine {
     const currentHealth = Number.isFinite(this.playerStats.health) ? this.playerStats.health : maxHealth;
     this.playerStats.maxHealth = maxHealth;
     this.playerStats.health = THREE.MathUtils.clamp(currentHealth - effectiveAmount, 0, maxHealth);
+    this.combatActionPulse = Math.max(this.combatActionPulse, 0.85);
     soundEngine.playHurt();
     this.callbacks.onStatsChange({ ...this.playerStats });
 
@@ -4735,10 +5076,13 @@ export class GameEngine {
       this.pmremGenerator?.dispose();
     } catch {}
     try {
+      (this.upscalePass as any)?.dispose?.();
       (this.cinematicPass as any)?.dispose?.();
+      (this.motionBlurPass as any)?.dispose?.();
       this.bloomPass?.dispose();
       this.composer?.dispose();
     } catch {}
+    disposeProceduralTextures();
     if (this.renderer) {
       try {
         const gl = this.renderer.getContext();

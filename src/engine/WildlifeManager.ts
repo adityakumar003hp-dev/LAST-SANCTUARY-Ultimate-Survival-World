@@ -666,6 +666,7 @@ const _tempVecA = new THREE.Vector3();
 const _tempVecB = new THREE.Vector3();
 const _tempVecC = new THREE.Vector3();
 const _tempDir = new THREE.Vector3();
+const _cullSphere = new THREE.Sphere();
 
 export class WildlifeManager {
   private scene: THREE.Scene;
@@ -1309,29 +1310,35 @@ export class WildlifeManager {
       const flightAlt = 8.0 + Math.sin(this.particleTimer * 1.8 + idPhase + a.group.position.x * 0.08) * 2.5;
       const ground = getTerrainHeight(a.group.position.x, a.group.position.z, this.seed);
       a.group.position.y = Math.max(ground + 0.5, ground + flightAlt);
-      const bankTarget = Math.sin(this.particleTimer * 1.4 + idPhase) * (a.state === 'flee' ? 0.34 : 0.20);
-      a.group.rotation.z = THREE.MathUtils.damp(a.group.rotation.z, bankTarget, 5, delta);
-      const wingL = a.group.getObjectByName('wing_left');
-      const wingR = a.group.getObjectByName('wing_right');
-      if (wingL && wingR) {
-        const flapFreq = a.state === 'flee' || a.state === 'hunt' ? 18.0 : 12.5;
-        const flap = Math.sin(this.particleTimer * flapFreq + idPhase) * (a.state === 'flee' ? 0.72 : 0.54);
-        wingL.rotation.z = flap;
-        wingR.rotation.z = -flap;
+      if (a.group.visible) {
+        const bankTarget = Math.sin(this.particleTimer * 1.4 + idPhase) * (a.state === 'flee' ? 0.34 : 0.20);
+        a.group.rotation.z = THREE.MathUtils.damp(a.group.rotation.z, bankTarget, 5, delta);
+        const wingL = a.group.getObjectByName('wing_left');
+        const wingR = a.group.getObjectByName('wing_right');
+        if (wingL && wingR) {
+          const flapFreq = a.state === 'flee' || a.state === 'hunt' ? 18.0 : 12.5;
+          const flap = Math.sin(this.particleTimer * flapFreq + idPhase) * (a.state === 'flee' ? 0.72 : 0.54);
+          wingL.rotation.z = flap;
+          wingR.rotation.z = -flap;
+        }
       }
     } else if (a.species.kind === 'aquatic') {
       const ground = getTerrainHeight(a.group.position.x, a.group.position.z, this.seed);
       a.group.position.y = Math.min(-0.35, ground + 0.5) + Math.sin(this.particleTimer * 2.2 + idPhase) * 0.08;
-      a.group.rotation.z = Math.sin(this.particleTimer * 4.5 + idPhase) * 0.12;
-      const tailOld = a.group.getObjectByName('tail') || a.group.getObjectByName('tail_base');
-      if (tailOld) {
-        tailOld.rotation.y = Math.sin(this.particleTimer * 9.0 + idPhase) * 0.35;
+      if (a.group.visible) {
+        a.group.rotation.z = Math.sin(this.particleTimer * 4.5 + idPhase) * 0.12;
+        const tailOld = a.group.getObjectByName('tail') || a.group.getObjectByName('tail_base');
+        if (tailOld) {
+          tailOld.rotation.y = Math.sin(this.particleTimer * 9.0 + idPhase) * 0.35;
+        }
       }
     } else {
       const ground = getTerrainHeight(a.group.position.x, a.group.position.z, this.seed);
       const isMoving = distToTarget > 0.35;
       a.group.position.y = ground;
-      this.animateAgentLimbs(a, isMoving, delta, idPhase);
+      if (a.group.visible) {
+        this.animateAgentLimbs(a, isMoving, delta, idPhase);
+      }
     }
   }
 
@@ -2423,6 +2430,27 @@ export class WildlifeManager {
       }
     });
     this.agents.delete(id);
+  }
+
+  public updateFrustumCulling(frustum: THREE.Frustum, camPos: THREE.Vector3) {
+    for (const a of this.agents.values()) {
+      const dx = a.group.position.x - camPos.x;
+      const dz = a.group.position.z - camPos.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < 18 * 18) {
+        a.group.visible = true;
+      } else if (distSq > 165 * 165) {
+        a.group.visible = false;
+      } else {
+        _cullSphere.center.set(
+          a.group.position.x,
+          a.group.position.y + a.species.scale * 0.8,
+          a.group.position.z
+        );
+        _cullSphere.radius = Math.max(2.0, a.species.scale * 2.2);
+        a.group.visible = frustum.intersectsSphere(_cullSphere);
+      }
+    }
   }
 
   public dispose() {

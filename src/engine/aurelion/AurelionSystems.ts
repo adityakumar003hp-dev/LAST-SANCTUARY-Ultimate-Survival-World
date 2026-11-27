@@ -50,6 +50,7 @@ export interface AurelionSaveState {
   rawWaterLiters: number;
   treatedWaterLiters: number;
   purifierActive: boolean;
+  waterPumpActive?: boolean;
   powerPriorityMode: PowerPriorityMode;
   hvacMode: HvacMode;
   cinemaOn: boolean;
@@ -58,6 +59,7 @@ export interface AurelionSaveState {
   roomLights: AurelionRoomLightsState;
   elevators: Record<ElevatorId, { currentFloor: AurelionLevelId; targetFloor: AurelionLevelId }>;
   hydroBeds: HydroponicBedState[];
+  b2FarmBeds?: HydroponicBedState[];
   totalHarvestedCrops: number;
 }
 
@@ -84,6 +86,8 @@ export interface AurelionDashboardSnapshot {
     treatedLiters: number;
     maxCapacityLiters: number;
     purifierActive: boolean;
+    waterPumpActive: boolean;
+    waterPressureBar: number;
     purificationLitersPerHour: number;
     aquaponicsDrawLitersPerHour: number;
   };
@@ -129,14 +133,17 @@ export class AurelionMansionSystems {
   public tier2StandardPowered = true;
   public tier3LuxuryPowered = true;
 
-  // Water Reserves & RO/UV Filtration
+  // Water Reserves, Booster Pump & RO/UV Filtration
   public rawWaterLiters = 11200;
   public treatedWaterLiters = 9600;
   public readonly maxWaterCapacityLiters = 15000;
   public purifierActive = true;
+  public waterPumpActive = true;
+  public waterPressureBar = 3.8;
 
-  // Hydroponics (12 Beds on Floor 5)
+  // Hydroponics (12 Beds on Floor 5 + 4 Raised Soil/Drip Farm Beds in B2)
   public hydroBeds: HydroponicBedState[] = [];
+  public b2FarmBeds: HydroponicBedState[] = [];
   public totalHarvestedCrops = 0;
 
   // Climate, Lighting & Resort Controls
@@ -173,6 +180,22 @@ export class AurelionMansionSystems {
         growthProgress,
       });
     }
+
+    const b2Seeds: Array<{ cropType: HydroCropType; label: string; stage: 0 | 1 | 2 | 3; progress: number }> = [
+      { cropType: 'vegetables', label: 'B2 Raised Bed 01 (ROMA TOMATO)', stage: 3, progress: 1.0 },
+      { cropType: 'herbs', label: 'B2 Raised Bed 02 (CULINARY HERBS)', stage: 2, progress: 0.68 },
+      { cropType: 'berries', label: 'B2 Raised Bed 03 (STRAWBERRIES)', stage: 3, progress: 1.0 },
+      { cropType: 'vegetables', label: 'B2 Raised Bed 04 (LEAFY GREENS)', stage: 1, progress: 0.25 },
+    ];
+    b2Seeds.forEach((seed, idx) => {
+      this.b2FarmBeds.push({
+        id: idx,
+        label: seed.label,
+        cropType: seed.cropType,
+        stage: seed.stage,
+        growthProgress: seed.progress,
+      });
+    });
 
     const createElev = (id: ElevatorId, start: AurelionLevelId): ElevatorState => ({
       id,
@@ -231,11 +254,14 @@ export class AurelionMansionSystems {
     // 3. Demand Calculation by Priority Tier
     const litFloorsCount = Object.values(this.roomLights).filter(Boolean).length;
     const tier1Kw = 2.4; // Medical life-support + B1 Railway/Security + Private Lift standby
+    const b2GrowingAny = this.b2FarmBeds.some((b) => b.stage > 0 && b.stage < 3);
     const tier2Kw =
       1.2 + // Main & Service lift standby
       litFloorsCount * 0.22 +
       (this.purifierActive ? 1.8 : 0) +
+      (this.waterPumpActive ? 0.95 : 0) +
       (this.hydroBeds.some((b) => b.stage > 0 && b.stage < 3) ? 2.1 : 0.4) +
+      (b2GrowingAny ? 0.85 : 0.25) +
       (extraUsage.stoveOn ? 1.4 : 0);
     const tier3Kw =
       (this.hvacMode === 'comfort' ? 2.4 : this.hvacMode === 'eco' ? 1.1 : 0) +
@@ -272,25 +298,42 @@ export class AurelionMansionSystems {
     const netKw = totalGenerationKw - this.totalDemandKw;
     this.batteryKwh = Math.max(0, Math.min(this.batteryCapacityKwh, this.batteryKwh + netKw * gameHoursDelta));
 
-    // 4. Water Collection & Filtration (B2 Reserve -> RO/UV Plant -> Potable)
+    // 4. Water Collection, Booster Pump Pressure & RO/UV Filtration (B2 Reserve -> Pump -> RO/UV Plant -> Potable)
     if (weatherType === 'rain' || weatherType === 'storm') {
       this.rawWaterLiters = Math.min(this.maxWaterCapacityLiters, this.rawWaterLiters + 320 * gameHoursDelta);
     }
+    const pumpPressurized = this.waterPumpActive && this.tier2StandardPowered && this.rawWaterLiters > 5;
+    const targetPressure = pumpPressurized ? 3.85 : this.rawWaterLiters > 5 ? 0.65 : 0.0;
+    this.waterPressureBar += (targetPressure - this.waterPressureBar) * Math.min(1, delta * 3.5);
+
+    const purificationRateLph = pumpPressurized ? 280 : 90;
     if (this.purifierActive && this.tier2StandardPowered && this.rawWaterLiters > 1 && this.treatedWaterLiters < this.maxWaterCapacityLiters) {
-      const purified = Math.min(280 * gameHoursDelta, this.rawWaterLiters, this.maxWaterCapacityLiters - this.treatedWaterLiters);
+      const purified = Math.min(purificationRateLph * gameHoursDelta, this.rawWaterLiters, this.maxWaterCapacityLiters - this.treatedWaterLiters);
       this.rawWaterLiters -= purified;
       this.treatedWaterLiters += purified;
     }
     const fixtureDraw = (extraUsage.tapsActive * 45 + (extraUsage.showerActive ? 140 : 0)) * gameHoursDelta;
     const hydroDraw = this.hydroBeds.filter((b) => b.stage > 0 && b.stage < 3).length * 4.5 * gameHoursDelta;
-    this.treatedWaterLiters = Math.max(0, this.treatedWaterLiters - fixtureDraw - hydroDraw);
+    const b2FarmDraw = this.b2FarmBeds.filter((b) => b.stage > 0 && b.stage < 3).length * 3.2 * gameHoursDelta;
+    this.treatedWaterLiters = Math.max(0, this.treatedWaterLiters - fixtureDraw - hydroDraw - b2FarmDraw);
 
-    // 5. Floor 5 Hydroponic Crop Growth
+    // 5. Floor 5 Hydroponics + B2 Raised Drip-Irrigated Farm Beds Growth
     const hasGrowthResources = this.tier2StandardPowered && this.treatedWaterLiters > 15;
     if (hasGrowthResources) {
       for (const bed of this.hydroBeds) {
         if (bed.stage === 1 || bed.stage === 2) {
           bed.growthProgress = Math.min(1, bed.growthProgress + delta * 0.012);
+          if (bed.growthProgress >= 1) {
+            bed.stage = 3;
+          } else if (bed.growthProgress >= 0.45) {
+            bed.stage = 2;
+          }
+        }
+      }
+      const b2DripBoost = this.waterPumpActive ? 0.015 : 0.006;
+      for (const bed of this.b2FarmBeds) {
+        if (bed.stage === 1 || bed.stage === 2) {
+          bed.growthProgress = Math.min(1, bed.growthProgress + delta * b2DripBoost);
           if (bed.growthProgress >= 1) {
             bed.stage = 3;
           } else if (bed.growthProgress >= 0.45) {
@@ -376,6 +419,11 @@ export class AurelionMansionSystems {
     return this.purifierActive;
   }
 
+  public toggleWaterPump(): boolean {
+    this.waterPumpActive = !this.waterPumpActive;
+    return this.waterPumpActive;
+  }
+
   public drawPurifiedWaterBottle(): boolean {
     if (this.treatedWaterLiters < 2.0) return false;
     this.treatedWaterLiters -= 2.0;
@@ -403,6 +451,29 @@ export class AurelionMansionSystems {
     this.totalHarvestedCrops += 1;
     const itemId = cropType === 'berries' ? 'wild_berries' : cropType === 'herbs' ? 'herb_stew' : 'canned_beans';
     const count = cropType === 'berries' ? 3 : 2;
+    return { harvested: true, cropType, itemId, count };
+  }
+
+  public plantB2FarmBed(bedId: number, cropType?: HydroCropType): boolean {
+    const bed = this.b2FarmBeds.find((b) => b.id === bedId);
+    if (!bed || bed.stage !== 0) return false;
+    if (cropType) bed.cropType = cropType;
+    bed.stage = 1;
+    bed.growthProgress = 0.08;
+    return true;
+  }
+
+  public harvestB2FarmBed(bedId: number): { harvested: boolean; cropType: HydroCropType; itemId: string; count: number } {
+    const bed = this.b2FarmBeds.find((b) => b.id === bedId);
+    if (!bed || bed.stage !== 3) {
+      return { harvested: false, cropType: 'vegetables', itemId: 'wild_berries', count: 0 };
+    }
+    const cropType = bed.cropType;
+    bed.stage = 0;
+    bed.growthProgress = 0;
+    this.totalHarvestedCrops += 1;
+    const itemId = cropType === 'berries' ? 'wild_berries' : cropType === 'herbs' ? 'herb_stew' : 'canned_beans';
+    const count = cropType === 'berries' ? 4 : 3;
     return { harvested: true, cropType, itemId, count };
   }
 
@@ -462,8 +533,17 @@ export class AurelionMansionSystems {
         treatedLiters: Math.round(this.treatedWaterLiters),
         maxCapacityLiters: this.maxWaterCapacityLiters,
         purifierActive: this.purifierActive && this.tier2StandardPowered,
-        purificationLitersPerHour: this.purifierActive && this.tier2StandardPowered ? 280 : 0,
-        aquaponicsDrawLitersPerHour: Math.round(growingCount * 4.5),
+        waterPumpActive: this.waterPumpActive && this.tier2StandardPowered,
+        waterPressureBar: Number(this.waterPressureBar.toFixed(1)),
+        purificationLitersPerHour:
+          this.purifierActive && this.tier2StandardPowered
+            ? this.waterPumpActive
+              ? 280
+              : 90
+            : 0,
+        aquaponicsDrawLitersPerHour: Math.round(
+          growingCount * 4.5 + this.b2FarmBeds.filter((b) => b.stage > 0 && b.stage < 3).length * 3.2
+        ),
       },
       agriculture: {
         beds: this.hydroBeds.map((b) => ({ ...b })),
@@ -500,6 +580,7 @@ export class AurelionMansionSystems {
       rawWaterLiters: this.rawWaterLiters,
       treatedWaterLiters: this.treatedWaterLiters,
       purifierActive: this.purifierActive,
+      waterPumpActive: this.waterPumpActive,
       powerPriorityMode: this.powerPriorityMode,
       hvacMode: this.hvacMode,
       cinemaOn: this.cinemaOn,
@@ -512,6 +593,7 @@ export class AurelionMansionSystems {
         private: { currentFloor: this.elevators.private.currentFloor, targetFloor: this.elevators.private.targetFloor },
       },
       hydroBeds: this.hydroBeds.map((b) => ({ ...b })),
+      b2FarmBeds: this.b2FarmBeds.map((b) => ({ ...b })),
       totalHarvestedCrops: this.totalHarvestedCrops,
     };
   }
@@ -524,6 +606,7 @@ export class AurelionMansionSystems {
     if (typeof saved.rawWaterLiters === 'number') this.rawWaterLiters = Math.max(0, Math.min(this.maxWaterCapacityLiters, saved.rawWaterLiters));
     if (typeof saved.treatedWaterLiters === 'number') this.treatedWaterLiters = Math.max(0, Math.min(this.maxWaterCapacityLiters, saved.treatedWaterLiters));
     this.purifierActive = saved.purifierActive !== false;
+    this.waterPumpActive = saved.waterPumpActive !== false;
     if (saved.powerPriorityMode) this.powerPriorityMode = saved.powerPriorityMode;
     if (saved.hvacMode) this.hvacMode = saved.hvacMode;
     this.cinemaOn = Boolean(saved.cinemaOn);
@@ -533,6 +616,9 @@ export class AurelionMansionSystems {
     if (typeof saved.totalHarvestedCrops === 'number') this.totalHarvestedCrops = saved.totalHarvestedCrops;
     if (Array.isArray(saved.hydroBeds) && saved.hydroBeds.length === 12) {
       this.hydroBeds = saved.hydroBeds.map((b) => ({ ...b }));
+    }
+    if (Array.isArray(saved.b2FarmBeds) && saved.b2FarmBeds.length === 4) {
+      this.b2FarmBeds = saved.b2FarmBeds.map((b) => ({ ...b }));
     }
     if (saved.elevators) {
       (['main', 'service', 'private'] as ElevatorId[]).forEach((id) => {

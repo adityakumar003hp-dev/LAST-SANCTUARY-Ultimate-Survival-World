@@ -131,18 +131,14 @@ export class NexusCoordinator {
       UnifiedPhysicsManager.getInstance()?.setDoorOpenState('nexus_f1_entrance_door', nearSouthEntrance);
     }
 
-    syncNexusArchitectureVisuals(this.arch, this.systems, delta, nearSouthEntrance);
-    updateNexusLowerFloorVisuals(this.lower, live, delta);
-    updateNexusUpperFloorVisuals(this.upper, this.systems, live, apartmentOrigin, delta);
-    this.screens.update(delta, this.systems, live);
-    this.staff.update(delta, playerRelToNexus);
-
     // Camera-aware exterior cutaway when inside THE NEXUS
     const isInside =
       Math.abs(playerRelToNexus.x) < 11.4 &&
       Math.abs(playerRelToNexus.z) < 9.4 &&
       playerRelToNexus.y >= 0.0 &&
       playerRelToNexus.y <= 32.5;
+    const camDistSq = cameraRelToNexus.x * cameraRelToNexus.x + cameraRelToNexus.z * cameraRelToNexus.z;
+    const nearNexus = isInside || camDistSq < 34 * 34;
 
     if (isInside) {
       this.arch.southExteriorGroup.visible = !(cameraRelToNexus.z < playerRelToNexus.z - 0.5);
@@ -170,15 +166,24 @@ export class NexusCoordinator {
       this.arch.northExteriorGroup.visible = true;
       this.arch.westExteriorGroup.visible = true;
       this.arch.eastExteriorGroup.visible = true;
-      this.lower.f1Group.visible = true;
-      this.lower.f2Group.visible = true;
-      this.lower.f3Group.visible = true;
-      this.lower.f4Group.visible = true;
-      this.upper.f5Group.visible = true;
-      this.upper.f6Group.visible = true;
-      this.upper.f7Group.visible = true;
-      this.upper.f8Group.visible = true;
-      this.arch.crownGroup.visible = true;
+      this.arch.crownGroup.visible = camDistSq < 190 * 190;
+      const showAtriumF1 = camDistSq < 26 * 26 && cameraRelToNexus.z < 5.0;
+      this.lower.f1Group.visible = showAtriumF1;
+      this.lower.f2Group.visible = false;
+      this.lower.f3Group.visible = false;
+      this.lower.f4Group.visible = false;
+      this.upper.f5Group.visible = false;
+      this.upper.f6Group.visible = false;
+      this.upper.f7Group.visible = false;
+      this.upper.f8Group.visible = false;
+    }
+
+    syncNexusArchitectureVisuals(this.arch, this.systems, delta, nearSouthEntrance);
+    if (nearNexus) {
+      updateNexusLowerFloorVisuals(this.lower, live, delta);
+      updateNexusUpperFloorVisuals(this.upper, this.systems, live, apartmentOrigin, delta);
+      this.screens.update(delta, this.systems, live);
+      this.staff.update(delta, playerRelToNexus);
     }
   }
 

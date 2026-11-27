@@ -16,6 +16,8 @@ import {
 } from './AurelionArchitecture';
 import {
   AurelionBasementHandles,
+  B2_FARM_BED_COORDS,
+  B2_WATER_PUMP_POS,
   buildAurelionBasements,
   updateAurelionBasementVisuals,
 } from './AurelionBasements';
@@ -31,6 +33,7 @@ import {
 import {
   AurelionCrownFloorHandles,
   buildAurelionCrownFloors,
+  setAurelionCinemaVideo,
   updateAurelionCrownVisuals,
 } from './AurelionCrownFloors';
 
@@ -40,6 +43,7 @@ export type AurelionInteractionResult = {
   prompt: string;
   elevatorId?: ElevatorId;
   hydroBedId?: number;
+  b2FarmBedId?: number;
   documentId?: string;
 };
 
@@ -90,29 +94,7 @@ export class AurelionCoordinator {
     weatherType: string,
     extraUsage: { tapsActive: number; showerActive: boolean; stoveOn: boolean; acOn: boolean; basementTvOn: boolean }
   ) {
-    this.systems.update(delta, gameTimeMinutes, weatherType, extraUsage);
-    syncAurelionElevatorsVisual(this.arch, this.systems);
-    syncAurelionHydroponicsVisual(this.upper, this.systems);
-    updateAurelionBasementVisuals(this.basements, this.systems, delta, extraUsage.basementTvOn);
-    updateAurelionCrownVisuals(this.crown, this.systems, delta);
-
-    // Sync Room Light Switches per floor + Tier Load Shedding
-    const t2 = this.systems.tier2StandardPowered;
-    const rl = this.systems.roomLights;
-    this.basements.b2Lights.forEach((l) => (l.intensity = rl.b2 && t2 ? 1.3 : 0.08));
-    this.basements.b1Lights.forEach((l) => (l.intensity = rl.b1 ? 1.25 : 0.12));
-    this.lower.f1Lights.forEach((l) => (l.intensity = rl.f1 && t2 ? 1.35 : 0.08));
-    this.lower.f2Lights.forEach((l) => (l.intensity = rl.f2 && t2 ? 1.25 : 0.08));
-    this.upper.f3Lights.forEach((l) => (l.intensity = rl.f3 ? 1.45 : 0.25)); // Tier 1 Critical Medical stays illuminated
-    this.upper.f4Lights.forEach((l) => (l.intensity = rl.f4 && t2 ? 1.3 : 0.08));
-    this.upper.f5Lights.forEach((l) => (l.intensity = rl.f5 && t2 ? 1.35 : 0.08));
-    this.crown.f6Lights.forEach((l) => (l.intensity = rl.f6 && this.systems.tier3LuxuryPowered ? 1.25 : 0.06));
-    this.crown.f7Lights.forEach((l) => (l.intensity = rl.f7 && this.systems.tier3LuxuryPowered ? 1.2 : 0.06));
-
-    // Gentle Chandelier Shimmer
-    this.arch.chandelierGroup.rotation.y += delta * 0.08;
-
-    // Camera-aware 9-Level Cutaway Visibility
+    // Camera-aware 9-Level Cutaway Visibility (determined BEFORE floor visual/texture updates)
     const isInside =
       Math.abs(playerRelPos.x) < 15.6 &&
       Math.abs(playerRelPos.z) < 12.8 &&
@@ -124,6 +106,7 @@ export class AurelionCoordinator {
       this.arch.northWallMesh.visible = !(cameraRelPos.z > playerRelPos.z + 0.5);
       this.arch.westWallMesh.visible = !(cameraRelPos.x < playerRelPos.x - 0.5);
       this.arch.eastWallMesh.visible = !(cameraRelPos.x > playerRelPos.x + 0.5);
+      this.arch.chandelierGroup.visible = true;
 
       const lvl = getLevelForLocalY(playerRelPos.y).id;
       this.basements.b2Group.visible = lvl === 'B2';
@@ -140,15 +123,53 @@ export class AurelionCoordinator {
       this.arch.northWallMesh.visible = true;
       this.arch.westWallMesh.visible = true;
       this.arch.eastWallMesh.visible = true;
-      this.basements.b2Group.visible = true;
-      this.basements.b1RingGroup.visible = true;
-      this.lower.f1Group.visible = true;
-      this.lower.f2Group.visible = true;
-      this.upper.f3Group.visible = true;
-      this.upper.f4Group.visible = true;
-      this.upper.f5Group.visible = true;
-      this.crown.f6Group.visible = true;
-      this.crown.f7Group.visible = true;
+
+      // Hide occluded enclosed interior floors when outside so interiors remain private
+      // and off-screen interior rooms/furniture do not burn GPU draw calls.
+      const nearGroundPortal =
+        Math.abs(playerRelPos.x) < 18.5 &&
+        Math.abs(playerRelPos.z) < 17.5 &&
+        playerRelPos.y >= -1.5 &&
+        playerRelPos.y <= 5.5;
+      const nearRooftopCam =
+        Math.abs(cameraRelPos.x) < 95 &&
+        Math.abs(cameraRelPos.z) < 95;
+      this.basements.b2Group.visible = false;
+      this.basements.b1RingGroup.visible = false;
+      this.lower.f1Group.visible = nearGroundPortal;
+      this.lower.f2Group.visible = false;
+      this.upper.f3Group.visible = false;
+      this.upper.f4Group.visible = false;
+      this.upper.f5Group.visible = false;
+      this.crown.f6Group.visible = false;
+      this.crown.f7Group.visible = nearRooftopCam; // Open-air rooftop Sky Palace stays visible when within compound view
+      this.arch.chandelierGroup.visible = nearGroundPortal;
+    }
+
+    this.systems.update(delta, gameTimeMinutes, weatherType, extraUsage);
+    syncAurelionElevatorsVisual(this.arch, this.systems);
+    if (this.upper.f5Group.visible) {
+      syncAurelionHydroponicsVisual(this.upper, this.systems);
+    }
+    updateAurelionBasementVisuals(this.basements, this.systems, delta, extraUsage.basementTvOn);
+    updateAurelionCrownVisuals(this.crown, this.systems, delta);
+
+    // Sync Room Light Switches per floor + Tier Load Shedding
+    const t2 = this.systems.tier2StandardPowered;
+    const rl = this.systems.roomLights;
+    this.basements.b2Lights.forEach((l) => (l.intensity = rl.b2 && t2 ? 1.3 : 0.08));
+    this.basements.b1Lights.forEach((l) => (l.intensity = rl.b1 ? 1.25 : 0.12));
+    this.lower.f1Lights.forEach((l) => (l.intensity = rl.f1 && t2 ? 1.35 : 0.08));
+    this.lower.f2Lights.forEach((l) => (l.intensity = rl.f2 && t2 ? 1.25 : 0.08));
+    this.upper.f3Lights.forEach((l) => (l.intensity = rl.f3 ? 1.45 : 0.25)); // Tier 1 Critical Medical stays illuminated
+    this.upper.f4Lights.forEach((l) => (l.intensity = rl.f4 && t2 ? 1.3 : 0.08));
+    this.upper.f5Lights.forEach((l) => (l.intensity = rl.f5 && t2 ? 1.35 : 0.08));
+    this.crown.f6Lights.forEach((l) => (l.intensity = rl.f6 && this.systems.tier3LuxuryPowered ? 1.25 : 0.06));
+    this.crown.f7Lights.forEach((l) => (l.intensity = rl.f7 && this.systems.tier3LuxuryPowered ? 1.2 : 0.06));
+
+    // Gentle Chandelier Shimmer (only when visible)
+    if (this.arch.chandelierGroup.visible) {
+      this.arch.chandelierGroup.rotation.y += delta * 0.08;
     }
   }
 
@@ -212,12 +233,39 @@ export class AurelionCoordinator {
           prompt: `[E] Open Estate Power & Load-Shedding Console (${this.systems.powerPriorityMode.toUpperCase()})`,
         };
       }
-      if (Math.hypot(relX - 2.5, relZ - 8.2) < 3.0) {
+      if (Math.hypot(relX - B2_WATER_PUMP_POS.x, relZ - (B2_WATER_PUMP_POS.z - 0.8)) < 2.2) {
+        const running = this.systems.waterPumpActive && this.systems.tier2StandardPowered;
+        return {
+          id: 'aurelionWaterPump',
+          label: 'B2 Centrifugal Booster Water Pump Station',
+          prompt: `[E] ${this.systems.waterPumpActive ? 'Stop' : 'Start'} Booster Water Pump (${running ? `${this.systems.waterPressureBar.toFixed(1)} BAR` : 'STANDBY'})`,
+        };
+      }
+      if (Math.hypot(relX - 3.0, relZ - 8.1) < 2.5) {
         return {
           id: 'aurelionWaterPurifier',
           label: 'B2 RO/UV Water Filtration Centre',
           prompt: `[E] Toggle Purifier (${this.systems.purifierActive ? 'ACTIVE' : 'PAUSED'}) & Fill Clean Water Canteen`,
         };
+      }
+      for (const bedCfg of B2_FARM_BED_COORDS) {
+        if (Math.hypot(relX - bedCfg.x, relZ - bedCfg.z) < 1.85) {
+          const bed = this.systems.b2FarmBeds[bedCfg.id];
+          if (bed) {
+            const actionText =
+              bed.stage === 0
+                ? `Plant ${bed.cropType.toUpperCase()} Seeds`
+                : bed.stage === 3
+                  ? `Harvest Ripe ${bed.cropType.toUpperCase()}`
+                  : `Growing (${Math.round(bed.growthProgress * 100)}%) — Check Irrigation`;
+            return {
+              id: 'aurelionB2FarmBed',
+              b2FarmBedId: bedCfg.id,
+              label: bed.label,
+              prompt: `[E] ${bed.label}: ${actionText}`,
+            };
+          }
+        }
       }
       if (Math.hypot(relX - 11.2, relZ - (-5.0)) < 3.4) {
         return {
@@ -412,8 +460,8 @@ export class AurelionCoordinator {
       if (Math.hypot(relX - 8.8, relZ - (-6.2)) < 3.2) {
         return {
           id: 'aurelionCinema',
-          label: 'Private 4K Screening Cinema',
-          prompt: `[E] ${this.systems.cinemaOn ? 'Power OFF' : 'Start'} 4K Cinema Screening`,
+          label: 'Android TV 4K Smart Cinema',
+          prompt: '[E] Open Android TV 4K Smart Cinema (YouTube · 3D Media · Channels)',
         };
       }
       if (Math.hypot(relX - 9.4, relZ - 0.0) < 2.8) {
@@ -475,7 +523,16 @@ export class AurelionCoordinator {
     return null;
   }
 
+  public setCinemaMedia(
+    videoEl: HTMLVideoElement | null,
+    appLabel = 'ANDROID TV OS',
+    title = 'YOUTUBE · MEDIA PROJECTOR · ESTATE TV'
+  ) {
+    setAurelionCinemaVideo(this.crown, videoEl, appLabel, title);
+  }
+
   public dispose() {
+    setAurelionCinemaVideo(this.crown, null);
     this.mats.dispose();
   }
 }

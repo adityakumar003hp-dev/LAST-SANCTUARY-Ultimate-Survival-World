@@ -1024,6 +1024,11 @@ export class ApartmentBuilding {
 
   public nexusLiveProvider?: () => NexusLiveContext;
 
+  private readonly _tmpPlayerRelNexus = new THREE.Vector3();
+  private readonly _tmpCamRelNexus = new THREE.Vector3();
+  private readonly _tmpPlayerRelAur = new THREE.Vector3();
+  private readonly _tmpCamRelAur = new THREE.Vector3();
+
   public update(
     delta: number,
     playerPos: THREE.Vector3 = this.origin,
@@ -1036,14 +1041,14 @@ export class ApartmentBuilding {
     this.objectAnimator.update(delta);
     for (const binding of this.apartmentObjectBindings.values()) binding.sync();
     this.turrets?.update(delta, zombieMgr || null, wildlifeMgr || null, playerPos);
-    this.basementRoom?.update(delta, aiTrainMgr || null);
+    this.basementRoom?.update(delta, aiTrainMgr || null, playerPos);
     if (this.nexus) {
-      const playerRelNexus = new THREE.Vector3(
+      const playerRelNexus = this._tmpPlayerRelNexus.set(
         playerPos.x - this.origin.x + 48,
         playerPos.y - this.origin.y,
         playerPos.z - this.origin.z - 24
       );
-      const camRelNexus = new THREE.Vector3(
+      const camRelNexus = this._tmpCamRelNexus.set(
         cameraPos.x - this.origin.x + 48,
         cameraPos.y - this.origin.y,
         cameraPos.z - this.origin.z - 24
@@ -1178,12 +1183,12 @@ export class ApartmentBuilding {
     }
 
     // 3. THE AURELION 9-Level Simulation, Elevators, Hydroponics & Camera-Aware Cutaway
-    const playerRelPos = new THREE.Vector3(
+    const playerRelPos = this._tmpPlayerRelAur.set(
       playerPos.x - this.origin.x,
       playerPos.y - this.origin.y,
       playerPos.z - this.origin.z
     );
-    const cameraRelPos = new THREE.Vector3(
+    const cameraRelPos = this._tmpCamRelAur.set(
       cameraPos.x - this.origin.x,
       cameraPos.y - this.origin.y,
       cameraPos.z - this.origin.z
@@ -1249,9 +1254,11 @@ export class ApartmentBuilding {
       | 'aurelionElevator'
       | 'aurelionGenerator'
       | 'aurelionRefuel'
+      | 'aurelionWaterPump'
       | 'aurelionWaterPurifier'
       | 'aurelionMaintenance'
       | 'aurelionHydroBed'
+      | 'aurelionB2FarmBed'
       | 'aurelionCinema'
       | 'aurelionGym'
       | 'aurelionRefreshment'
@@ -1272,6 +1279,7 @@ export class ApartmentBuilding {
     nexusFloor1Tab?: 'visitor' | 'staff' | 'directory' | 'building' | 'security';
     staffBriefing?: string;
     hydroBedId?: number;
+    b2FarmBedId?: number;
     documentId?: string;
   } | null {
     if (this.basementRoom) {

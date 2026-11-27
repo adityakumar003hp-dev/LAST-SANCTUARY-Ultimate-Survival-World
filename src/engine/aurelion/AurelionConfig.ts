@@ -216,6 +216,7 @@ export const AURELION_ROOMS: AurelionRoomDef[] = [
   { id: 'b2_maintenance_office', level: 'B2', code: 'B2-10', name: 'Building Maintenance Office', center: [11.2, -1.5] },
   { id: 'b2_hvac_room', level: 'B2', code: 'B2-11', name: 'Ventilation & Climate Control', center: [-2.0, 0.0] },
   { id: 'b2_service_lobby', level: 'B2', code: 'B2-12', name: 'Service Elevator Lobby', center: [9.4, 3.6] },
+  { id: 'b2_farm_bay', level: 'B2', code: 'B2-13', name: 'Subterranean Raised Farm Bay', center: [2.0, 3.85] },
 
   // B1 — Private Operations & Railway Level (12 rooms)
   { id: 'b1_railway_ops', level: 'B1', code: 'B1-01', name: 'Private Railway Operations Room', center: [0.0, 1.2] },

@@ -69,6 +69,7 @@ import { RailwayTicket } from './types/game';
 import { MedicalClinicModal } from './components/MedicalClinicModal';
 import { ApartmentStatusModal } from './components/ApartmentStatusModal';
 import { AurelionElevatorModal, AurelionDocumentModal } from './components/AurelionModals';
+import { AurelionCinemaModal } from './components/AurelionCinemaModal';
 import type { AurelionDashboardSnapshot, ElevatorId } from './engine/aurelion/AurelionSystems';
 import { NexusElevatorModal } from './components/nexus/NexusElevatorModal';
 import { NexusFloor1Modal, type NexusFloor1Tab } from './components/nexus/NexusFloor1Modal';
@@ -243,6 +244,11 @@ export default function App() {
   const [isApartmentStatusOpen, setIsApartmentStatusOpen] = useState(false);
   const [activeElevatorModal, setActiveElevatorModal] = useState<ElevatorId | null>(null);
   const [activeAurelionDocId, setActiveAurelionDocId] = useState<string | null>(null);
+  const [isAurelionCinemaOpen, setIsAurelionCinemaOpen] = useState(false);
+  const [cinemaVideoTitle, setCinemaVideoTitle] = useState<string | null>(null);
+  const [isCinemaWallProjected, setIsCinemaWallProjected] = useState(false);
+  const cinemaVideoRef = useRef<HTMLVideoElement | null>(null);
+  const cinemaObjectUrlRef = useRef<string | null>(null);
   const [aurelionLocation, setAurelionLocation] = useState<{ level: string; roomName: string } | null>(null);
   const [aurelionSnapshot, setAurelionSnapshot] = useState<AurelionDashboardSnapshot | null>(null);
   const [nexusElevatorModal, setNexusElevatorModal] = useState<NexusElevatorId | null>(null);
@@ -760,6 +766,10 @@ export default function App() {
           setActiveElevatorModal(elevatorId);
         },
         onOpenAurelionDocument: (docId: string) => setActiveAurelionDocId(docId),
+        onOpenAurelionCinema: () => {
+          setAurelionSnapshot(engineRef.current?.getAurelionSnapshot() ?? null);
+          setIsAurelionCinemaOpen(true);
+        },
         onAurelionLocationChange: (loc: { level: string; roomName: string } | null) => setAurelionLocation(loc),
         onOpenNexusElevator: (elevatorId: NexusElevatorId) => {
           setNexusSnapshot(engineRef.current?.getNexusSnapshot() ?? null);
@@ -1103,14 +1113,14 @@ export default function App() {
   }, [hotbar, inventory]);
 
   useEffect(() => {
-    if (!isApartmentStatusOpen && !activeElevatorModal) return;
+    if (!isApartmentStatusOpen && !activeElevatorModal && !isAurelionCinemaOpen) return;
     const timer = window.setInterval(() => {
       if (engineRef.current) {
         setAurelionSnapshot(engineRef.current.getAurelionSnapshot());
       }
     }, 400);
     return () => window.clearInterval(timer);
-  }, [isApartmentStatusOpen, activeElevatorModal]);
+  }, [isApartmentStatusOpen, activeElevatorModal, isAurelionCinemaOpen]);
 
   useEffect(() => {
     if (!nexusElevatorModal && !nexusFloor1Tab && !nexusDepartmentState) return;
@@ -1160,6 +1170,7 @@ export default function App() {
     isApartmentStatusOpen ||
     !!activeElevatorModal ||
     !!activeAurelionDocId ||
+    isAurelionCinemaOpen ||
     !!nexusElevatorModal ||
     !!nexusFloor1Tab ||
     !!nexusDepartmentState ||
@@ -1433,6 +1444,7 @@ export default function App() {
           isApartmentStatusOpen ||
           !!activeElevatorModal ||
           !!activeAurelionDocId ||
+          isAurelionCinemaOpen ||
           !!nexusElevatorModal ||
           !!nexusFloor1Tab ||
           !!nexusDepartmentState ||
@@ -1466,6 +1478,7 @@ export default function App() {
           setIsApartmentStatusOpen(false);
           setActiveElevatorModal(null);
           setActiveAurelionDocId(null);
+          setIsAurelionCinemaOpen(false);
           setNexusElevatorModal(null);
           setNexusFloor1Tab(null);
           setNexusDepartmentState(null);
@@ -1609,6 +1622,7 @@ export default function App() {
     isRailwayTicketsOpen,
     isMedicalClinicOpen,
     isApartmentStatusOpen,
+    isAurelionCinemaOpen,
     isSecurityCommandCenterOpen,
     isRailwayNetworkMapOpen,
     isBaseDashboardOpen,
@@ -3082,6 +3096,84 @@ export default function App() {
           <AurelionDocumentModal
             doc={activeAurelionDocId ? engineRef.current?.getAurelionDocument(activeAurelionDocId) ?? null : null}
             onClose={() => setActiveAurelionDocId(null)}
+          />
+
+          <video
+            ref={cinemaVideoRef}
+            playsInline
+            loop
+            crossOrigin="anonymous"
+            className="hidden"
+          />
+
+          <AurelionCinemaModal
+            isOpen={isAurelionCinemaOpen}
+            snapshot={aurelionSnapshot ?? engineRef.current?.getAurelionSnapshot() ?? null}
+            videoRef={cinemaVideoRef}
+            activeVideoTitle={cinemaVideoTitle}
+            isWallProjected={isCinemaWallProjected}
+            onToggleCinemaPower={() => {
+              const eng = engineRef.current;
+              const sys = eng?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (!eng || !sys) return;
+              sys.cinemaOn = !sys.cinemaOn;
+              soundEngine.playSwitchClick();
+              setAurelionSnapshot(eng.getAurelionSnapshot());
+            }}
+            onSyncWallLabel={(appLabel, title) => {
+              const vid = isCinemaWallProjected ? cinemaVideoRef.current : null;
+              engineRef.current?.setAurelionCinemaMedia(vid, appLabel, title);
+            }}
+            onLoadLocalOrUrlVideo={(src, title, projectTo3DWall) => {
+              const vid = cinemaVideoRef.current;
+              if (!vid) return;
+              if (cinemaObjectUrlRef.current && cinemaObjectUrlRef.current !== src) {
+                URL.revokeObjectURL(cinemaObjectUrlRef.current);
+                cinemaObjectUrlRef.current = null;
+              }
+              if (src.startsWith('blob:')) {
+                cinemaObjectUrlRef.current = src;
+              }
+              vid.src = src;
+              vid.load();
+              vid.play().catch(() => {});
+              setCinemaVideoTitle(title);
+              setIsCinemaWallProjected(projectTo3DWall);
+              const sys = engineRef.current?.prologueManager.townMgr.apartmentBuilding.aurelion?.systems;
+              if (sys && !sys.cinemaOn) {
+                sys.cinemaOn = true;
+                setAurelionSnapshot(engineRef.current?.getAurelionSnapshot() ?? null);
+              }
+              engineRef.current?.setAurelionCinemaMedia(
+                projectTo3DWall ? vid : null,
+                '3D WALL PROJECTOR',
+                title
+              );
+            }}
+            onToggleWallProjection={(projectTo3DWall) => {
+              setIsCinemaWallProjected(projectTo3DWall);
+              engineRef.current?.setAurelionCinemaMedia(
+                projectTo3DWall ? cinemaVideoRef.current : null,
+                '3D WALL PROJECTOR',
+                cinemaVideoTitle || 'LOCAL VIDEO'
+              );
+            }}
+            onStopWallVideo={() => {
+              const vid = cinemaVideoRef.current;
+              if (vid) {
+                vid.pause();
+                vid.removeAttribute('src');
+                vid.load();
+              }
+              if (cinemaObjectUrlRef.current) {
+                URL.revokeObjectURL(cinemaObjectUrlRef.current);
+                cinemaObjectUrlRef.current = null;
+              }
+              setCinemaVideoTitle(null);
+              setIsCinemaWallProjected(false);
+              engineRef.current?.setAurelionCinemaMedia(null, 'ANDROID TV OS', 'HOME LAUNCHER · 4K SMART CINEMA');
+            }}
+            onClose={() => setIsAurelionCinemaOpen(false)}
           />
 
           <NexusElevatorModal

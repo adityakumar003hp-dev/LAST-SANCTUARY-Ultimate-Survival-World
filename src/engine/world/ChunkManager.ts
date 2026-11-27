@@ -41,6 +41,7 @@ export class ChunkManager {
   private lastOsmPrefetchKey: string = '';
   private pendingOsmRefreshKeys: Set<string> = new Set();
   private unsubscribeOsm: (() => void) | null = null;
+  public topologyVersion: number = 0;
 
   constructor(
     scene: THREE.Scene,
@@ -102,6 +103,7 @@ export class ChunkManager {
     this.prefetchedKeys.clear();
     this.pendingOsmRefreshKeys.clear();
     this.lastCheckedPos.set(-99999, -99999, -99999);
+    this.topologyVersion++;
   }
 
   /**
@@ -131,6 +133,9 @@ export class ChunkManager {
     if (this.prefetchedKeys.size > 32) {
       this.prefetchedKeys.clear();
     }
+    if (toRemove.length > 0) {
+      this.topologyVersion++;
+    }
     this.lastCheckedPos.set(-99999, -99999, -99999);
     return toRemove.length;
   }
@@ -148,7 +153,7 @@ export class ChunkManager {
       const [centerX, centerZ] = WorldCoordinates.chunkToWorldCenter(chunk.data.coord.cx, chunk.data.coord.cz);
       const distSq = (centerX - playerPos.x) ** 2 + (centerZ - playerPos.z) ** 2;
 
-      if (distSq < 190 * 190) {
+      if (distSq < 36 * 36) {
         chunk.group.visible = true;
       } else {
         ChunkManager._chunkMin.set(minX - 12, chunk.data.minElevation - 25, minZ - 12);
@@ -159,9 +164,13 @@ export class ChunkManager {
 
       if (chunk.group.visible) {
         const showDetailedProps = distSq <= propCullDistSq;
-        chunk.resourceMeshes.forEach((m) => {
-          m.visible = showDetailedProps;
-        });
+        const cAny = chunk as any;
+        if (cAny.__lastPropsVisible !== showDetailedProps) {
+          cAny.__lastPropsVisible = showDetailedProps;
+          chunk.resourceMeshes.forEach((m) => {
+            m.visible = showDetailedProps;
+          });
+        }
       }
     });
   }
@@ -229,6 +238,7 @@ export class ChunkManager {
         this.scene.remove(chunk.group);
         chunk.dispose();
         this.activeChunks.delete(key);
+        this.topologyVersion++;
       }
     }
 
@@ -274,6 +284,7 @@ export class ChunkManager {
 
       this.scene.add(generated.group);
       this.activeChunks.set(key, generated);
+      this.topologyVersion++;
       this.persistence.markChunkDiscovered(coord.cx, coord.cz);
     }
 

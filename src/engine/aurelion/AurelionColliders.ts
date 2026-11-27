@@ -8,6 +8,7 @@ import {
   AURELION_STAIR_VOID,
   AurelionLevelId,
 } from './AurelionConfig';
+import { B2_FARM_BED_COORDS, B2_WATER_PUMP_POS } from './AurelionBasements';
 import { ElevatorId } from './AurelionSystems';
 
 export function registerAurelionStructure1Colliders(
@@ -133,11 +134,15 @@ export function registerAurelionStructure1Colliders(
 
   // 6. B2 Infrastructure Equipment Colliders
   const b2Y = AURELION_LEVELS.B2.floorY;
-  physMgr.registerBoxCollider('aur_b2_genset_w', 'prop', [ox - 12.6, b2Y + 0.9, oz - 7.2], 1.8, 1.8, 3.6);
-  physMgr.registerBoxCollider('aur_b2_genset_e', 'prop', [ox - 9.4, b2Y + 0.9, oz - 7.2], 1.8, 1.8, 3.6);
-  physMgr.registerBoxCollider('aur_b2_water_ro', 'prop', [ox + 2.5, b2Y + 0.8, oz + 8.6], 3.4, 1.6, 1.35);
-  physMgr.registerCylinderCollider('aur_b2_cistern_1', 'prop', [ox - 5.4, b2Y, oz + 8.8], 1.2, 2.7);
-  physMgr.registerCylinderCollider('aur_b2_cistern_2', 'prop', [ox - 2.6, b2Y, oz + 8.8], 1.2, 2.7);
+  physMgr.registerBoxCollider('aur_b2_genset_w', 'prop', [ox - 12.6, b2Y + 0.9, oz - 7.2], 1.9, 1.85, 3.7);
+  physMgr.registerBoxCollider('aur_b2_genset_e', 'prop', [ox - 9.4, b2Y + 0.9, oz - 7.2], 1.9, 1.85, 3.7);
+  physMgr.registerBoxCollider('aur_b2_water_pump', 'prop', [ox + B2_WATER_PUMP_POS.x - 0.2, b2Y + 0.75, oz + B2_WATER_PUMP_POS.z + 0.1], 2.35, 1.5, 1.65);
+  physMgr.registerBoxCollider('aur_b2_water_ro', 'prop', [ox + 3.0, b2Y + 0.9, oz + 8.8], 3.25, 1.8, 1.4);
+  physMgr.registerCylinderCollider('aur_b2_cistern_1', 'prop', [ox - 5.4, b2Y, oz + 9.0], 1.2, 2.75);
+  physMgr.registerCylinderCollider('aur_b2_cistern_2', 'prop', [ox - 2.6, b2Y, oz + 9.0], 1.2, 2.75);
+  for (const bedCfg of B2_FARM_BED_COORDS) {
+    physMgr.registerBoxCollider(`aur_b2_farm_${bedCfg.id}`, 'prop', [ox + bedCfg.x, b2Y + 0.45, oz + bedCfg.z], 2.24, 0.9, 1.18);
+  }
 
   // 7. F2, F3, F4, F5, F6, F7 Key Solid Equipment Colliders
   const f2Y = AURELION_LEVELS.F2.floorY;

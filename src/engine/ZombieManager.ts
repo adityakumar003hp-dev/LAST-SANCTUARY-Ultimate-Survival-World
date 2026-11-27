@@ -12,6 +12,7 @@ import { buildRealisticZombie } from './rendering/RealisticHumanoidBuilder';
 export class ZombieManager {
   private static readonly _tmpCur = new THREE.Vector3();
   private static readonly _tmpDes = new THREE.Vector3();
+  private static readonly _cullSphere = new THREE.Sphere();
 
   public scene: THREE.Scene;
   public zombies: ZombieEntity[] = [];
@@ -332,8 +333,8 @@ export class ZombieManager {
       const dx = targetX - z.position[0];
       const dz = targetZ - z.position[2];
 
-      // Multi-joint undead gait, stagger & attack lunge kinematics (within 75m)
-      if (distSqToPlayer < 75 * 75) {
+      // Multi-joint undead gait, stagger & attack lunge kinematics (within 75m and visible)
+      if (mesh.visible && distSqToPlayer < 75 * 75) {
         const phaseOffset = this.animPhaseMap.get(z.id) ?? 0;
         const isFast = z.type === 'runner' || z.type === 'stalker';
         const isHeavy = z.type === 'brute' || z.type === 'juggernaut' || z.type === 'alpha_boss';
@@ -382,20 +383,38 @@ export class ZombieManager {
         mesh.rotation.z = z.state === 'idle' ? Math.sin(walkPhase * 0.5) * 0.04 : walkCycle * (isHeavy ? 0.09 : 0.055);
       }
 
-      // Check for defensive spikes collision (squared distance check: 1.8^2 = 3.24)
-      for (const struct of buildingMgr.structures) {
-        if (struct.typeId === 'defense_spikes') {
-          const sDistSq = (struct.position[0] - z.position[0]) ** 2 + (struct.position[2] - z.position[2]) ** 2;
-          if (sDistSq < 3.24) {
-            this.damageZombie(z.id, 25 * delta, 0);
-          }
-        }
-      }
-
       // State handling (using stealth-scaled squared threshold)
       const effectiveDetect = z.detectionRadius * detectionMultiplier;
       const detectSq = effectiveDetect * effectiveDetect;
-      if (distSqToPlayer < detectSq || z.state === 'chase') {
+      const shouldChase = distSqToPlayer < detectSq || z.state === 'chase';
+
+      // Single pass over player-built structures for defense spikes & blocking obstacles
+      let nearestStructure: string | null = null;
+      const minStructDistSq = 5.76;
+      const structs = buildingMgr.structures;
+      for (let sIdx = 0; sIdx < structs.length; sIdx++) {
+        const s = structs[sIdx];
+        const sdx = s.position[0] - z.position[0];
+        const sdz = s.position[2] - z.position[2];
+        const sDistSq = sdx * sdx + sdz * sdz;
+        if (s.typeId === 'defense_spikes' && sDistSq < 3.24) {
+          this.damageZombie(z.id, 25 * delta, 0);
+        }
+        if (
+          shouldChase &&
+          !nearestStructure &&
+          !s.isOpen &&
+          s.typeId !== 'wooden_foundation' &&
+          s.typeId !== 'perimeter_torch' &&
+          s.typeId !== 'modern_lamp' &&
+          s.typeId !== 'landmine_trap' &&
+          sDistSq < minStructDistSq
+        ) {
+          nearestStructure = s.uid;
+        }
+      }
+
+      if (shouldChase) {
         z.state = 'chase';
 
         // Spitter ranged acid attack at 6m - 18m range
@@ -403,22 +422,6 @@ export class ZombieManager {
           z.rangedCooldown = 3.4;
           z.rotationY = Math.atan2(dx, dz);
           onSpitterAcid(new THREE.Vector3(z.position[0], z.position[1], z.position[2]), new THREE.Vector3(targetX, getTerrainHeight(targetX, targetZ) + 1.1, targetZ), z.damage);
-        }
-
-        // Check if an obstacle/structure is directly between zombie and player (squared check: 2.4^2 = 5.76)
-        let nearestStructure: string | null = null;
-        const minStructDistSq = 5.76;
-
-        for (const s of buildingMgr.structures) {
-          if (s.isOpen) continue; // Can walk through open doors and gates
-          if (s.typeId === 'wooden_foundation' || s.typeId === 'perimeter_torch' || s.typeId === 'modern_lamp' || s.typeId === 'landmine_trap') continue;
-          const sdx = s.position[0] - z.position[0];
-          const sdz = s.position[2] - z.position[2];
-          const sDistSq = sdx * sdx + sdz * sdz;
-          if (sDistSq < minStructDistSq) {
-            nearestStructure = s.uid;
-            break;
-          }
         }
 
         if (nearestStructure) {
@@ -485,6 +488,26 @@ export class ZombieManager {
         physMgr.unregisterCollider(id);
       }
     });
+  }
+
+  public updateFrustumCulling(frustum: THREE.Frustum, camPos: THREE.Vector3) {
+    for (let i = 0; i < this.zombies.length; i++) {
+      const z = this.zombies[i];
+      const mesh = this.zombieMeshes.get(z.id);
+      if (!mesh) continue;
+      const dx = z.position[0] - camPos.x;
+      const dz = z.position[2] - camPos.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < 16 * 16) {
+        mesh.visible = true;
+      } else if (distSq > 165 * 165) {
+        mesh.visible = false;
+      } else {
+        ZombieManager._cullSphere.center.set(z.position[0], z.position[1] + 1.0, z.position[2]);
+        ZombieManager._cullSphere.radius = z.type === 'alpha_boss' ? 2.6 : 1.8;
+        mesh.visible = frustum.intersectsSphere(ZombieManager._cullSphere);
+      }
+    }
   }
 
   public damageZombie(

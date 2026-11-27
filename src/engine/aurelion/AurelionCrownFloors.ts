@@ -24,6 +24,12 @@ export interface AurelionCrownFloorHandles {
   f7Group: THREE.Group;
   cinemaScreenCtx: CanvasRenderingContext2D | null;
   cinemaScreenTex: THREE.CanvasTexture;
+  cinemaScreenMesh: THREE.Mesh;
+  cinemaCanvasMat: THREE.MeshBasicMaterial;
+  cinemaVideoTex: THREE.VideoTexture | null;
+  cinemaVideoMat: THREE.MeshBasicMaterial | null;
+  cinemaAppLabel: string;
+  cinemaTitle: string;
   aquariumFish: AquariumFish[];
   f6PoolWaterMesh: THREE.Mesh;
   f7PoolWaterMesh: THREE.Mesh;
@@ -32,6 +38,8 @@ export interface AurelionCrownFloorHandles {
   solarMonitorTex: THREE.CanvasTexture;
   f6Lights: THREE.PointLight[];
   f7Lights: THREE.PointLight[];
+  cinemaTimer?: number;
+  solarTimer?: number;
 }
 
 export function buildAurelionCrownFloors(
@@ -62,7 +70,7 @@ export function buildAurelionCrownFloors(
     f6Group.add(plaque);
   });
 
-  // 1. Private 4K Screening Cinema (8.8, -6.2)
+  // 1. Private 4K Screening Cinema (8.8, -6.2) — Android TV OS + VideoTexture Wall Projector
   const cinemaScreenCanvas = document.createElement('canvas');
   cinemaScreenCanvas.width = 512;
   cinemaScreenCanvas.height = 288;
@@ -343,6 +351,12 @@ export function buildAurelionCrownFloors(
     f7Group,
     cinemaScreenCtx,
     cinemaScreenTex,
+    cinemaScreenMesh: cScreen,
+    cinemaCanvasMat: cinemaMat,
+    cinemaVideoTex: null,
+    cinemaVideoMat: null,
+    cinemaAppLabel: 'ANDROID TV OS',
+    cinemaTitle: 'YOUTUBE · MEDIA PROJECTOR · ESTATE TV',
     aquariumFish,
     f6PoolWaterMesh,
     f7PoolWaterMesh,
@@ -354,67 +368,157 @@ export function buildAurelionCrownFloors(
   };
 }
 
+export function setAurelionCinemaVideo(
+  handles: AurelionCrownFloorHandles,
+  videoEl: HTMLVideoElement | null,
+  appLabel = 'ANDROID TV OS',
+  title = 'YOUTUBE · MEDIA PROJECTOR · ESTATE TV'
+) {
+  handles.cinemaAppLabel = appLabel;
+  handles.cinemaTitle = title;
+
+  if (handles.cinemaVideoTex) {
+    handles.cinemaVideoTex.dispose();
+    handles.cinemaVideoTex = null;
+  }
+  if (handles.cinemaVideoMat) {
+    handles.cinemaVideoMat.dispose();
+    handles.cinemaVideoMat = null;
+  }
+
+  if (videoEl) {
+    const vTex = new THREE.VideoTexture(videoEl);
+    vTex.colorSpace = THREE.SRGBColorSpace;
+    vTex.minFilter = THREE.LinearFilter;
+    vTex.magFilter = THREE.LinearFilter;
+    const vMat = new THREE.MeshBasicMaterial({ map: vTex });
+    handles.cinemaVideoTex = vTex;
+    handles.cinemaVideoMat = vMat;
+    handles.cinemaScreenMesh.material = vMat;
+  } else {
+    handles.cinemaScreenMesh.material = handles.cinemaCanvasMat;
+  }
+}
+
 export function updateAurelionCrownVisuals(
   handles: AurelionCrownFloorHandles,
   systems: AurelionMansionSystems,
   delta: number
 ) {
   const t = performance.now() * 0.0015;
-  // Animate Floor 6 Aquarium Fish smoothly inside glass tank
-  handles.aquariumFish.forEach((f) => {
-    const phase = t * f.speed + f.phase;
-    f.mesh.position.x = f.baseX + Math.sin(phase) * f.ampX;
-    f.mesh.position.y = f.baseY + Math.sin(phase * 1.4) * 0.14;
-    f.mesh.rotation.y = Math.cos(phase) >= 0 ? 0 : Math.PI;
-  });
+  const f6Visible = handles.f6Group.visible;
+  const f7Visible = handles.f7Group.visible;
 
-  // Animate Pool Water Ripples
-  handles.f6PoolWaterMesh.position.y = AURELION_F6_INDOOR_POOL.waterSurfaceY + Math.sin(t * 1.8) * 0.015;
-  handles.f7PoolWaterMesh.position.y = AURELION_ROOFTOP_INFINITY_POOL.waterSurfaceY + Math.sin(t * 2.1) * 0.02;
+  if (f6Visible) {
+    // Animate Floor 6 Aquarium Fish smoothly inside glass tank
+    handles.aquariumFish.forEach((f) => {
+      const phase = t * f.speed + f.phase;
+      f.mesh.position.x = f.baseX + Math.sin(phase) * f.ampX;
+      f.mesh.position.y = f.baseY + Math.sin(phase * 1.4) * 0.14;
+      f.mesh.rotation.y = Math.cos(phase) >= 0 ? 0 : Math.PI;
+    });
 
-  // Spin F7 Weather Station Anemometer
-  handles.anemometerSpinGroup.rotation.y += delta * 3.8;
+    // Animate F6 Pool Water Ripples
+    handles.f6PoolWaterMesh.position.y = AURELION_F6_INDOOR_POOL.waterSurfaceY + Math.sin(t * 1.8) * 0.015;
 
-  // Update Cinema 4K Screen
-  if (handles.cinemaScreenCtx) {
-    const ctx = handles.cinemaScreenCtx;
+    // Update Cinema 4K Android TV Screen (Canvas OS or live VideoTexture)
     const isOn = systems.cinemaOn && systems.tier3LuxuryPowered;
-    if (!isOn) {
-      ctx.fillStyle = '#07090e';
-      ctx.fillRect(0, 0, 512, 288);
-      ctx.fillStyle = '#64748b';
-      ctx.font = 'bold 20px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText('AURELION PRIVATE CINEMA · STANDBY', 256, 148);
+    if (isOn && handles.cinemaVideoMat && handles.cinemaVideoTex) {
+      if (handles.cinemaScreenMesh.material !== handles.cinemaVideoMat) {
+        handles.cinemaScreenMesh.material = handles.cinemaVideoMat;
+      }
+      handles.cinemaVideoTex.needsUpdate = true;
     } else {
-      ctx.fillStyle = '#0f172a';
-      ctx.fillRect(0, 0, 512, 288);
-      ctx.fillStyle = '#d4b26a';
-      ctx.font = 'bold 26px serif';
-      ctx.textAlign = 'center';
-      ctx.fillText('SANCTUARY HERITAGE ARCHIVE', 256, 110);
-      ctx.fillStyle = '#38bdf8';
-      ctx.font = '16px monospace';
-      ctx.fillText('4K DOLBY VISION · LIVE ESTATE TELEMETRY OVERLAY', 256, 165);
+      if (handles.cinemaScreenMesh.material !== handles.cinemaCanvasMat) {
+        handles.cinemaScreenMesh.material = handles.cinemaCanvasMat;
+      }
+      handles.cinemaTimer = (handles.cinemaTimer ?? 0.25) + delta;
+      if (handles.cinemaScreenCtx && handles.cinemaTimer >= 0.16) {
+        handles.cinemaTimer = 0;
+        const ctx = handles.cinemaScreenCtx;
+        if (!isOn) {
+          ctx.fillStyle = '#07090e';
+          ctx.fillRect(0, 0, 512, 288);
+          ctx.fillStyle = '#64748b';
+          ctx.font = 'bold 18px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText(
+            systems.tier3LuxuryPowered
+              ? 'AURELION ANDROID TV · STANDBY [E]'
+              : 'TIER 3 POWER SHED · START B2 GENERATOR',
+            256,
+            148
+          );
+        } else {
+          const grad = ctx.createLinearGradient(0, 0, 512, 288);
+          grad.addColorStop(0, '#090d1a');
+          grad.addColorStop(1, '#171128');
+          ctx.fillStyle = grad;
+          ctx.fillRect(0, 0, 512, 288);
+
+          // Top Android TV status bar
+          ctx.fillStyle = 'rgba(255,255,255,0.06)';
+          ctx.fillRect(0, 0, 512, 42);
+          ctx.textAlign = 'left';
+          ctx.fillStyle = '#38bdf8';
+          ctx.font = 'bold 15px monospace';
+          ctx.fillText(`● ${handles.cinemaAppLabel}`, 18, 26);
+          ctx.textAlign = 'right';
+          ctx.fillStyle = '#e2e8f0';
+          ctx.fillText('4K HDR · 1.4 kW', 494, 26);
+
+          // Center Now Playing card
+          ctx.textAlign = 'center';
+          ctx.fillStyle = '#d4b26a';
+          ctx.font = 'bold 22px sans-serif';
+          ctx.fillText('THE AURELION SMART CINEMA', 256, 112);
+
+          ctx.fillStyle = '#ffffff';
+          ctx.font = 'bold 17px monospace';
+          ctx.fillText(handles.cinemaTitle.slice(0, 42), 256, 152);
+
+          // Animated audio equalizer bars
+          for (let b = 0; b < 14; b++) {
+            const bh = 8 + Math.abs(Math.sin(t * 4.5 + b * 0.65)) * 28;
+            ctx.fillStyle = b % 2 === 0 ? '#38bdf8' : '#f43f5e';
+            ctx.fillRect(148 + b * 16, 224 - bh, 10, bh);
+          }
+
+          ctx.fillStyle = '#94a3b8';
+          ctx.font = '13px monospace';
+          ctx.fillText('PRESS [E] TO OPEN YOUTUBE, MEDIA & CHANNELS', 256, 262);
+        }
+        handles.cinemaScreenTex.needsUpdate = true;
+      }
     }
-    handles.cinemaScreenTex.needsUpdate = true;
+  } else {
+    handles.cinemaTimer = 0.25;
   }
 
-  // Update F7 Solar Monitor Kiosk
-  if (handles.solarMonitorCtx) {
-    const ctx = handles.solarMonitorCtx;
-    ctx.fillStyle = '#07111e';
-    ctx.fillRect(0, 0, 512, 256);
-    ctx.fillStyle = '#f59e0b';
-    ctx.font = 'bold 22px monospace';
-    ctx.fillText('F7 SOLAR ARRAY TELEMETRY', 20, 42);
-    ctx.fillStyle = '#4ade80';
-    ctx.font = 'bold 34px monospace';
-    ctx.fillText(`+${systems.solarKw.toFixed(2)} kW`, 20, 105);
-    ctx.fillStyle = '#e2e8f0';
-    ctx.font = '18px monospace';
-    ctx.fillText(`BATTERY: ${systems.batteryKwh.toFixed(1)}/${systems.batteryCapacityKwh} kWh`, 20, 162);
-    ctx.fillText(`PRIORITY: ${systems.powerPriorityMode.toUpperCase()}`, 20, 202);
-    handles.solarMonitorTex.needsUpdate = true;
+  if (f7Visible) {
+    handles.f7PoolWaterMesh.position.y = AURELION_ROOFTOP_INFINITY_POOL.waterSurfaceY + Math.sin(t * 2.1) * 0.02;
+    handles.anemometerSpinGroup.rotation.y += delta * 3.8;
+
+    // Update F7 Solar Monitor Kiosk (throttled to ~2 Hz)
+    handles.solarTimer = (handles.solarTimer ?? 0.6) + delta;
+    if (handles.solarMonitorCtx && handles.solarTimer >= 0.5) {
+      handles.solarTimer = 0;
+      const ctx = handles.solarMonitorCtx;
+      ctx.fillStyle = '#07111e';
+      ctx.fillRect(0, 0, 512, 256);
+      ctx.fillStyle = '#f59e0b';
+      ctx.font = 'bold 22px monospace';
+      ctx.fillText('F7 SOLAR ARRAY TELEMETRY', 20, 42);
+      ctx.fillStyle = '#4ade80';
+      ctx.font = 'bold 34px monospace';
+      ctx.fillText(`+${systems.solarKw.toFixed(2)} kW`, 20, 105);
+      ctx.fillStyle = '#e2e8f0';
+      ctx.font = '18px monospace';
+      ctx.fillText(`BATTERY: ${systems.batteryKwh.toFixed(1)}/${systems.batteryCapacityKwh} kWh`, 20, 162);
+      ctx.fillText(`PRIORITY: ${systems.powerPriorityMode.toUpperCase()}`, 20, 202);
+      handles.solarMonitorTex.needsUpdate = true;
+    }
+  } else {
+    handles.solarTimer = 0.6;
   }
 }

@@ -335,6 +335,10 @@ export interface GraphicsManagerConfig {
   shadowResolution: 0 | 512 | 1024 | 2048 | 3072;
   postProcessingEnabled: boolean;
   bloomEnabled: boolean;
+  motionBlurEnabled: boolean;
+  motionBlurIntensity: number; // 0.25..1.5
+  dynamicResolutionEnabled: boolean;
+  dynamicResolutionMinScale: number; // 0.60..0.90
   anisotropyLevel: 1 | 4 | 8 | 16;
   viewDistanceChunks: number;
   particleDensity: number; // 0.25..1.0
@@ -352,10 +356,19 @@ export interface GraphicsManagerSnapshot {
   watchdogDprFactor: number;
   renderWidth: number;
   renderHeight: number;
+  internalRenderWidth: number;
+  internalRenderHeight: number;
   shadowMapRes: number;
   shadowsEnabled: boolean;
   postProcessingEnabled: boolean;
   bloomEnabled: boolean;
+  motionBlurEnabled: boolean;
+  motionBlurIntensity: number;
+  dynamicResolutionEnabled: boolean;
+  dynamicResolutionMinScale: number;
+  dynamicResolutionScale: number;
+  combatActionActive: boolean;
+  upscalingActive: boolean;
   anisotropy: number;
   viewDistanceChunks: number;
   effectiveViewDistanceChunks: number;

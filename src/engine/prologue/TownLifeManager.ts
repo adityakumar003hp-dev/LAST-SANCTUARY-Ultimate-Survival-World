@@ -16,6 +16,9 @@ import {
 } from '../../utils/proceduralTextures';
 
 export class TownLifeManager {
+  private static readonly _cullSphere = new THREE.Sphere();
+  private static readonly _worldPos = new THREE.Vector3();
+
   public scene: THREE.Scene;
   public group: THREE.Group;
   public citizens: TownCitizen[] = [];
@@ -25,6 +28,7 @@ export class TownLifeManager {
   public apartmentBuilding: ApartmentBuilding;
   private fountainWaterMat: THREE.MeshStandardMaterial | null = null;
   private walkTime: number = 0;
+  private cullables: Array<{ obj: THREE.Object3D; radius: number }> = [];
 
   // Shared Materials
   private roadMat: THREE.MeshStandardMaterial;
@@ -232,9 +236,9 @@ export class TownLifeManager {
       this.sidewalkMat
     );
     fountainBase.position.set(20, 0.4, 18);
-    const fountainRipple = getWaterRippleNormalMap().clone();
-    fountainRipple.needsUpdate = true;
-    fountainRipple.repeat.set(3, 3);
+    const fountainRipple = getWaterRippleNormalMap();
+    fountainRipple.wrapS = THREE.RepeatWrapping;
+    fountainRipple.wrapT = THREE.RepeatWrapping;
     this.fountainWaterMat = new THREE.MeshStandardMaterial({
       color: 0x1f82b0,
       normalMap: fountainRipple,
@@ -337,6 +341,21 @@ export class TownLifeManager {
     const playground = this.createPlayground();
     playground.position.set(38, 0, 34);
     this.group.add(playground);
+
+    this.cullables.push(
+      { obj: grocery, radius: 10 },
+      { obj: cafe, radius: 9 },
+      { obj: hospital, radius: 13 },
+      { obj: police, radius: 11 },
+      { obj: fireStation, radius: 11 },
+      { obj: school, radius: 14 },
+      { obj: cottage1, radius: 7 },
+      { obj: cottage2, radius: 7 },
+      { obj: cottage3, radius: 7 },
+      { obj: gasStation, radius: 11 },
+      { obj: townHall, radius: 12 },
+      { obj: playground, radius: 10 },
+    );
   }
 
   private createCommercialBuilding(name: string, facadeColor: number, w: number, h: number, d: number): THREE.Group {
@@ -681,6 +700,7 @@ export class TownLifeManager {
       car.position.set(s.x, 0, s.z);
       car.rotation.y = s.rot;
       this.group.add(car);
+      this.cullables.push({ obj: car, radius: 3.5 });
     });
 
     // 2 Dynamic Moving Civilian Cars. Both paths stay centred on Oakridge's paved roads,
@@ -1039,10 +1059,10 @@ export class TownLifeManager {
       this.fountainWaterMat.normalMap.offset.y = (this.fountainWaterMat.normalMap.offset.y + delta * 0.05) % 1;
     }
 
-    // 4. Dynamic town panic or calm breathing reactions
+    // 4. Dynamic town panic or calm breathing reactions (skip invisible citizens)
     this.citizens.forEach((c, idx) => {
       const mesh = this.citizenMeshes.get(c.id);
-      if (!mesh) return;
+      if (!mesh || !mesh.visible) return;
       const lArm = mesh.getObjectByName('lArm');
       const rArm = mesh.getObjectByName('rArm');
       const head = mesh.getObjectByName('head');
@@ -1158,7 +1178,60 @@ export class TownLifeManager {
     });
   }
 
+  public updateFrustumCulling(frustum: THREE.Frustum, camPos: THREE.Vector3) {
+    for (let i = 0; i < this.cullables.length; i++) {
+      const item = this.cullables[i];
+      item.obj.getWorldPosition(TownLifeManager._worldPos);
+      const dx = TownLifeManager._worldPos.x - camPos.x;
+      const dz = TownLifeManager._worldPos.z - camPos.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < (22 + item.radius) ** 2) {
+        item.obj.visible = true;
+      } else if (distSq > 260 * 260) {
+        item.obj.visible = false;
+      } else {
+        TownLifeManager._cullSphere.center.set(TownLifeManager._worldPos.x, TownLifeManager._worldPos.y + 3.0, TownLifeManager._worldPos.z);
+        TownLifeManager._cullSphere.radius = item.radius;
+        item.obj.visible = frustum.intersectsSphere(TownLifeManager._cullSphere);
+      }
+    }
+
+    for (let i = 0; i < this.movingCars.length; i++) {
+      const car = this.movingCars[i].mesh;
+      car.getWorldPosition(TownLifeManager._worldPos);
+      const dx = TownLifeManager._worldPos.x - camPos.x;
+      const dz = TownLifeManager._worldPos.z - camPos.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < 20 * 20) {
+        car.visible = true;
+      } else if (distSq > 220 * 220) {
+        car.visible = false;
+      } else {
+        TownLifeManager._cullSphere.center.copy(TownLifeManager._worldPos);
+        TownLifeManager._cullSphere.radius = 3.5;
+        car.visible = frustum.intersectsSphere(TownLifeManager._cullSphere);
+      }
+    }
+
+    this.citizenMeshes.forEach((mesh) => {
+      mesh.getWorldPosition(TownLifeManager._worldPos);
+      const dx = TownLifeManager._worldPos.x - camPos.x;
+      const dz = TownLifeManager._worldPos.z - camPos.z;
+      const distSq = dx * dx + dz * dz;
+      if (distSq < 14 * 14) {
+        mesh.visible = true;
+      } else if (distSq > 165 * 165) {
+        mesh.visible = false;
+      } else {
+        TownLifeManager._cullSphere.center.set(TownLifeManager._worldPos.x, TownLifeManager._worldPos.y + 1.0, TownLifeManager._worldPos.z);
+        TownLifeManager._cullSphere.radius = 1.6;
+        mesh.visible = frustum.intersectsSphere(TownLifeManager._cullSphere);
+      }
+    });
+  }
+
   public dispose() {
+    this.cullables = [];
     if (this.apartmentBuilding) {
       this.apartmentBuilding.dispose();
     }

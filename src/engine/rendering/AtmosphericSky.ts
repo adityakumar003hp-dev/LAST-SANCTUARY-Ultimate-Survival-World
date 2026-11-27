@@ -92,9 +92,9 @@ export class AtmosphericSky {
         }
 
         void main() {
-          vec3 dir = normalize(vLocalDir);
+          vec3 dir = normalize(length(vLocalDir) > 0.001 ? vLocalDir : vec3(0.0, 1.0, 0.0));
           float height = dir.y;
-          vec3 sDir = normalize(sunPosition);
+          vec3 sDir = normalize(length(sunPosition) > 0.001 ? sunPosition : vec3(0.0, 1.0, 0.0));
           float sunCos = dot(dir, sDir);
 
           // 1. Atmospheric Rayleigh + Horizon Haze Gradient (darkens realistically under storm overcast)
@@ -186,7 +186,7 @@ export class AtmosphericSky {
             sky = mix(sky, cloudColor, cloudMask * horizonFade * mix(0.84, 0.96, weatherOvercast));
           }
 
-          gl_FragColor = vec4(sky, 1.0);
+          gl_FragColor = vec4(clamp(sky, vec3(0.0), vec3(6.0)), 1.0);
         }
       `,
       side: THREE.BackSide,

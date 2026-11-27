@@ -103,10 +103,11 @@ export class NexusMaterials {
       new THREE.MeshPhysicalMaterial({
         color: 0x4b3b2c,
         roughness: 0.08,
-        metalness: 0.15,
-        transmission: 0.52,
+        metalness: 0.32,
+        clearcoat: 0.9,
+        clearcoatRoughness: 0.06,
         transparent: true,
-        opacity: 0.56,
+        opacity: 0.62,
         ior: 1.5,
       })
     );
@@ -114,10 +115,10 @@ export class NexusMaterials {
       new THREE.MeshPhysicalMaterial({
         color: 0xdbeafe,
         roughness: 0.06,
-        metalness: 0.08,
-        transmission: 0.62,
+        metalness: 0.22,
+        clearcoat: 0.9,
         transparent: true,
-        opacity: 0.42,
+        opacity: 0.46,
       })
     );
 

@@ -719,12 +719,19 @@ export class BasementControlRoom {
   // ==========================================
   // DYNAMIC 2D CANVAS RENDERING FOR 5 MONITORS
   // ==========================================
-  public update(delta: number, aiTrainMgr: AITrainManager | null) {
+  public update(delta: number, aiTrainMgr: AITrainManager | null, playerPos?: THREE.Vector3) {
+    if (playerPos) {
+      const dx = playerPos.x - this.origin.x;
+      const dz = playerPos.z - this.origin.z;
+      if (playerPos.y > 1.5 || dx * dx + dz * dz > 42 * 42) {
+        return;
+      }
+    }
     this.renderTimer += delta;
     this.blinkTimer += delta;
 
-    // Throttle canvas texture re-draws to ~10 FPS for rock-solid performance
-    if (this.renderTimer >= 0.1) {
+    // Throttle canvas texture re-draws to ~4 FPS when player is inside basement control room
+    if (this.renderTimer >= 0.25) {
       this.renderTimer = 0;
       const telemetry = aiTrainMgr ? aiTrainMgr.getOperationsTelemetry() : [];
       const stationOps = aiTrainMgr?.getStationOperationsSnapshot?.() ?? null;

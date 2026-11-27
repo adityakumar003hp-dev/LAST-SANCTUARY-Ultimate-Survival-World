@@ -1,11 +1,158 @@
 import * as THREE from 'three';
 
 const textureCache: Record<string, THREE.CanvasTexture> = {};
+const lazyUpgradedKeys = new Set<string>();
+const lazyTaskQueue: Array<() => void> = [];
+let lazyTimerId: number | null = null;
+let textureGeneration = 0;
+let configuredMaxDim = 256;
+let configuredAnisotropy = 4;
 
 export interface PBRTextureSet {
   albedo: THREE.CanvasTexture;
   normal: THREE.CanvasTexture;
   roughness: THREE.CanvasTexture;
+}
+
+export function configureProceduralTextureQuality(opts: { maxDim?: number; maxAnisotropy?: number }) {
+  if (typeof opts.maxDim === 'number' && opts.maxDim >= 64) {
+    configuredMaxDim = Math.min(512, Math.max(64, Math.floor(opts.maxDim)));
+  }
+  if (typeof opts.maxAnisotropy === 'number' && opts.maxAnisotropy >= 1) {
+    configuredAnisotropy = Math.min(16, Math.max(1, Math.floor(opts.maxAnisotropy)));
+    for (const tex of Object.values(textureCache)) {
+      if (tex && tex.anisotropy !== configuredAnisotropy) {
+        tex.anisotropy = configuredAnisotropy;
+        tex.needsUpdate = true;
+      }
+    }
+  }
+}
+
+export function getProceduralTextureStats(): { cachedTextures: number; pendingLazyUpgrades: number; maxDim: number } {
+  return {
+    cachedTextures: Object.keys(textureCache).length,
+    pendingLazyUpgrades: lazyTaskQueue.length,
+    maxDim: configuredMaxDim,
+  };
+}
+
+export function disposeProceduralTextures() {
+  textureGeneration++;
+  lazyTaskQueue.length = 0;
+  lazyUpgradedKeys.clear();
+  if (lazyTimerId !== null) {
+    window.clearTimeout(lazyTimerId);
+    lazyTimerId = null;
+  }
+  for (const key of Object.keys(textureCache)) {
+    const tex = textureCache[key];
+    if (tex) {
+      const bmp = tex.userData?.__compressedBitmap as ImageBitmap | undefined;
+      if (bmp && typeof bmp.close === 'function') {
+        try {
+          bmp.close();
+        } catch {}
+      }
+      tex.dispose();
+    }
+    delete textureCache[key];
+  }
+}
+
+function getTargetTexSize(requested: number): number {
+  return Math.max(64, Math.min(requested, configuredMaxDim));
+}
+
+function getInitialTexSize(requested: number): number {
+  return Math.max(64, Math.min(requested, configuredMaxDim, 128));
+}
+
+function pumpLazyQueue() {
+  lazyTimerId = null;
+  if (lazyTaskQueue.length === 0) return;
+  const task = lazyTaskQueue.shift();
+  if (task) {
+    try {
+      task();
+    } catch {}
+  }
+  if (lazyTaskQueue.length > 0) {
+    scheduleLazyPump();
+  }
+}
+
+function scheduleLazyPump() {
+  if (lazyTimerId !== null) return;
+  const ric = (window as unknown as { requestIdleCallback?: (cb: () => void, opts?: { timeout: number }) => number }).requestIdleCallback;
+  if (typeof ric === 'function') {
+    lazyTimerId = window.setTimeout(() => {
+      ric(() => pumpLazyQueue(), { timeout: 200 });
+    }, 35);
+  } else {
+    lazyTimerId = window.setTimeout(pumpLazyQueue, 45);
+  }
+}
+
+function enqueueLazyPBRUpgrade(
+  key: string,
+  initialSize: number,
+  requestedMaxSize: number,
+  upgradeFn: (targetSize: number) => void
+) {
+  const targetSize = getTargetTexSize(requestedMaxSize);
+  if (targetSize <= initialSize || lazyUpgradedKeys.has(key)) return;
+  lazyUpgradedKeys.add(key);
+  const gen = textureGeneration;
+  lazyTaskQueue.push(() => {
+    if (gen !== textureGeneration) return;
+    const latestTarget = getTargetTexSize(requestedMaxSize);
+    if (latestTarget > initialSize && textureCache[key + '_a']) {
+      upgradeFn(latestTarget);
+    }
+  });
+  scheduleLazyPump();
+}
+
+function compressCanvasToTextureAsync(canvas: HTMLCanvasElement, texture: THREE.CanvasTexture, isColor: boolean, gen: number) {
+  if (typeof canvas.toBlob !== 'function' || typeof createImageBitmap !== 'function') return;
+  const mime = isColor ? 'image/webp' : 'image/png';
+  const quality = isColor ? 0.85 : 0.92;
+  try {
+    canvas.toBlob(
+      (blob) => {
+        if (!blob || gen !== textureGeneration) {
+          canvas.width = 0;
+          canvas.height = 0;
+          return;
+        }
+        createImageBitmap(blob)
+          .then((bitmap) => {
+            if (gen !== textureGeneration) {
+              bitmap.close?.();
+              return;
+            }
+            const prevBmp = texture.userData?.__compressedBitmap as ImageBitmap | undefined;
+            texture.userData.__compressedBitmap = bitmap;
+            texture.image = bitmap as unknown as HTMLCanvasElement;
+            texture.needsUpdate = true;
+            if (prevBmp && prevBmp !== bitmap && typeof prevBmp.close === 'function') {
+              try {
+                prevBmp.close();
+              } catch {}
+            }
+            canvas.width = 0;
+            canvas.height = 0;
+          })
+          .catch(() => {
+            canvas.width = 0;
+            canvas.height = 0;
+          });
+      },
+      mime,
+      quality
+    );
+  } catch {}
 }
 
 function hash2D(x: number, y: number, seed: number): number {
@@ -51,13 +198,12 @@ function tileFBM(u: number, v: number, basePeriod: number, octaves: number, seed
   return val / norm;
 }
 
-function makeCanvasTexture(
+function drawIntoCanvas(
   width: number,
   height: number,
-  isColor: boolean,
   draw: (ctx: CanvasRenderingContext2D, w: number, h: number, data: ImageData | null) => void,
-  pixelMode = false
-): THREE.CanvasTexture {
+  pixelMode: boolean
+): HTMLCanvasElement {
   const canvas = document.createElement('canvas');
   canvas.width = width;
   canvas.height = height;
@@ -69,19 +215,84 @@ function makeCanvasTexture(
   } else {
     draw(ctx, width, height, null);
   }
+  return canvas;
+}
 
+function makeCanvasTexture(
+  width: number,
+  height: number,
+  isColor: boolean,
+  draw: (ctx: CanvasRenderingContext2D, w: number, h: number, data: ImageData | null) => void,
+  pixelMode = false
+): THREE.CanvasTexture {
+  const canvas = drawIntoCanvas(width, height, draw, pixelMode);
   const texture = new THREE.CanvasTexture(canvas);
   texture.colorSpace = isColor ? THREE.SRGBColorSpace : THREE.NoColorSpace;
   texture.wrapS = THREE.RepeatWrapping;
   texture.wrapT = THREE.RepeatWrapping;
-  texture.anisotropy = 8;
+  texture.anisotropy = configuredAnisotropy;
   texture.needsUpdate = true;
+  compressCanvasToTextureAsync(canvas, texture, isColor, textureGeneration);
   return texture;
+}
+
+function refreshExistingTexture(
+  texture: THREE.CanvasTexture,
+  width: number,
+  height: number,
+  isColor: boolean,
+  draw: (ctx: CanvasRenderingContext2D, w: number, h: number, data: ImageData | null) => void,
+  pixelMode = false
+) {
+  const canvas = drawIntoCanvas(width, height, draw, pixelMode);
+  texture.image = canvas;
+  texture.needsUpdate = true;
+  compressCanvasToTextureAsync(canvas, texture, isColor, textureGeneration);
 }
 
 /**
  * Generates an accurate seamlessly tiled Tangent-Space Normal Map via a 3x3 Sobel operator on a float heightfield.
  */
+function drawSobelNormals(heights: Float32Array, w: number, strength: number, img: ImageData | null) {
+  if (!img) return;
+  const d = img.data;
+  const sample = (x: number, y: number) => {
+    const wx = ((x % w) + w) % w;
+    const wy = ((y % w) + w) % w;
+    return heights[wy * w + wx];
+  };
+
+  for (let y = 0; y < w; y++) {
+    for (let x = 0; x < w; x++) {
+      const tl = sample(x - 1, y - 1);
+      const t = sample(x, y - 1);
+      const tr = sample(x + 1, y - 1);
+      const l = sample(x - 1, y);
+      const r = sample(x + 1, y);
+      const bl = sample(x - 1, y + 1);
+      const b = sample(x, y + 1);
+      const br = sample(x + 1, y + 1);
+
+      const dx = (tr + 2 * r + br) - (tl + 2 * l + bl);
+      const dy = (bl + 2 * b + br) - (tl + 2 * t + tr);
+
+      let nx = -dx * strength;
+      let ny = -dy * strength;
+      let nz = 1.0;
+      const invLen = 1.0 / Math.hypot(nx, ny, nz);
+      nx *= invLen;
+      ny *= invLen;
+      nz *= invLen;
+
+      const idx = (y * w + x) * 4;
+      d[idx] = Math.round((nx * 0.5 + 0.5) * 255);
+      d[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
+      d[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
+      d[idx + 3] = 255;
+    }
+  }
+}
+
 function heightFieldToNormalTexture(
   heights: Float32Array,
   size: number,
@@ -91,47 +302,22 @@ function heightFieldToNormalTexture(
     size,
     size,
     false,
-    (_ctx, w, _h, img) => {
-      if (!img) return;
-      const d = img.data;
-      const sample = (x: number, y: number) => {
-        const wx = ((x % w) + w) % w;
-        const wy = ((y % w) + w) % w;
-        return heights[wy * w + wx];
-      };
-
-      for (let y = 0; y < w; y++) {
-        for (let x = 0; x < w; x++) {
-          const tl = sample(x - 1, y - 1);
-          const t = sample(x, y - 1);
-          const tr = sample(x + 1, y - 1);
-          const l = sample(x - 1, y);
-          const r = sample(x + 1, y);
-          const bl = sample(x - 1, y + 1);
-          const b = sample(x, y + 1);
-          const br = sample(x + 1, y + 1);
-
-          const dx = (tr + 2 * r + br) - (tl + 2 * l + bl);
-          const dy = (bl + 2 * b + br) - (tl + 2 * t + tr);
-
-          let nx = -dx * strength;
-          let ny = -dy * strength;
-          let nz = 1.0;
-          const invLen = 1.0 / Math.hypot(nx, ny, nz);
-          nx *= invLen;
-          ny *= invLen;
-          nz *= invLen;
-
-          const idx = (y * w + x) * 4;
-          d[idx] = Math.round((nx * 0.5 + 0.5) * 255);
-          d[idx + 1] = Math.round((ny * 0.5 + 0.5) * 255);
-          d[idx + 2] = Math.round((nz * 0.5 + 0.5) * 255);
-          d[idx + 3] = 255;
-        }
-      }
-    },
+    (_ctx, w, _h, img) => drawSobelNormals(heights, w, strength, img),
     true
   );
+}
+
+function drawRoughnessField(roughValues: Float32Array, w: number, img: ImageData | null) {
+  if (!img) return;
+  const d = img.data;
+  for (let i = 0; i < w * w; i++) {
+    const v = Math.max(0, Math.min(255, Math.round(roughValues[i] * 255)));
+    const idx = i * 4;
+    d[idx] = v;
+    d[idx + 1] = v;
+    d[idx + 2] = v;
+    d[idx + 3] = 255;
+  }
 }
 
 function heightFieldToRoughnessTexture(
@@ -142,18 +328,7 @@ function heightFieldToRoughnessTexture(
     size,
     size,
     false,
-    (_ctx, w, _h, img) => {
-      if (!img) return;
-      const d = img.data;
-      for (let i = 0; i < w * w; i++) {
-        const v = Math.max(0, Math.min(255, Math.round(roughValues[i] * 255)));
-        const idx = i * 4;
-        d[idx] = v;
-        d[idx + 1] = v;
-        d[idx + 2] = v;
-        d[idx + 3] = 255;
-      }
-    },
+    (_ctx, w, _h, img) => drawRoughnessField(roughValues, w, img),
     true
   );
 }
@@ -179,57 +354,60 @@ export function getTerrainPBR(): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 512;
-  const heights = new Float32Array(size * size);
-  const roughs = new Float32Array(size * size);
+  const buildTerrainFields = (size: number, heights: Float32Array, roughs: Float32Array, img: ImageData | null) => {
+    if (!img) return;
+    const d = img.data;
+    for (let y = 0; y < size; y++) {
+      const v = y / size;
+      for (let x = 0; x < size; x++) {
+        const u = x / size;
+        const macro = tileFBM(u, v, 5, 4, 11);
+        const micro = tileFBM(u, v, 28, 3, 29);
+        const blade = tileNoise(u * 1.4, v * 0.6, 64, 41);
+        const grit = hash2D(x, y, 53);
+        const hVal = macro * 0.46 + micro * 0.32 + blade * 0.14 + grit * 0.08;
+        heights[y * size + x] = hVal;
 
-  const albedo = makeCanvasTexture(
-    size,
-    size,
-    true,
-    (_ctx, w, _h, img) => {
-      if (!img) return;
-      const d = img.data;
-      for (let y = 0; y < w; y++) {
-        const v = y / w;
-        for (let x = 0; x < w; x++) {
-          const u = x / w;
-          const macro = tileFBM(u, v, 5, 4, 11);
-          const micro = tileFBM(u, v, 28, 3, 29);
-          const blade = tileNoise(u * 1.4, v * 0.6, 64, 41);
-          const grit = hash2D(x, y, 53);
-          const hVal = macro * 0.46 + micro * 0.32 + blade * 0.14 + grit * 0.08;
-          heights[y * w + x] = hVal;
+        const mossMix = Math.max(0, Math.min(1, (macro - 0.34) * 2.45));
+        const aoCrevice = 0.84 + hVal * 0.24;
+        const soilR = (58 + micro * 28 + grit * 11) * aoCrevice;
+        const soilG = (48 + micro * 22 + grit * 8) * aoCrevice;
+        const soilB = (32 + micro * 16 + grit * 6) * aoCrevice;
 
-          // Rich organic forest floor palette: humus soil + clover moss + blade micro-detail
-          const mossMix = Math.max(0, Math.min(1, (macro - 0.34) * 2.45));
-          const aoCrevice = 0.84 + hVal * 0.24;
-          const soilR = (58 + micro * 28 + grit * 11) * aoCrevice;
-          const soilG = (48 + micro * 22 + grit * 8) * aoCrevice;
-          const soilB = (32 + micro * 16 + grit * 6) * aoCrevice;
+        const grassR = (48 + micro * 34 + blade * 16 + grit * 10) * aoCrevice;
+        const grassG = (82 + micro * 48 + blade * 20 + grit * 12) * aoCrevice;
+        const grassB = (34 + micro * 22 + blade * 10 + grit * 6) * aoCrevice;
 
-          const grassR = (48 + micro * 34 + blade * 16 + grit * 10) * aoCrevice;
-          const grassG = (82 + micro * 48 + blade * 20 + grit * 12) * aoCrevice;
-          const grassB = (34 + micro * 22 + blade * 10 + grit * 6) * aoCrevice;
+        const idx = (y * size + x) * 4;
+        d[idx] = clampByte(soilR + (grassR - soilR) * mossMix);
+        d[idx + 1] = clampByte(soilG + (grassG - soilG) * mossMix);
+        d[idx + 2] = clampByte(soilB + (grassB - soilB) * mossMix);
+        d[idx + 3] = 255;
 
-          const idx = (y * w + x) * 4;
-          d[idx] = clampByte(soilR + (grassR - soilR) * mossMix);
-          d[idx + 1] = clampByte(soilG + (grassG - soilG) * mossMix);
-          d[idx + 2] = clampByte(soilB + (grassB - soilB) * mossMix);
-          d[idx + 3] = 255;
-
-          roughs[y * w + x] = 0.74 + (1.0 - mossMix) * 0.18 - grit * 0.06;
-        }
+        roughs[y * size + x] = 0.74 + (1.0 - mossMix) * 0.18 - grit * 0.06;
       }
-    },
-    true
-  );
+    }
+  };
 
-  const normal = heightFieldToNormalTexture(heights, size, 2.8);
-  const roughness = heightFieldToRoughnessTexture(roughs, size);
+  const initSize = getInitialTexSize(512);
+  const heights = new Float32Array(initSize * initSize);
+  const roughs = new Float32Array(initSize * initSize);
+  const albedo = makeCanvasTexture(initSize, initSize, true, (_ctx, w, _h, img) => buildTerrainFields(w, heights, roughs, img), true);
+  const normal = heightFieldToNormalTexture(heights, initSize, 2.8);
+  const roughness = heightFieldToRoughnessTexture(roughs, initSize);
+
   textureCache[key + '_a'] = albedo;
   textureCache[key + '_n'] = normal;
   textureCache[key + '_r'] = roughness;
+
+  enqueueLazyPBRUpgrade(key, initSize, 512, (hiSize) => {
+    const hiH = new Float32Array(hiSize * hiSize);
+    const hiR = new Float32Array(hiSize * hiSize);
+    refreshExistingTexture(albedo, hiSize, hiSize, true, (_c, w, _h, img) => buildTerrainFields(w, hiH, hiR, img), true);
+    refreshExistingTexture(normal, hiSize, hiSize, false, (_c, w, _h, img) => drawSobelNormals(hiH, w, 2.8, img), true);
+    refreshExistingTexture(roughness, hiSize, hiSize, false, (_c, w, _h, img) => drawRoughnessField(hiR, w, img), true);
+  });
+
   return { albedo, normal, roughness };
 }
 
@@ -246,65 +424,71 @@ export function getGrassPBR(groundColor: number = 0x3d7036): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 512;
   const [br, bg, bb] = hexToRgb(groundColor);
-  const heights = new Float32Array(size * size);
-  const roughs = new Float32Array(size * size);
+  const buildGrassFields = (size: number, heights: Float32Array, roughs: Float32Array, img: ImageData | null) => {
+    if (!img) return;
+    const d = img.data;
+    const mixR = br * 0.35 + 165 * 0.65;
+    const mixG = bg * 0.35 + 165 * 0.65;
+    const mixB = bb * 0.35 + 165 * 0.65;
+    for (let y = 0; y < size; y++) {
+      const v = y / size;
+      for (let x = 0; x < size; x++) {
+        const u = x / size;
+        const macro = tileFBM(u, v, 5, 4, 71);
+        const fine = tileFBM(u, v, 32, 3, 97);
+        const blade = tileNoise(u * 1.5, v * 0.55, 64, 113);
+        const speckle = hash2D(x, y, 131);
+        const hVal = macro * 0.40 + fine * 0.34 + blade * 0.16 + speckle * 0.10;
+        heights[y * size + x] = hVal;
 
-  const albedo = makeCanvasTexture(
-    size,
-    size,
-    true,
-    (_ctx, w, _h, img) => {
-      if (!img) return;
-      const d = img.data;
-      for (let y = 0; y < w; y++) {
-        const v = y / w;
-        for (let x = 0; x < w; x++) {
-          const u = x / w;
-          const macro = tileFBM(u, v, 5, 4, 71);
-          const fine = tileFBM(u, v, 32, 3, 97);
-          const blade = tileNoise(u * 1.5, v * 0.55, 64, 113);
-          const speckle = hash2D(x, y, 131);
-          const hVal = macro * 0.40 + fine * 0.34 + blade * 0.16 + speckle * 0.10;
-          heights[y * w + x] = hVal;
+        const shade = 0.74 + hVal * 0.52;
+        const idx = (y * size + x) * 4;
+        d[idx] = clampByte(mixR * shade);
+        d[idx + 1] = clampByte(mixG * shade);
+        d[idx + 2] = clampByte(mixB * shade);
+        d[idx + 3] = 255;
 
-          const shade = 0.74 + hVal * 0.52;
-          const idx = (y * w + x) * 4;
-          const mixR = br * 0.35 + 165 * 0.65;
-          const mixG = bg * 0.35 + 165 * 0.65;
-          const mixB = bb * 0.35 + 165 * 0.65;
-          d[idx] = clampByte(mixR * shade);
-          d[idx + 1] = clampByte(mixG * shade);
-          d[idx + 2] = clampByte(mixB * shade);
-          d[idx + 3] = 255;
-
-          roughs[y * w + x] = 0.74 + (1.0 - fine) * 0.22;
-        }
+        roughs[y * size + x] = 0.74 + (1.0 - fine) * 0.22;
       }
-    },
-    true
-  );
+    }
+  };
 
-  const normal = heightFieldToNormalTexture(heights, size, 3.0);
-  const roughness = heightFieldToRoughnessTexture(roughs, size);
+  const initSize = getInitialTexSize(512);
+  const heights = new Float32Array(initSize * initSize);
+  const roughs = new Float32Array(initSize * initSize);
+  const albedo = makeCanvasTexture(initSize, initSize, true, (_ctx, w, _h, img) => buildGrassFields(w, heights, roughs, img), true);
+  const normal = heightFieldToNormalTexture(heights, initSize, 3.0);
+  const roughness = heightFieldToRoughnessTexture(roughs, initSize);
+
   textureCache[key + '_a'] = albedo;
   textureCache[key + '_n'] = normal;
   textureCache[key + '_r'] = roughness;
+
+  enqueueLazyPBRUpgrade(key, initSize, 512, (hiSize) => {
+    const hiH = new Float32Array(hiSize * hiSize);
+    const hiR = new Float32Array(hiSize * hiSize);
+    refreshExistingTexture(albedo, hiSize, hiSize, true, (_c, w, _h, img) => buildGrassFields(w, hiH, hiR, img), true);
+    refreshExistingTexture(normal, hiSize, hiSize, false, (_c, w, _h, img) => drawSobelNormals(hiH, w, 3.0, img), true);
+    refreshExistingTexture(roughness, hiSize, hiSize, false, (_c, w, _h, img) => drawRoughnessField(hiR, w, img), true);
+  });
+
   return { albedo, normal, roughness };
 }
 
 export function getGrassTuftAlphaTexture(): THREE.CanvasTexture {
   const key = 'grass_tuft_alpha_v2';
   if (textureCache[key]) return textureCache[key];
-  const tex = makeCanvasTexture(256, 256, true, (ctx, w, h) => {
+  const size = getTargetTexSize(256);
+  const tex = makeCanvasTexture(size, size, true, (ctx, w, h) => {
     ctx.clearRect(0, 0, w, h);
+    const scale = w / 256;
     // Draw 16 organic overlapping curved grass blades with warm sunlit tips & root shadow AO
     for (let i = 0; i < 16; i++) {
-      const bx = (i / 15) * (w * 0.80) + w * 0.10 + (hash2D(i, 1, 7) - 0.5) * 12;
+      const bx = (i / 15) * (w * 0.80) + w * 0.10 + (hash2D(i, 1, 7) - 0.5) * 12 * scale;
       const bh = h * (0.48 + hash2D(i, 2, 7) * 0.48);
-      const lean = (hash2D(i, 3, 7) - 0.5) * 68;
-      const bw = 9 + hash2D(i, 4, 7) * 7;
+      const lean = (hash2D(i, 3, 7) - 0.5) * 68 * scale;
+      const bw = (9 + hash2D(i, 4, 7) * 7) * scale;
       const grad = ctx.createLinearGradient(bx, h, bx + lean, h - bh);
       grad.addColorStop(0, '#364f21');
       grad.addColorStop(0.35, '#598236');
@@ -329,15 +513,17 @@ export function getFoliageTexture(tintHex = 0x264d24): THREE.CanvasTexture {
   const key = `foliage_leaf_v2_${tintHex}`;
   if (textureCache[key]) return textureCache[key];
   const [r, g, b] = hexToRgb(tintHex);
-  const tex = makeCanvasTexture(256, 256, true, (ctx, w, h) => {
+  const size = getTargetTexSize(256);
+  const tex = makeCanvasTexture(size, size, true, (ctx, w, h) => {
+    const scale = w / 256;
     ctx.fillStyle = `rgb(${Math.round(r * 0.58)}, ${Math.round(g * 0.58)}, ${Math.round(b * 0.58)})`;
     ctx.fillRect(0, 0, w, h);
     for (let i = 0; i < 520; i++) {
       const lx = hash2D(i, 1, 91) * w;
       const ly = hash2D(i, 2, 91) * h;
       const ang = hash2D(i, 3, 91) * Math.PI * 2;
-      const rx = 5 + hash2D(i, 4, 91) * 9;
-      const ry = 2.4 + hash2D(i, 5, 91) * 4.5;
+      const rx = (5 + hash2D(i, 4, 91) * 9) * scale;
+      const ry = (2.4 + hash2D(i, 5, 91) * 4.5) * scale;
       const shade = 0.68 + hash2D(i, 6, 91) * 0.68;
       ctx.save();
       ctx.translate(lx, ly);
@@ -366,57 +552,61 @@ export function getWoodPBR(): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 512;
-  const heights = new Float32Array(size * size);
-  const roughs = new Float32Array(size * size);
+  const buildWoodFields = (size: number, heights: Float32Array, roughs: Float32Array, img: ImageData | null) => {
+    if (!img) return;
+    const d = img.data;
+    const planks = 6;
+    const plankH = size / planks;
+    for (let y = 0; y < size; y++) {
+      const v = y / size;
+      const plankIdx = Math.floor(y / plankH);
+      const plankLocal = (y % plankH) / plankH;
+      const seamDist = Math.min(plankLocal, 1 - plankLocal) * plankH;
+      const isSeam = seamDist < Math.max(1.2, size / 196);
 
-  const albedo = makeCanvasTexture(
-    size,
-    size,
-    true,
-    (_ctx, w, _h, img) => {
-      if (!img) return;
-      const d = img.data;
-      const planks = 6;
-      const plankH = w / planks;
-      for (let y = 0; y < w; y++) {
-        const v = y / w;
-        const plankIdx = Math.floor(y / plankH);
-        const plankLocal = (y % plankH) / plankH;
-        const seamDist = Math.min(plankLocal, 1 - plankLocal) * plankH;
-        const isSeam = seamDist < 2.6;
+      for (let x = 0; x < size; x++) {
+        const u = x / size;
+        const grain = Math.sin(
+          (v * 34 + tileFBM(u * 0.5, v * 4, 4, 3, 21 + plankIdx * 5) * 4.8) * Math.PI
+        ) * 0.5 + 0.5;
+        const fibers = tileNoise(u, v * 0.25, 48, 33 + plankIdx);
+        const plankTint = 0.86 + hash2D(plankIdx, 1, 7) * 0.24;
 
-        for (let x = 0; x < w; x++) {
-          const u = x / w;
-          const grain = Math.sin(
-            (v * 34 + tileFBM(u * 0.5, v * 4, 4, 3, 21 + plankIdx * 5) * 4.8) * Math.PI
-          ) * 0.5 + 0.5;
-          const fibers = tileNoise(u, v * 0.25, 48, 33 + plankIdx);
-          const plankTint = 0.86 + hash2D(plankIdx, 1, 7) * 0.24;
+        let hVal = grain * 0.45 + fibers * 0.4 + 0.15;
+        if (isSeam) hVal *= 0.15;
+        heights[y * size + x] = hVal;
 
-          let hVal = grain * 0.45 + fibers * 0.4 + 0.15;
-          if (isSeam) hVal *= 0.15;
-          heights[y * w + x] = hVal;
+        const lum = isSeam ? 0.28 : (0.72 + grain * 0.24 + fibers * 0.12) * plankTint;
+        const idx = (y * size + x) * 4;
+        d[idx] = clampByte(118 * lum);
+        d[idx + 1] = clampByte(82 * lum);
+        d[idx + 2] = clampByte(49 * lum);
+        d[idx + 3] = 255;
 
-          const lum = isSeam ? 0.28 : (0.72 + grain * 0.24 + fibers * 0.12) * plankTint;
-          const idx = (y * w + x) * 4;
-          d[idx] = clampByte(118 * lum);
-          d[idx + 1] = clampByte(82 * lum);
-          d[idx + 2] = clampByte(49 * lum);
-          d[idx + 3] = 255;
-
-          roughs[y * w + x] = isSeam ? 0.96 : 0.65 + (1 - grain) * 0.24;
-        }
+        roughs[y * size + x] = isSeam ? 0.96 : 0.65 + (1 - grain) * 0.24;
       }
-    },
-    true
-  );
+    }
+  };
 
-  const normal = heightFieldToNormalTexture(heights, size, 3.2);
-  const roughness = heightFieldToRoughnessTexture(roughs, size);
+  const initSize = getInitialTexSize(512);
+  const heights = new Float32Array(initSize * initSize);
+  const roughs = new Float32Array(initSize * initSize);
+  const albedo = makeCanvasTexture(initSize, initSize, true, (_c, w, _h, img) => buildWoodFields(w, heights, roughs, img), true);
+  const normal = heightFieldToNormalTexture(heights, initSize, 3.2);
+  const roughness = heightFieldToRoughnessTexture(roughs, initSize);
+
   textureCache[key + '_a'] = albedo;
   textureCache[key + '_n'] = normal;
   textureCache[key + '_r'] = roughness;
+
+  enqueueLazyPBRUpgrade(key, initSize, 512, (hiSize) => {
+    const hiH = new Float32Array(hiSize * hiSize);
+    const hiR = new Float32Array(hiSize * hiSize);
+    refreshExistingTexture(albedo, hiSize, hiSize, true, (_c, w, _h, img) => buildWoodFields(w, hiH, hiR, img), true);
+    refreshExistingTexture(normal, hiSize, hiSize, false, (_c, w, _h, img) => drawSobelNormals(hiH, w, 3.2, img), true);
+    refreshExistingTexture(roughness, hiSize, hiSize, false, (_c, w, _h, img) => drawRoughnessField(hiR, w, img), true);
+  });
+
   return { albedo, normal, roughness };
 }
 
@@ -433,49 +623,53 @@ export function getStonePBR(): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 512;
-  const heights = new Float32Array(size * size);
-  const roughs = new Float32Array(size * size);
+  const buildStoneFields = (size: number, heights: Float32Array, roughs: Float32Array, img: ImageData | null) => {
+    if (!img) return;
+    const d = img.data;
+    for (let y = 0; y < size; y++) {
+      const v = y / size;
+      for (let x = 0; x < size; x++) {
+        const u = x / size;
+        const broad = tileFBM(u, v, 6, 4, 101);
+        const fine = tileFBM(u, v, 28, 3, 109);
+        const grain = hash2D(x, y, 113);
+        const crack = Math.abs(tileFBM(u, v, 5, 3, 127) - 0.5);
+        const isCrack = crack < 0.022;
+        let hVal = broad * 0.55 + fine * 0.35 + grain * 0.1;
+        if (isCrack) hVal *= 0.22;
+        heights[y * size + x] = hVal;
 
-  const albedo = makeCanvasTexture(
-    size,
-    size,
-    true,
-    (_ctx, w, _h, img) => {
-      if (!img) return;
-      const d = img.data;
-      for (let y = 0; y < w; y++) {
-        const v = y / w;
-        for (let x = 0; x < w; x++) {
-          const u = x / w;
-          const broad = tileFBM(u, v, 6, 4, 101);
-          const fine = tileFBM(u, v, 28, 3, 109);
-          const grain = hash2D(x, y, 113);
-          const crack = Math.abs(tileFBM(u, v, 5, 3, 127) - 0.5);
-          const isCrack = crack < 0.022;
-          let hVal = broad * 0.55 + fine * 0.35 + grain * 0.1;
-          if (isCrack) hVal *= 0.22;
-          heights[y * w + x] = hVal;
+        const base = isCrack ? 48 : 94 + hVal * 64;
+        const idx = (y * size + x) * 4;
+        d[idx] = clampByte(base * 1.01);
+        d[idx + 1] = clampByte(base * 1.0);
+        d[idx + 2] = clampByte(base * 1.03);
+        d[idx + 3] = 255;
 
-          const base = isCrack ? 48 : 94 + hVal * 64;
-          const idx = (y * w + x) * 4;
-          d[idx] = clampByte(base * 1.01);
-          d[idx + 1] = clampByte(base * 1.0);
-          d[idx + 2] = clampByte(base * 1.03);
-          d[idx + 3] = 255;
-
-          roughs[y * w + x] = isCrack ? 0.96 : 0.70 + (1 - hVal) * 0.24;
-        }
+        roughs[y * size + x] = isCrack ? 0.96 : 0.70 + (1 - hVal) * 0.24;
       }
-    },
-    true
-  );
+    }
+  };
 
-  const normal = heightFieldToNormalTexture(heights, size, 3.4);
-  const roughness = heightFieldToRoughnessTexture(roughs, size);
+  const initSize = getInitialTexSize(512);
+  const heights = new Float32Array(initSize * initSize);
+  const roughs = new Float32Array(initSize * initSize);
+  const albedo = makeCanvasTexture(initSize, initSize, true, (_c, w, _h, img) => buildStoneFields(w, heights, roughs, img), true);
+  const normal = heightFieldToNormalTexture(heights, initSize, 3.4);
+  const roughness = heightFieldToRoughnessTexture(roughs, initSize);
+
   textureCache[key + '_a'] = albedo;
   textureCache[key + '_n'] = normal;
   textureCache[key + '_r'] = roughness;
+
+  enqueueLazyPBRUpgrade(key, initSize, 512, (hiSize) => {
+    const hiH = new Float32Array(hiSize * hiSize);
+    const hiR = new Float32Array(hiSize * hiSize);
+    refreshExistingTexture(albedo, hiSize, hiSize, true, (_c, w, _h, img) => buildStoneFields(w, hiH, hiR, img), true);
+    refreshExistingTexture(normal, hiSize, hiSize, false, (_c, w, _h, img) => drawSobelNormals(hiH, w, 3.4, img), true);
+    refreshExistingTexture(roughness, hiSize, hiSize, false, (_c, w, _h, img) => drawRoughnessField(hiR, w, img), true);
+  });
+
   return { albedo, normal, roughness };
 }
 
@@ -492,7 +686,7 @@ export function getMetalPBR(): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
 
@@ -556,7 +750,7 @@ export function getBrushedMetalPBR(baseHex = 0x7a8594): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const [br, bg, bb] = hexToRgb(baseHex);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
@@ -606,7 +800,7 @@ export function getBrickPBR(brickHex = 0x8a4234): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const [br, bg, bb] = hexToRgb(brickHex);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
@@ -622,6 +816,7 @@ export function getBrickPBR(brickHex = 0x8a4234): PBRTextureSet {
       const cols = 4;
       const rowH = w / rows;
       const colW = w / cols;
+      const mortarW = Math.max(1.1, w / 116);
       for (let y = 0; y < w; y++) {
         const rIdx = Math.floor(y / rowH);
         const ry = y % rowH;
@@ -630,7 +825,7 @@ export function getBrickPBR(brickHex = 0x8a4234): PBRTextureSet {
           const sx = (x + stagger) % w;
           const cIdx = Math.floor(sx / colW);
           const rx = sx % colW;
-          const isMortar = ry < 2.2 || rx < 2.2;
+          const isMortar = ry < mortarW || rx < mortarW;
           const fine = tileFBM(x / w, y / w, 16, 3, 401);
           const brickTone = 0.84 + hash2D(cIdx, rIdx, 409) * 0.3;
 
@@ -676,7 +871,7 @@ export function getConcretePBR(baseHex = 0xc5ccd4): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const [br, bg, bb] = hexToRgb(baseHex);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
@@ -688,10 +883,11 @@ export function getConcretePBR(baseHex = 0xc5ccd4): PBRTextureSet {
     (_ctx, w, _h, img) => {
       if (!img) return;
       const d = img.data;
+      const seamStep = Math.max(32, w >> 1);
       for (let y = 0; y < w; y++) {
-        const seamY = y % 128 < 2;
+        const seamY = y % seamStep < 2;
         for (let x = 0; x < w; x++) {
-          const seamX = x % 128 < 2;
+          const seamX = x % seamStep < 2;
           const fine = tileFBM(x / w, y / w, 12, 4, 503);
           const pore = hash2D(x, y, 509);
           let hVal = fine * 0.75 + pore * 0.25;
@@ -728,7 +924,7 @@ export function getAsphaltPBR(): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
 
@@ -776,7 +972,7 @@ export function getSandstonePBR(baseHex = 0x9e382b): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const [br, bg, bb] = hexToRgb(baseHex);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
@@ -788,15 +984,17 @@ export function getSandstonePBR(baseHex = 0x9e382b): PBRTextureSet {
     (_ctx, w, _h, img) => {
       if (!img) return;
       const d = img.data;
+      const rowUnit = w / 6;
+      const colUnit = w / 3;
       for (let y = 0; y < w; y++) {
-        const blockY = Math.floor(y / 42.67);
-        const isHJoint = y % 43 < 1.8;
+        const blockY = Math.floor(y / rowUnit);
+        const isHJoint = y % Math.max(8, Math.round(rowUnit)) < 1.8;
         for (let x = 0; x < w; x++) {
-          const offset = (blockY % 2) * 42;
+          const offset = (blockY % 2) * Math.round(colUnit * 0.5);
           const sx = (x + offset) % w;
-          const blockX = Math.floor(sx / 85.33);
-          const isVJoint = sx % 85 < 1.8;
-          const strata = Math.sin(y * 0.25 + tileFBM(x / w, y / w, 6, 3, 701) * 3.0) * 0.5 + 0.5;
+          const blockX = Math.floor(sx / colUnit);
+          const isVJoint = sx % Math.max(12, Math.round(colUnit)) < 1.8;
+          const strata = Math.sin((y / w) * 64.0 + tileFBM(x / w, y / w, 6, 3, 701) * 3.0) * 0.5 + 0.5;
           const grit = hash2D(x, y, 709);
           const blockShade = 0.91 + hash2D(blockX, blockY, 719) * 0.16;
 
@@ -834,7 +1032,7 @@ export function getMarbleTilePBR(baseHex = 0xe8edf2): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const [br, bg, bb] = hexToRgb(baseHex);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
@@ -846,10 +1044,11 @@ export function getMarbleTilePBR(baseHex = 0xe8edf2): PBRTextureSet {
     (_ctx, w, _h, img) => {
       if (!img) return;
       const d = img.data;
+      const tileStep = Math.max(16, w >> 2);
       for (let y = 0; y < w; y++) {
-        const groutY = y % 64 < 2;
+        const groutY = y % tileStep < 2;
         for (let x = 0; x < w; x++) {
-          const groutX = x % 64 < 2;
+          const groutX = x % tileStep < 2;
           const vein = Math.abs(tileFBM(x / w, y / w, 4, 4, 809) - 0.5) < 0.03 ? 0.85 : 1.0;
           const crystal = tileNoise(x / w, y / w, 16, 811);
           const grout = groutX || groutY;
@@ -909,7 +1108,7 @@ export function getSkinPBR(skinHex: number = 0xdeb887): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 128;
+  const size = getTargetTexSize(128);
   const [br, bg, bb] = hexToRgb(skinHex);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
@@ -959,7 +1158,7 @@ export function getFabricPBR(
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 128;
+  const size = getTargetTexSize(128);
   const [br, bg, bb] = hexToRgb(clothHex);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
@@ -1024,7 +1223,7 @@ export function getZombieFleshPBR(isBrute = false): PBRTextureSet {
       roughness: textureCache[prefix + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
 
@@ -1089,7 +1288,7 @@ export function getWaterRippleNormalMap(_time = 0): THREE.CanvasTexture {
   const key = 'water_ripple_v2';
   if (textureCache[key]) return textureCache[key];
 
-  const size = 256;
+  const size = getTargetTexSize(256);
   const heights = new Float32Array(size * size);
   for (let y = 0; y < size; y++) {
     const v = y / size;
@@ -1116,7 +1315,7 @@ export function getBarkPBR(): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
 
@@ -1175,7 +1374,7 @@ export function getRockPBR(): PBRTextureSet {
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
 
@@ -1231,7 +1430,7 @@ export function getDinosaurSkinPBR(speciesId: string, baseHex: number): PBRTextu
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 256;
+  const size = getTargetTexSize(256);
   const [br, bg, bb] = hexToRgb(baseHex);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);
@@ -1243,7 +1442,7 @@ export function getDinosaurSkinPBR(speciesId: string, baseHex: number): PBRTextu
     (_ctx, w, _h, img) => {
       if (!img) return;
       const d = img.data;
-      const cell = 14;
+      const cell = Math.max(7, Math.round((w / 256) * 14));
       for (let y = 0; y < w; y++) {
         for (let x = 0; x < w; x++) {
           const cx = Math.floor(x / cell);
@@ -1292,7 +1491,7 @@ export function getFurPBR(
       roughness: textureCache[key + '_r'],
     };
   }
-  const size = 128;
+  const size = getTargetTexSize(128);
   const [br, bg, bb] = hexToRgb(baseHex);
   const heights = new Float32Array(size * size);
   const roughs = new Float32Array(size * size);

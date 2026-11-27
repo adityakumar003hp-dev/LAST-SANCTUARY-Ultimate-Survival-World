@@ -85,6 +85,7 @@ export class ApartmentTurrets {
   }> = [];
 
   private parentOrigin: THREE.Vector3;
+  private readonly _tmpTargetPos = new THREE.Vector3();
 
   constructor(parent: THREE.Group, origin: THREE.Vector3) {
     this.parentOrigin = origin;
@@ -346,6 +347,7 @@ export class ApartmentTurrets {
     playerPos: THREE.Vector3
   ) {
     const range = 32.0;
+    const rangeSq = range * range;
 
     for (const turret of this.turrets) {
       const st = turret.state;
@@ -361,22 +363,34 @@ export class ApartmentTurrets {
         }
       }
 
-      // Step 1: Acquire only explicitly hostile NPCs and hostile factions.
-      // Zombies are the game's existing hostile NPC class. Neutral wildlife is
-      // intentionally not a valid target for compound security.
-      let nearestTargetPos: THREE.Vector3 | null = null;
-      let targetDist = Infinity;
+      // Step 1: Acquire only explicitly hostile NPCs and hostile factions without per-entity Vector3 allocations.
+      let targetX = 0;
+      let targetY = 0;
+      let targetZ = 0;
+      let hasTarget = false;
+      let targetDistSq = Infinity;
       let foundZombieId: string | null = null;
       let foundFactionTarget: HostileFactionTurretTarget | null = null;
 
+      const wx = st.worldPosition.x;
+      const wy = st.worldPosition.y;
+      const wz = st.worldPosition.z;
+
       if (zombieMgr?.zombies) {
-        for (const z of zombieMgr.zombies) {
+        const zombies = zombieMgr.zombies;
+        for (let zi = 0; zi < zombies.length; zi++) {
+          const z = zombies[zi];
           if (z.state === 'dead' || z.health <= 0) continue;
-          const zPos = new THREE.Vector3(z.position[0], z.position[1] + 1.2, z.position[2]);
-          const d = st.worldPosition.distanceTo(zPos);
-          if (d < range && d < targetDist) {
-            targetDist = d;
-            nearestTargetPos = zPos;
+          const dx = z.position[0] - wx;
+          const dy = z.position[1] + 1.2 - wy;
+          const dz = z.position[2] - wz;
+          const dSq = dx * dx + dy * dy + dz * dz;
+          if (dSq < rangeSq && dSq < targetDistSq) {
+            targetDistSq = dSq;
+            targetX = z.position[0];
+            targetY = z.position[1] + 1.2;
+            targetZ = z.position[2];
+            hasTarget = true;
             foundZombieId = z.id;
             foundFactionTarget = null;
           }
@@ -384,37 +398,40 @@ export class ApartmentTurrets {
       }
 
       for (const candidate of this.hostileFactionTargets.values()) {
-        // Fail closed: only a living, explicitly hostile, non-player target may be engaged.
         if (!candidate.id || !candidate.factionId?.trim() || (candidate.id.toLowerCase() === 'player' || candidate.id.toLowerCase().startsWith('player_')) || candidate.isPlayer ||
             candidate.allegiance !== 'hostile' || !candidate.isAlive || candidate.health <= 0) continue;
-        const d = st.worldPosition.distanceTo(candidate.position);
-        if (d < range && d < targetDist) {
-          targetDist = d;
-          nearestTargetPos = candidate.position.clone();
+        const dx = candidate.position.x - wx;
+        const dy = candidate.position.y - wy;
+        const dz = candidate.position.z - wz;
+        const dSq = dx * dx + dy * dy + dz * dz;
+        if (dSq < rangeSq && dSq < targetDistSq) {
+          targetDistSq = dSq;
+          targetX = candidate.position.x;
+          targetY = candidate.position.y;
+          targetZ = candidate.position.z;
+          hasTarget = true;
           foundZombieId = null;
           foundFactionTarget = candidate;
         }
       }
 
       // Step 2: Aiming & Target Acquisition
-      if (nearestTargetPos) {
+      if (hasTarget) {
         st.targetId = foundZombieId || foundFactionTarget?.id || null;
         st.targetType = foundZombieId ? 'zombie' : 'faction';
 
-        // Calculate world aim vector from turret head to target
-        const turretHeadPos = new THREE.Vector3(
-          st.worldPosition.x,
-          st.worldPosition.y + 1.82,
-          st.worldPosition.z
-        );
-        const aimDir = new THREE.Vector3().subVectors(nearestTargetPos, turretHeadPos);
-        const distToTarget = aimDir.length();
-        aimDir.normalize();
+        const ax = targetX - wx;
+        const ay = targetY - (wy + 1.82);
+        const az = targetZ - wz;
+        const distToTarget = Math.hypot(ax, ay, az) || 1;
+        const nx = ax / distToTarget;
+        const ny = ay / distToTarget;
+        const nz = az / distToTarget;
 
         // Calculate desired yaw and pitch in local turret coordinate frame
-        const desiredYaw = Math.atan2(aimDir.x, aimDir.z);
-        const horizDist = Math.hypot(aimDir.x, aimDir.z);
-        const desiredPitch = -Math.atan2(aimDir.y, horizDist);
+        const desiredYaw = Math.atan2(nx, nz);
+        const horizDist = Math.hypot(nx, nz);
+        const desiredPitch = -Math.atan2(ny, horizDist);
 
         // Smooth heavy mechanical rotation
         st.currentYaw = THREE.MathUtils.damp(st.currentYaw, desiredYaw, 8.5, delta);
@@ -481,7 +498,8 @@ export class ApartmentTurrets {
                 st.ammo = Math.max(0, st.ammo - 1);
 
                 // Execute Shot & spawn 3D projectile tracer
-                this.fireTurretRound(turret, playerPos, nearestTargetPos, foundZombieId, foundFactionTarget?.id ?? null);
+                this._tmpTargetPos.set(targetX, targetY, targetZ);
+                this.fireTurretRound(turret, playerPos, this._tmpTargetPos, foundZombieId, foundFactionTarget?.id ?? null);
 
                 // Direct authoritative hit
                 if (foundZombieId && zombieMgr) {

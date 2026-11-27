@@ -30,6 +30,7 @@ export interface AurelionArchitectureHandles {
       indicatorCtx: CanvasRenderingContext2D | null;
       indicatorTex: THREE.CanvasTexture;
       indicatorCanvas: HTMLCanvasElement;
+      lastIndicatorState?: string;
     }
   >;
 }
@@ -95,13 +96,83 @@ export function buildAurelionArchitecture(
   const frontDoorRightLeaf = new THREE.Group();
   frontDoorRightLeaf.position.x = 1.3;
 
+  // Helper: constructs a solid opaque architectural wall span with framed privacy-glass window apertures
+  // so interior rooms are never revealed from outside while preserving modern luxury fortress proportions.
+  const addSolidWindowedFacadeSpan = (
+    targetGroup: THREE.Group,
+    axis: 'x' | 'z',
+    fixedCoord: number,
+    spanStart: number,
+    spanEnd: number,
+    floorY: number,
+    ceilingY: number,
+    bayCount: number,
+    includeGoldCrownBand: boolean
+  ) => {
+    const h = ceilingY - floorY;
+    const totalLen = spanEnd - spanStart;
+    if (totalLen <= 0.4) return;
+    const centerCoord = (spanStart + spanEnd) * 0.5;
+    const wallT = 0.32;
+    const sillH = 1.05;
+    const headerH = 0.55;
+    const winH = Math.max(0.6, h - sillH - headerH);
+    const winMidY = floorY + sillH + winH * 0.5;
+
+    const placeBox = (alongCenter: number, y: number, lenAlong: number, height: number, thick: number, mat: THREE.Material, shadow = true) => {
+      const geo =
+        axis === 'z'
+          ? new THREE.BoxGeometry(lenAlong, height, thick)
+          : new THREE.BoxGeometry(thick, height, lenAlong);
+      const mesh = new THREE.Mesh(geo, mat);
+      if (axis === 'z') mesh.position.set(alongCenter, y, fixedCoord);
+      else mesh.position.set(fixedCoord, y, alongCenter);
+      mesh.castShadow = shadow;
+      mesh.receiveShadow = true;
+      targetGroup.add(mesh);
+    };
+
+    // Solid opaque lower stone spandrel + upper travertine lintel + titanium fascia
+    placeBox(centerCoord, floorY + sillH * 0.5, totalLen, sillH, wallT, mats.graphiteStone);
+    placeBox(centerCoord, ceilingY - headerH * 0.5, totalLen, headerH, wallT, mats.honedTravertine);
+    placeBox(centerCoord, ceilingY - 0.1, totalLen + 0.32, 0.24, wallT + 0.14, mats.charcoalTitanium);
+    if (includeGoldCrownBand) {
+      placeBox(centerCoord, ceilingY + 0.04, totalLen + 0.38, 0.08, wallT + 0.18, mats.champagneGold, false);
+    }
+
+    // Divide mid-section into solid stone piers + framed opaque privacy-glass window bays
+    const safeBays = Math.max(1, bayCount);
+    const cornerPierW = Math.min(2.6, Math.max(1.2, totalLen * 0.11));
+    const midPierW = safeBays > 1 ? Math.min(1.85, Math.max(0.9, totalLen * 0.075)) : 0;
+    const usableWinTotal = Math.max(0.8, totalLen - cornerPierW * 2 - midPierW * (safeBays - 1));
+    const winW = usableWinTotal / safeBays;
+
+    // Left & Right solid corner bastion walls
+    placeBox(spanStart + cornerPierW * 0.5, winMidY, cornerPierW, winH, wallT, mats.honedTravertine);
+    placeBox(spanEnd - cornerPierW * 0.5, winMidY, cornerPierW, winH, wallT, mats.honedTravertine);
+
+    let cursor = spanStart + cornerPierW;
+    for (let b = 0; b < safeBays; b++) {
+      const winCenter = cursor + winW * 0.5;
+      // Dark titanium window frame + recessed opaque privacy-reflective glazing
+      placeBox(winCenter, winMidY, winW, winH, 0.22, mats.charcoalTitanium, false);
+      placeBox(winCenter, winMidY, Math.max(0.3, winW - 0.18), Math.max(0.3, winH - 0.18), 0.14, mats.exteriorPrivacyGlass, true);
+      // Solid interior travertine wall backing behind exterior glazing margins for airtight depth
+      cursor += winW;
+      if (b < safeBays - 1) {
+        placeBox(cursor + midPierW * 0.5, winMidY, midPierW, winH, wallT, mats.honedTravertine);
+        cursor += midPierW;
+      }
+    }
+  };
+
   for (const [leaf, sign] of [
     [frontDoorLeftLeaf, 1],
     [frontDoorRightLeaf, -1],
   ] as const) {
     const frame = new THREE.Mesh(new THREE.BoxGeometry(1.26, 2.85, 0.1), mats.charcoalTitanium);
     frame.position.set(sign * 0.63, 1.44, 0);
-    const pane = new THREE.Mesh(new THREE.BoxGeometry(1.06, 2.55, 0.05), mats.bronzeSmartGlass);
+    const pane = new THREE.Mesh(new THREE.BoxGeometry(1.06, 2.55, 0.05), mats.exteriorPrivacyGlass);
     pane.position.set(sign * 0.63, 1.44, 0);
     const pull = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.72, 10), mats.champagneGold);
     pull.position.set(sign * 1.12, 1.3, -0.09);
@@ -111,17 +182,17 @@ export function buildAurelionArchitecture(
   frontDoorGroup.add(frontDoorLeftLeaf, frontDoorRightLeaf);
   southWallMesh.add(frontDoorGroup);
 
-  // Rear North Sliding Patio Glass Doors at (0, 0.245, +11.9)
+  // Rear North Sliding Patio Privacy Glass Doors at (0, 0.245, +11.9)
   const patioDoorGroup = new THREE.Group();
   patioDoorGroup.position.set(0, 0.245, 11.9);
-  const patioDoorLeftLeaf = new THREE.Mesh(new THREE.BoxGeometry(1.35, 2.8, 0.08), mats.bronzeSmartGlass);
+  const patioDoorLeftLeaf = new THREE.Mesh(new THREE.BoxGeometry(1.35, 2.8, 0.08), mats.exteriorPrivacyGlass);
   patioDoorLeftLeaf.position.set(initialPatioOpen ? -1.45 : -0.68, 1.42, 0);
-  const patioDoorRightLeaf = new THREE.Mesh(new THREE.BoxGeometry(1.35, 2.8, 0.08), mats.bronzeSmartGlass);
+  const patioDoorRightLeaf = new THREE.Mesh(new THREE.BoxGeometry(1.35, 2.8, 0.08), mats.exteriorPrivacyGlass);
   patioDoorRightLeaf.position.set(initialPatioOpen ? 1.45 : 0.68, 1.42, 0);
   patioDoorGroup.add(patioDoorLeftLeaf, patioDoorRightLeaf);
   northWallMesh.add(patioDoorGroup);
 
-  // Exterior Stepped Facade Shell (F1..F6 enclosures + F7 crown rim)
+  // Exterior Stepped Facade Shell (F1..F6 solid opaque walls + framed privacy window bays)
   const aboveGroundIds: AurelionLevelId[] = ['F1', 'F2', 'F3', 'F4', 'F5', 'F6'];
   const mullionPositions: THREE.Matrix4[] = [];
   const sconcePositions: THREE.Matrix4[] = [];
@@ -133,73 +204,35 @@ export function buildAurelionArchitecture(
     const hw = spec.halfWidth;
     const hd = spec.halfDepth;
 
-    // South Facade (F1 has wide 2.6m centered grand doorway)
+    // South Facade (F1 has wide 2.7m centered grand doorway)
     if (id === 'F1') {
-      const segW = hw - 1.35;
-      for (const sx of [-1, 1]) {
-        const lower = new THREE.Mesh(new THREE.BoxGeometry(segW, 0.55, 0.28), mats.graphiteStone);
-        lower.position.set(sx * (1.35 + segW * 0.5), spec.floorY + 0.28, -hd);
-        const glass = new THREE.Mesh(new THREE.BoxGeometry(segW - 0.6, h - 0.9, 0.08), mats.bronzeSmartGlass);
-        glass.position.set(sx * (1.35 + segW * 0.5), midY + 0.1, -hd);
-        const fascia = new THREE.Mesh(new THREE.BoxGeometry(segW + 0.2, 0.28, 0.36), mats.charcoalTitanium);
-        fascia.position.set(sx * (1.35 + segW * 0.5), spec.ceilingY - 0.1, -hd);
-        southWallMesh.add(lower, glass, fascia);
-      }
-      const header = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.52, 0.32), mats.champagneGold);
-      header.position.set(0, spec.floorY + 3.08, -hd);
-      southWallMesh.add(header);
+      addSolidWindowedFacadeSpan(southWallMesh, 'z', -hd, -hw, -1.35, spec.floorY, spec.ceilingY, 2, false);
+      addSolidWindowedFacadeSpan(southWallMesh, 'z', -hd, 1.35, hw, spec.floorY, spec.ceilingY, 2, false);
+      const header = new THREE.Mesh(new THREE.BoxGeometry(2.8, 0.72, 0.36), mats.honedTravertine);
+      header.position.set(0, spec.ceilingY - 0.36, -hd);
+      header.castShadow = true;
+      const goldHeader = new THREE.Mesh(new THREE.BoxGeometry(2.9, 0.14, 0.4), mats.champagneGold);
+      goldHeader.position.set(0, spec.floorY + 2.95, -hd);
+      southWallMesh.add(header, goldHeader);
     } else {
-      const sLower = new THREE.Mesh(new THREE.BoxGeometry(hw * 2, 0.45, 0.26), mats.graphiteStone);
-      sLower.position.set(0, spec.floorY + 0.22, -hd);
-      const sGlass = new THREE.Mesh(new THREE.BoxGeometry(hw * 2 - 0.8, h - 0.85, 0.08), mats.bronzeSmartGlass);
-      sGlass.position.set(0, midY + 0.08, -hd);
-      const sFascia = new THREE.Mesh(new THREE.BoxGeometry(hw * 2 + 0.4, 0.26, 0.42), mats.charcoalTitanium);
-      sFascia.position.set(0, spec.ceilingY - 0.1, -hd);
-      const goldBand = new THREE.Mesh(new THREE.BoxGeometry(hw * 2 + 0.45, 0.08, 0.46), mats.champagneGold);
-      goldBand.position.set(0, spec.ceilingY + 0.04, -hd);
-      southWallMesh.add(sLower, sGlass, sFascia, goldBand);
+      addSolidWindowedFacadeSpan(southWallMesh, 'z', -hd, -hw, hw, spec.floorY, spec.ceilingY, 4, true);
     }
 
     // North Facade (F1 has rear patio opening)
     if (id === 'F1') {
-      const segW = hw - 1.45;
-      for (const sx of [-1, 1]) {
-        const lower = new THREE.Mesh(new THREE.BoxGeometry(segW, 0.55, 0.28), mats.graphiteStone);
-        lower.position.set(sx * (1.45 + segW * 0.5), spec.floorY + 0.28, hd);
-        const glass = new THREE.Mesh(new THREE.BoxGeometry(segW - 0.6, h - 0.9, 0.08), mats.bronzeSmartGlass);
-        glass.position.set(sx * (1.45 + segW * 0.5), midY + 0.1, hd);
-        const fascia = new THREE.Mesh(new THREE.BoxGeometry(segW + 0.2, 0.28, 0.36), mats.charcoalTitanium);
-        fascia.position.set(sx * (1.45 + segW * 0.5), spec.ceilingY - 0.1, hd);
-        northWallMesh.add(lower, glass, fascia);
-      }
+      addSolidWindowedFacadeSpan(northWallMesh, 'z', hd, -hw, -1.45, spec.floorY, spec.ceilingY, 2, false);
+      addSolidWindowedFacadeSpan(northWallMesh, 'z', hd, 1.45, hw, spec.floorY, spec.ceilingY, 2, false);
+      const nHeader = new THREE.Mesh(new THREE.BoxGeometry(3.0, 0.72, 0.36), mats.honedTravertine);
+      nHeader.position.set(0, spec.ceilingY - 0.36, hd);
+      nHeader.castShadow = true;
+      northWallMesh.add(nHeader);
     } else {
-      const nLower = new THREE.Mesh(new THREE.BoxGeometry(hw * 2, 0.45, 0.26), mats.graphiteStone);
-      nLower.position.set(0, spec.floorY + 0.22, hd);
-      const nGlass = new THREE.Mesh(new THREE.BoxGeometry(hw * 2 - 0.8, h - 0.85, 0.08), mats.bronzeSmartGlass);
-      nGlass.position.set(0, midY + 0.08, hd);
-      const nFascia = new THREE.Mesh(new THREE.BoxGeometry(hw * 2 + 0.4, 0.26, 0.42), mats.charcoalTitanium);
-      nFascia.position.set(0, spec.ceilingY - 0.1, hd);
-      const goldBand = new THREE.Mesh(new THREE.BoxGeometry(hw * 2 + 0.45, 0.08, 0.46), mats.champagneGold);
-      goldBand.position.set(0, spec.ceilingY + 0.04, hd);
-      northWallMesh.add(nLower, nGlass, nFascia, goldBand);
+      addSolidWindowedFacadeSpan(northWallMesh, 'z', hd, -hw, hw, spec.floorY, spec.ceilingY, 4, true);
     }
 
-    // West & East Facades (F5/F6 include open glass balcony access doors)
-    for (const [side, targetGroup] of [
-      [-1, westWallMesh],
-      [1, eastWallMesh],
-    ] as const) {
-      const x = side * hw;
-      const lower = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.45, hd * 2), mats.graphiteStone);
-      lower.position.set(x, spec.floorY + 0.22, 0);
-      const glass = new THREE.Mesh(new THREE.BoxGeometry(0.08, h - 0.85, hd * 2 - 0.8), mats.bronzeSmartGlass);
-      glass.position.set(x, midY + 0.08, 0);
-      const fascia = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.26, hd * 2 + 0.4), mats.charcoalTitanium);
-      fascia.position.set(x, spec.ceilingY - 0.1, 0);
-      const goldBand = new THREE.Mesh(new THREE.BoxGeometry(0.46, 0.08, hd * 2 + 0.45), mats.champagneGold);
-      goldBand.position.set(x, spec.ceilingY + 0.04, 0);
-      targetGroup.add(lower, glass, fascia, goldBand);
-    }
+    // West & East Facades — solid opaque fortress walls with framed privacy window bays
+    addSolidWindowedFacadeSpan(westWallMesh, 'x', -hw, -hd, hd, spec.floorY, spec.ceilingY, 3, true);
+    addSolidWindowedFacadeSpan(eastWallMesh, 'x', hw, -hd, hd, spec.floorY, spec.ceilingY, 3, true);
 
     // Collect instanced silver-titanium vertical mullions & warm exterior sconces
     for (let mx = -hw + 2.5; mx <= hw - 2.5; mx += 3.2) {
@@ -594,28 +627,32 @@ export function syncAurelionElevatorsVisual(
     vis.doorRight.position.x = slideOffset;
 
     if (vis.indicatorCtx) {
-      const ctx = vis.indicatorCtx;
-      ctx.fillStyle = '#0a0f18';
-      ctx.fillRect(0, 0, 256, 128);
-      ctx.strokeStyle = st.lockedByLoadShedding ? '#ef4444' : '#d4b26a';
-      ctx.lineWidth = 4;
-      ctx.strokeRect(4, 4, 248, 120);
-      ctx.fillStyle = st.lockedByLoadShedding ? '#f87171' : '#f4d58d';
-      ctx.font = 'bold 42px monospace';
-      ctx.textAlign = 'center';
-      ctx.fillText(st.currentFloor, 128, 62);
-      ctx.fillStyle = '#94a3b8';
-      ctx.font = '18px monospace';
-      ctx.fillText(
-        st.lockedByLoadShedding
-          ? 'POWER SHED'
-          : st.moving
-            ? `MOVING -> ${st.targetFloor}`
-            : '[E] SELECT FLOOR',
-        128,
-        102
-      );
-      vis.indicatorTex.needsUpdate = true;
+      const stateKey = `${st.currentFloor}|${st.moving ? 1 : 0}|${st.targetFloor}|${st.lockedByLoadShedding ? 1 : 0}`;
+      if (vis.lastIndicatorState !== stateKey) {
+        vis.lastIndicatorState = stateKey;
+        const ctx = vis.indicatorCtx;
+        ctx.fillStyle = '#0a0f18';
+        ctx.fillRect(0, 0, 256, 128);
+        ctx.strokeStyle = st.lockedByLoadShedding ? '#ef4444' : '#d4b26a';
+        ctx.lineWidth = 4;
+        ctx.strokeRect(4, 4, 248, 120);
+        ctx.fillStyle = st.lockedByLoadShedding ? '#f87171' : '#f4d58d';
+        ctx.font = 'bold 42px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(st.currentFloor, 128, 62);
+        ctx.fillStyle = '#94a3b8';
+        ctx.font = '18px monospace';
+        ctx.fillText(
+          st.lockedByLoadShedding
+            ? 'POWER SHED'
+            : st.moving
+              ? `MOVING -> ${st.targetFloor}`
+              : '[E] SELECT FLOOR',
+          128,
+          102
+        );
+        vis.indicatorTex.needsUpdate = true;
+      }
     }
   });
 }

@@ -20,6 +20,7 @@ export class AurelionMaterials {
   public readonly walnutWood: THREE.MeshStandardMaterial;
   public readonly oakWood: THREE.MeshStandardMaterial;
   public readonly bronzeSmartGlass: THREE.MeshPhysicalMaterial;
+  public readonly exteriorPrivacyGlass: THREE.MeshPhysicalMaterial;
   public readonly clearBalustradeGlass: THREE.MeshPhysicalMaterial;
   public readonly aquariumGlass: THREE.MeshPhysicalMaterial;
   public readonly poolWater: THREE.MeshStandardMaterial;
@@ -151,16 +152,35 @@ export class AurelionMaterials {
 
     this.bronzeSmartGlass = this.track(
       new THREE.MeshPhysicalMaterial({
-        color: 0x9ab5c2,
-        roughness: 0.06,
-        metalness: 0.12,
-        transmission: 0.25,
+        color: 0x687e8c,
+        roughness: 0.08,
+        metalness: 0.28,
         transparent: true,
-        opacity: 0.32,
+        opacity: 0.44,
         ior: 1.5,
-        reflectivity: 0.85,
+        reflectivity: 0.88,
+        clearcoat: 0.85,
+        clearcoatRoughness: 0.08,
         side: THREE.DoubleSide,
         depthWrite: false,
+      })
+    );
+
+    // Opaque, depth-written luxury architectural privacy glass for exterior windows:
+    // completely prevents seeing apartment interiors from outside and avoids double-pass transmission overhead.
+    this.exteriorPrivacyGlass = this.track(
+      new THREE.MeshPhysicalMaterial({
+        color: 0x162430,
+        roughness: 0.07,
+        metalness: 0.84,
+        ior: 1.52,
+        reflectivity: 0.96,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.05,
+        envMapIntensity: 1.45,
+        transparent: false,
+        depthWrite: true,
+        side: THREE.DoubleSide,
       })
     );
 
@@ -170,7 +190,7 @@ export class AurelionMaterials {
         roughness: 0.05,
         metalness: 0.08,
         transparent: true,
-        opacity: 0.26,
+        opacity: 0.28,
         side: THREE.DoubleSide,
         depthWrite: false,
       })

@@ -245,10 +245,12 @@ export function createRealisticWaterMaterial(
         // Atmospheric sky Fresnel bounce
         totalEmissiveRadiance += uHorizonColor * fresnel * 0.32;
         // Crisp solar specular glitter across micro-waves
-        vec3 sunDirN = normalize(uSunDir);
-        vec3 halfVec = normalize(sunDirN + wViewDir);
+        vec3 safeSun = length(uSunDir) > 0.001 ? uSunDir : vec3(0.45, 0.72, 0.52);
+        vec3 sunDirN = normalize(safeSun);
+        vec3 halfVec = normalize(sunDirN + wViewDir + vec3(0.0, 0.0001, 0.0));
         float sparkle = pow(max(dot(wNormal, halfVec), 0.0), 140.0);
-        totalEmissiveRadiance += uSunColor * sparkle * 0.95;`
+        totalEmissiveRadiance += uSunColor * min(sparkle * 0.95, 2.0);
+        totalEmissiveRadiance = clamp(totalEmissiveRadiance, vec3(0.0), vec3(2.8));`
       );
   };
 
@@ -310,9 +312,11 @@ export function applyFoliageWindShader(
         '#include <emissivemap_fragment>',
         `#include <emissivemap_fragment>
         // Subtle subsurface backlit sun glow through leaves & grass tips
-        vec3 fViewDir = normalize(vFoliageWorldPos - cameraPosition);
-        float sss = pow(clamp(dot(fViewDir, normalize(uSunDir)), 0.0, 1.0), 4.0);
-        totalEmissiveRadiance += diffuseColor.rgb * uSunColor * sss * 0.28;`
+        vec3 fRawView = vFoliageWorldPos - cameraPosition;
+        vec3 fViewDir = normalize(length(fRawView) > 0.001 ? fRawView : vec3(0.0, 0.0, 1.0));
+        vec3 fSunDir = normalize(length(uSunDir) > 0.001 ? uSunDir : vec3(0.45, 0.72, 0.52));
+        float sss = pow(clamp(dot(fViewDir, fSunDir), 0.0, 1.0), 4.0);
+        totalEmissiveRadiance += clamp(diffuseColor.rgb * uSunColor * sss * 0.28, vec3(0.0), vec3(1.5));`
       );
   };
   return mat;
@@ -323,7 +327,7 @@ export function applyFoliageWindShader(
  * - Volumetric radial solar shafts (god rays) when looking toward the sun
  * - Subtle optical vignette & micro-contrast grading
  * - Dynamic sprint / damage / underwater chromatic dispersion
- * - Anti-banding sky dither
+ * - Anti-banding sky dither + strict NaN/Inf safeguards against whiteout/blackout frames
  */
 export const CinematicPostShader = {
   uniforms: {
@@ -356,33 +360,44 @@ export const CinematicPostShader = {
     uniform float uTime;
     varying vec2 vUv;
 
+    vec3 sanitizeHdr(vec3 c) {
+      float rx = (c.r >= 0.0 && c.r <= 64.0) ? c.r : 0.0;
+      float gx = (c.g >= 0.0 && c.g <= 64.0) ? c.g : 0.0;
+      float bx = (c.b >= 0.0 && c.b <= 64.0) ? c.b : 0.0;
+      return clamp(vec3(rx, gx, bx), vec3(0.0), vec3(8.0));
+    }
+
     void main() {
-      vec2 toCenter = vUv - 0.5;
+      vec2 baseUv = clamp(vUv, vec2(0.001), vec2(0.999));
+      vec2 toCenter = baseUv - 0.5;
       float radialDist = length(toCenter);
 
       // Subtle edge-weighted optical chromatic dispersion
-      vec2 caOffset = toCenter * radialDist * uChromatic;
-      float r = texture2D(tDiffuse, vUv + caOffset).r;
-      float g = texture2D(tDiffuse, vUv).g;
-      float b = texture2D(tDiffuse, vUv - caOffset).b;
-      vec3 col = vec3(r, g, b);
+      vec2 caOffset = clamp(toCenter * radialDist * uChromatic, vec2(-0.012), vec2(0.012));
+      float r = texture2D(tDiffuse, clamp(baseUv + caOffset, vec2(0.001), vec2(0.999))).r;
+      float g = texture2D(tDiffuse, baseUv).g;
+      float b = texture2D(tDiffuse, clamp(baseUv - caOffset, vec2(0.001), vec2(0.999))).b;
+      vec3 col = sanitizeHdr(vec3(r, g, b));
 
-      // Volumetric radial sun-shaft scattering (8 fast samples)
-      if (uSunShaftIntensity > 0.005) {
-        vec2 deltaUv = (vUv - uSunScreenPos) * (1.0 / 8.0) * 0.72;
-        vec2 sampleUv = vUv;
+      // Volumetric radial sun-shaft scattering (8 fast samples, strictly bounded when sun is in front of camera)
+      bool sunPosValid =
+        (uSunScreenPos.x >= -1.2 && uSunScreenPos.x <= 2.2) &&
+        (uSunScreenPos.y >= -1.2 && uSunScreenPos.y <= 2.2);
+      if (uSunShaftIntensity > 0.005 && sunPosValid) {
+        vec2 deltaUv = (baseUv - uSunScreenPos) * (1.0 / 8.0) * 0.72;
+        vec2 sampleUv = baseUv;
         float decay = 1.0;
         vec3 godRay = vec3(0.0);
         for (int i = 0; i < 8; i++) {
           sampleUv -= deltaUv;
-          vec3 sCol = texture2D(tDiffuse, clamp(sampleUv, 0.002, 0.998)).rgb;
+          vec3 sCol = sanitizeHdr(texture2D(tDiffuse, clamp(sampleUv, 0.002, 0.998)).rgb);
           float lum = dot(sCol, vec3(0.299, 0.587, 0.114));
           // Only bright sky/sun pixels cast atmospheric shafts
           float skyMask = smoothstep(0.72, 1.25, lum);
-          godRay += sCol * skyMask * decay;
+          godRay += min(sCol, vec3(1.8)) * skyMask * decay;
           decay *= 0.84;
         }
-        col += godRay * uSunColor * (uSunShaftIntensity * 0.13);
+        col += clamp(godRay * uSunColor * (uSunShaftIntensity * 0.13), vec3(0.0), vec3(1.2));
       }
 
       // Micro-contrast & crisp color saturation
@@ -392,13 +407,152 @@ export const CinematicPostShader = {
 
       // Natural optical lens vignette
       float vig = smoothstep(0.95, 0.25, radialDist);
-      col *= mix(1.0 - uVignette, 1.0, vig);
+      col *= mix(clamp(1.0 - uVignette, 0.35, 1.0), 1.0, vig);
 
       // Ultra-subtle film dither eliminates sky/fog gradient banding
-      float grain = fract(sin(dot(vUv * 800.0 + uTime * 7.0, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+      float grain = fract(sin(dot(baseUv * 800.0 + mod(uTime, 120.0) * 7.0, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
       col += grain * 0.008;
 
-      gl_FragColor = vec4(max(col, 0.0), 1.0);
+      gl_FragColor = vec4(sanitizeHdr(col), 1.0);
     }
   `,
 };
+
+/**
+ * High-Speed Camera & Velocity Motion Blur Pass:
+ * - Screen-space angular camera reprojection + peripheral forward-speed streak blur
+ * - Preserves center crosshair sharpness while accelerating edge flow during sprinting, vehicles, and trains
+ * - Uses Interleaved Gradient Noise jitter so 8 taps stay silky smooth with zero banding or ghosting
+ * - Early-exits to a single tap when camera & player are stationary (0% idle GPU overhead)
+ */
+export const MotionBlurPostShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uVelocity: { value: new THREE.Vector2(0, 0) },
+    uRadialStrength: { value: 0.0 },
+    uIntensity: { value: 0.85 },
+    uTime: { value: 0.0 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform vec2 uVelocity;
+    uniform float uRadialStrength;
+    uniform float uIntensity;
+    uniform float uTime;
+    varying vec2 vUv;
+
+    vec3 sanitizeBlurHdr(vec3 c) {
+      float rx = (c.r >= 0.0 && c.r <= 64.0) ? c.r : 0.0;
+      float gx = (c.g >= 0.0 && c.g <= 64.0) ? c.g : 0.0;
+      float bx = (c.b >= 0.0 && c.b <= 64.0) ? c.b : 0.0;
+      return clamp(vec3(rx, gx, bx), vec3(0.0), vec3(12.0));
+    }
+
+    void main() {
+      vec2 uv = clamp(vUv, vec2(0.001), vec2(0.999));
+      vec2 toEdge = uv - vec2(0.5);
+      float distFromCenter = length(toEdge);
+
+      // Keep reticle/center crisp during forward sprints while panning blurs naturally across frame
+      float radialMask = smoothstep(0.08, 0.72, distFromCenter);
+      float rotMask = mix(0.68, 1.16, clamp(distFromCenter * 1.4, 0.0, 1.0));
+
+      vec2 vel = (uVelocity * rotMask + toEdge * (uRadialStrength * radialMask)) * uIntensity;
+      float velLen = length(vel);
+
+      if (velLen < 0.00035) {
+        gl_FragColor = vec4(sanitizeBlurHdr(texture2D(tDiffuse, uv).rgb), 1.0);
+        return;
+      }
+
+      float maxBlur = 0.036;
+      if (velLen > maxBlur) {
+        vel *= (maxBlur / velLen);
+      }
+
+      // Temporal Interleaved Gradient Noise breaks up discrete step banding
+      float framePhase = mod(uTime * 60.0, 29.0);
+      float ign = fract(
+        52.9829189 * fract(dot(gl_FragCoord.xy + vec2(framePhase * 7.13, framePhase * 5.71), vec2(0.06711056, 0.00583715)))
+      );
+      float jitter = ign - 0.5;
+
+      vec3 accum = vec3(0.0);
+      float totalWeight = 0.0;
+
+      for (int i = 0; i < 8; i++) {
+        float t = ((float(i) + 0.5 + jitter * 0.75) / 8.0) - 0.5;
+        vec2 sampleUv = clamp(uv + vel * t, vec2(0.001), vec2(0.999));
+        float w = 1.0 - abs(t) * 0.65;
+        accum += sanitizeBlurHdr(texture2D(tDiffuse, sampleUv).rgb) * w;
+        totalWeight += w;
+      }
+
+      gl_FragColor = vec4(accum / max(0.001, totalWeight), 1.0);
+    }
+  `,
+};
+
+/**
+ * High-Performance Spatial Upscaling Pass (FidelityFX CAS-inspired 5-tap edge-adaptive upscaler):
+ * - Runs at full native output resolution on the final screen pass
+ * - Reconstructs crisp silhouettes & fine foliage/building edges when internal resolution is scaled down
+ * - Uses adaptive contrast limiting to prevent halos or overshoot ringing
+ */
+export const UpscaleSharpenShader = {
+  uniforms: {
+    tDiffuse: { value: null },
+    uTexelSize: { value: new THREE.Vector2(1 / 1280, 1 / 720) },
+    uSharpness: { value: 0.55 },
+  },
+  vertexShader: /* glsl */ `
+    varying vec2 vUv;
+    void main() {
+      vUv = uv;
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }
+  `,
+  fragmentShader: /* glsl */ `
+    uniform sampler2D tDiffuse;
+    uniform vec2 uTexelSize;
+    uniform float uSharpness;
+    varying vec2 vUv;
+
+    void main() {
+      vec2 uv = clamp(vUv, vec2(0.0005), vec2(0.9995));
+      vec3 e = clamp(texture2D(tDiffuse, uv).rgb, vec3(0.0), vec3(1.0));
+
+      if (uSharpness <= 0.01) {
+        gl_FragColor = vec4(e, 1.0);
+        return;
+      }
+
+      vec3 b = clamp(texture2D(tDiffuse, clamp(uv + vec2(0.0, -uTexelSize.y), vec2(0.0005), vec2(0.9995))).rgb, vec3(0.0), vec3(1.0));
+      vec3 d = clamp(texture2D(tDiffuse, clamp(uv + vec2(-uTexelSize.x, 0.0), vec2(0.0005), vec2(0.9995))).rgb, vec3(0.0), vec3(1.0));
+      vec3 f = clamp(texture2D(tDiffuse, clamp(uv + vec2(uTexelSize.x, 0.0), vec2(0.0005), vec2(0.9995))).rgb, vec3(0.0), vec3(1.0));
+      vec3 h = clamp(texture2D(tDiffuse, clamp(uv + vec2(0.0, uTexelSize.y), vec2(0.0005), vec2(0.9995))).rgb, vec3(0.0), vec3(1.0));
+
+      // Local contrast envelope across 5-tap cross
+      vec3 mn = min(e, min(min(b, h), min(d, f)));
+      vec3 mx = max(e, max(max(b, h), max(d, f)));
+
+      // Contrast-adaptive sharpening lobe (zero ringing on high-contrast edges)
+      vec3 amp = clamp(min(mn, 1.0 - mx) / max(mx, vec3(0.0001)), vec3(0.0), vec3(1.0));
+      amp = sqrt(amp);
+
+      float peak = -1.0 / mix(8.5, 4.75, clamp(uSharpness, 0.0, 1.0));
+      vec3 w = amp * peak;
+
+      vec3 upscaled = (e + (b + d + f + h) * w) / max(vec3(0.001), 1.0 + 4.0 * w);
+      gl_FragColor = vec4(clamp(upscaled, vec3(0.0), vec3(1.0)), 1.0);
+    }
+  `,
+};
+

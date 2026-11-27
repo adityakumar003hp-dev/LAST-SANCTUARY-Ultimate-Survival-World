@@ -35,6 +35,11 @@ export interface GraphicsEffectiveTarget {
   bloomStrength: number;
   bloomRadius: number;
   bloomThreshold: number;
+  motionBlurEnabled: boolean;
+  motionBlurIntensity: number;
+  dynamicResolutionEnabled: boolean;
+  dynamicResolutionScale: number;
+  upscaleSharpening: number;
   sunShaftIntensity: number;
   anisotropy: number;
   viewDistanceChunks: number;
@@ -49,6 +54,14 @@ export interface GraphicsEffectiveTarget {
 
 export function clampRenderScale(value: number): number {
   return Math.max(0.6, Math.min(2.0, Math.round(value * 20) / 20));
+}
+
+export function clampMotionBlurIntensity(value: number): number {
+  return Math.max(0.25, Math.min(1.5, Math.round(value * 20) / 20));
+}
+
+export function clampDynamicMinScale(value: number): number {
+  return Math.max(0.6, Math.min(0.9, Math.round(value * 20) / 20));
 }
 
 export function clampViewDistanceChunks(value: number): number {
@@ -78,6 +91,10 @@ export function getPresetGraphicsConfig(
       shadowResolution: 0,
       postProcessingEnabled: false,
       bloomEnabled: false,
+      motionBlurEnabled: false,
+      motionBlurIntensity: 0.65,
+      dynamicResolutionEnabled: !caps.isSoftwareGl,
+      dynamicResolutionMinScale: 0.65,
       anisotropyLevel: 1,
       viewDistanceChunks: 1,
       particleDensity: 0.45,
@@ -95,6 +112,10 @@ export function getPresetGraphicsConfig(
       shadowResolution: caps.isMobile || lowMem ? 0 : 2048,
       postProcessingEnabled: !caps.isMobile && !lowMem,
       bloomEnabled: false,
+      motionBlurEnabled: !caps.isMobile,
+      motionBlurIntensity: 0.85,
+      dynamicResolutionEnabled: true,
+      dynamicResolutionMinScale: 0.7,
       anisotropyLevel: 4,
       viewDistanceChunks: 2,
       particleDensity: 0.75,
@@ -112,6 +133,10 @@ export function getPresetGraphicsConfig(
       shadowResolution: caps.isMobile || lowMem ? 0 : 2048,
       postProcessingEnabled: !caps.isMobile && !lowMem,
       bloomEnabled: !caps.isMobile && !lowMem,
+      motionBlurEnabled: !caps.isMobile,
+      motionBlurIntensity: 0.95,
+      dynamicResolutionEnabled: true,
+      dynamicResolutionMinScale: 0.75,
       anisotropyLevel: caps.isMobile || lowMem ? 4 : 8,
       viewDistanceChunks: caps.isMobile || lowMem ? 2 : 3,
       particleDensity: 1.0,
@@ -132,6 +157,10 @@ export function getPresetGraphicsConfig(
       shadowResolution: constrained ? 0 : 3072,
       postProcessingEnabled: !constrained,
       bloomEnabled: !constrained,
+      motionBlurEnabled: !caps.isMobile,
+      motionBlurIntensity: 1.05,
+      dynamicResolutionEnabled: true,
+      dynamicResolutionMinScale: 0.75,
       anisotropyLevel: constrained ? 4 : 16,
       viewDistanceChunks: constrained ? 2 : 5,
       particleDensity: constrained ? 0.75 : 1.0,
@@ -149,6 +178,10 @@ export function getPresetGraphicsConfig(
     shadowResolution: caps.isMobile || lowMem ? 0 : 2048,
     postProcessingEnabled: !caps.isMobile && !lowMem,
     bloomEnabled: !caps.isMobile && !lowMem,
+    motionBlurEnabled: !caps.isMobile,
+    motionBlurIntensity: 1.0,
+    dynamicResolutionEnabled: true,
+    dynamicResolutionMinScale: 0.75,
     anisotropyLevel: caps.isMobile || lowMem ? 4 : 8,
     viewDistanceChunks: caps.isMobile || lowMem ? 2 : 3,
     particleDensity: 1.0,
@@ -204,6 +237,22 @@ export function loadStoredGraphicsConfig(
               : base.postProcessingEnabled,
           bloomEnabled:
             typeof parsed.bloomEnabled === 'boolean' ? parsed.bloomEnabled && !constrainedDevice : base.bloomEnabled,
+          motionBlurEnabled:
+            typeof parsed.motionBlurEnabled === 'boolean'
+              ? parsed.motionBlurEnabled && !caps.isSoftwareGl
+              : base.motionBlurEnabled,
+          motionBlurIntensity:
+            typeof parsed.motionBlurIntensity === 'number' && Number.isFinite(parsed.motionBlurIntensity)
+              ? clampMotionBlurIntensity(parsed.motionBlurIntensity)
+              : base.motionBlurIntensity,
+          dynamicResolutionEnabled:
+            typeof parsed.dynamicResolutionEnabled === 'boolean'
+              ? parsed.dynamicResolutionEnabled && !caps.isSoftwareGl
+              : base.dynamicResolutionEnabled,
+          dynamicResolutionMinScale:
+            typeof parsed.dynamicResolutionMinScale === 'number' && Number.isFinite(parsed.dynamicResolutionMinScale)
+              ? clampDynamicMinScale(parsed.dynamicResolutionMinScale)
+              : base.dynamicResolutionMinScale,
           anisotropyLevel:
             parsed.anisotropyLevel === 1 ||
             parsed.anisotropyLevel === 4 ||
@@ -349,6 +398,12 @@ export class GraphicsManager {
   public governorActionLabel: string = 'Full Fidelity';
   public watchdogDprFactor: number = 1.0;
 
+  // Dynamic Resolution Scaling (DRS) state for combat/action framerate protection
+  public dynamicResolutionScale: number = 1.0;
+  public combatActionActive: boolean = false;
+  private drsStepTimer: number = 0;
+  private drsRecoverTimer: number = 0;
+
   // Frame pacing telemetry
   public rollingFps: number = 60;
   public avgFrameTimeMs: number = 16.6;
@@ -412,10 +467,18 @@ export class GraphicsManager {
     if (patch.maxLocalLights !== undefined) {
       next.maxLocalLights = Math.max(2, Math.min(6, Math.round(patch.maxLocalLights)));
     }
+    if (patch.motionBlurIntensity !== undefined) {
+      next.motionBlurIntensity = clampMotionBlurIntensity(patch.motionBlurIntensity);
+    }
+    if (patch.dynamicResolutionMinScale !== undefined) {
+      next.dynamicResolutionMinScale = clampDynamicMinScale(patch.dynamicResolutionMinScale);
+    }
     if (this.caps.isSoftwareGl) {
       next.shadowsEnabled = false;
       next.postProcessingEnabled = false;
       next.bloomEnabled = false;
+      next.motionBlurEnabled = false;
+      next.dynamicResolutionEnabled = false;
       next.shadowResolution = 0;
       next.anisotropyLevel = 1;
       next.viewDistanceChunks = 1;
@@ -427,6 +490,9 @@ export class GraphicsManager {
       next.shadowResolution = 0;
       next.postProcessingEnabled = false;
       next.bloomEnabled = false;
+      if (this.caps.isMobile) {
+        next.motionBlurEnabled = false;
+      }
       next.anisotropyLevel = next.anisotropyLevel > 4 ? 4 : next.anisotropyLevel;
       next.viewDistanceChunks = Math.min(next.viewDistanceChunks, 2);
       next.particleDensity = Math.min(next.particleDensity, 0.75);
@@ -454,6 +520,10 @@ export class GraphicsManager {
   public resetGovernor() {
     this.governorLevel = 0;
     this.watchdogDprFactor = 1.0;
+    this.dynamicResolutionScale = 1.0;
+    this.drsStepTimer = 0;
+    this.drsRecoverTimer = 0;
+    this.combatActionActive = false;
     this.lowFpsTimer = 0;
     this.recoveryTimer = 0;
     this.governorState = this.config.autoGovernor ? 'optimal' : 'manual';
@@ -554,6 +624,17 @@ export class GraphicsManager {
               ? 'high'
               : 'ultra';
 
+    const motionBlurEnabled =
+      this.config.motionBlurEnabled && !this.caps.isSoftwareGl && hasComposer && this.governorLevel < 3;
+    const dynamicResolutionEnabled = this.config.dynamicResolutionEnabled && !this.caps.isSoftwareGl;
+    const dynamicResolutionScale = dynamicResolutionEnabled
+      ? Math.max(this.config.dynamicResolutionMinScale, Math.min(1.0, this.dynamicResolutionScale))
+      : 1.0;
+    const upscaleSharpening =
+      dynamicResolutionEnabled && hasComposer && dynamicResolutionScale < 0.99
+        ? Math.max(0.25, Math.min(0.92, (1.0 - dynamicResolutionScale) * 2.15 + 0.18))
+        : 0.0;
+
     return {
       desiredDpr: baseDpr,
       watchdogDprFactor: dprFactor,
@@ -567,6 +648,11 @@ export class GraphicsManager {
       bloomStrength: (preset === 'ultra_5x' || preset === 'absolute_realism') ? 0.24 : 0.17,
       bloomRadius: (preset === 'ultra_5x' || preset === 'absolute_realism') ? 0.45 : 0.36,
       bloomThreshold: (preset === 'ultra_5x' || preset === 'absolute_realism') ? 0.86 : 0.91,
+      motionBlurEnabled,
+      motionBlurIntensity: this.config.motionBlurIntensity,
+      dynamicResolutionEnabled,
+      dynamicResolutionScale,
+      upscaleSharpening,
       sunShaftIntensity: (preset === 'ultra_5x' || preset === 'absolute_realism') ? 0.28 : preset === 'quality' ? 0.18 : 0.10,
       anisotropy,
       viewDistanceChunks,
@@ -585,13 +671,14 @@ export class GraphicsManager {
   }
 
   /**
-   * Records frame timing and runs the smooth Anti-Lag Governor.
+   * Records frame timing and runs Combat-Aware Dynamic Resolution Scaling + Anti-Lag Governor.
    * Returns true if effective visual configuration changed and needs re-application.
    */
   public recordFrameAndGovern(
     rawElapsedSec: number,
     frameWorkMs: number,
-    isPaused: boolean
+    isPaused: boolean,
+    combatIntensity = 0
   ): { changed: boolean; emergencyTrimRequested: boolean } {
     const elapsedMs = Math.max(1, rawElapsedSec * 1000);
     this.lastFrameWorkMs = frameWorkMs;
@@ -619,7 +706,8 @@ export class GraphicsManager {
       this.chunkCooldownFrames--;
     }
 
-    if (isPaused || this.caps.isSoftwareGl || !this.config.autoGovernor) {
+    if (isPaused || this.caps.isSoftwareGl) {
+      this.combatActionActive = false;
       if (!this.config.autoGovernor) {
         this.governorState = 'manual';
         this.governorActionLabel = 'Manual Control';
@@ -629,11 +717,87 @@ export class GraphicsManager {
 
     const targetFps = this.config.targetFps;
     const targetFrameMs = 1000 / targetFps;
-    const minAcceptableFps = targetFps === 60 ? 40 : 22;
-    const recoveryFps = targetFps === 60 ? 54 : 27;
-
     let changed = false;
     let emergencyTrimRequested = false;
+
+    // 1. Combat-Aware Dynamic Resolution Scaling with High-Performance CAS Upscaling
+    if (this.config.dynamicResolutionEnabled) {
+      const minScale = this.config.dynamicResolutionMinScale;
+      const rawTiers = [1.0, 0.92, 0.85, 0.78, 0.70, 0.65, 0.60];
+      const tiers = rawTiers.filter((t) => t >= minScale - 0.001);
+      if (tiers.length === 0 || tiers[tiers.length - 1] > minScale + 0.01) {
+        tiers.push(minScale);
+      }
+      let currIdx = 0;
+      let bestDiff = Infinity;
+      for (let i = 0; i < tiers.length; i++) {
+        const diff = Math.abs(tiers[i] - this.dynamicResolutionScale);
+        if (diff < bestDiff) {
+          bestDiff = diff;
+          currIdx = i;
+        }
+      }
+
+      this.combatActionActive = combatIntensity >= 0.22;
+      const frameBudgetThreshold = combatIntensity >= 0.35 ? targetFrameMs * 0.95 : targetFrameMs * 1.06;
+      const needsDownscale =
+        this.rollingFps < targetFps * 0.92 ||
+        this.avgFrameTimeMs > frameBudgetThreshold ||
+        (combatIntensity >= 0.45 && this.p95FrameTimeMs > targetFrameMs * 1.16);
+
+      if (needsDownscale && currIdx < tiers.length - 1) {
+        this.drsRecoverTimer = 0;
+        this.drsStepTimer += rawElapsedSec;
+        const stepInterval = combatIntensity >= 0.45 ? 0.35 : 0.75;
+        if (this.drsStepTimer >= stepInterval) {
+          this.drsStepTimer = 0;
+          const jump = this.rollingFps < targetFps * 0.72 && currIdx + 2 < tiers.length ? 2 : 1;
+          const nextIdx = Math.min(tiers.length - 1, currIdx + jump);
+          if (Math.abs(tiers[nextIdx] - this.dynamicResolutionScale) > 0.015) {
+            this.dynamicResolutionScale = tiers[nextIdx];
+            changed = true;
+          }
+        }
+      } else if (!needsDownscale && currIdx > 0) {
+        this.drsStepTimer = 0;
+        const hasHeadroom =
+          this.rollingFps >= targetFps * 0.95 &&
+          this.p95FrameTimeMs < targetFrameMs * 1.15 &&
+          combatIntensity < 0.35;
+        if (hasHeadroom) {
+          this.drsRecoverTimer += rawElapsedSec;
+          if (this.drsRecoverTimer >= 2.2) {
+            this.drsRecoverTimer = 0;
+            const nextIdx = Math.max(0, currIdx - 1);
+            if (Math.abs(tiers[nextIdx] - this.dynamicResolutionScale) > 0.015) {
+              this.dynamicResolutionScale = tiers[nextIdx];
+              changed = true;
+            }
+          }
+        }
+      } else {
+        this.drsStepTimer = Math.max(0, this.drsStepTimer - rawElapsedSec * 0.5);
+        this.drsRecoverTimer = Math.max(0, this.drsRecoverTimer - rawElapsedSec * 0.5);
+      }
+    } else {
+      this.combatActionActive = combatIntensity >= 0.22;
+      if (this.dynamicResolutionScale < 0.99) {
+        this.dynamicResolutionScale = 1.0;
+        changed = true;
+      }
+    }
+
+    if (!this.config.autoGovernor) {
+      this.governorState = 'manual';
+      this.governorActionLabel =
+        this.config.dynamicResolutionEnabled && this.dynamicResolutionScale < 0.99
+          ? `DRS ${Math.round(this.dynamicResolutionScale * 100)}% CAS`
+          : 'Manual Control';
+      return { changed, emergencyTrimRequested: false };
+    }
+
+    const minAcceptableFps = targetFps === 60 ? 40 : 22;
+    const recoveryFps = targetFps === 60 ? 54 : 27;
 
     const isLagging = this.rollingFps < minAcceptableFps || this.p95FrameTimeMs > targetFrameMs * 2.15;
     if (isLagging) {
@@ -670,8 +834,11 @@ export class GraphicsManager {
           this.governorState = 'stabilized';
         }
       } else {
-        this.governorState = 'optimal';
-        this.governorActionLabel = 'Full Fidelity';
+        this.governorState = this.config.dynamicResolutionEnabled && this.dynamicResolutionScale < 0.99 ? 'stabilized' : 'optimal';
+        this.governorActionLabel =
+          this.config.dynamicResolutionEnabled && this.dynamicResolutionScale < 0.99
+            ? `DRS ${Math.round(this.dynamicResolutionScale * 100)}% CAS`
+            : 'Full Fidelity';
       }
     }
 
@@ -706,14 +873,11 @@ export class GraphicsManager {
   }
 
   /**
-   * Recommends safe WebGLRenderTarget MSAA sample count to prevent GPU OOM crashes.
+   * Recommends safe WebGLRenderTarget MSAA sample count to prevent GPU OOM crashes and
+   * HalfFloatType multisampled framebuffer black-screen corruption on WebGL2 drivers.
    */
-  public getSafeComposerSamples(viewportWidth: number, viewportHeight: number, isWebGL2: boolean): number {
-    if (!isWebGL2 || this.caps.isSoftwareGl || this.caps.isMobile) return 0;
-    if (this.caps.deviceMemoryGb > 0 && this.caps.deviceMemoryGb <= 4) return 0;
-    const maxPixels = viewportWidth * viewportHeight;
-    if (maxPixels > 2560 * 1440) return 0;
-    return 2;
+  public getSafeComposerSamples(_viewportWidth: number, _viewportHeight: number, _isWebGL2: boolean): number {
+    return 0;
   }
 
   /**
@@ -856,6 +1020,11 @@ export class GraphicsManager {
     effective: GraphicsEffectiveTarget
   ): GraphicsManagerSnapshot {
     const dpr = renderer.getPixelRatio();
+    const internalScale = effective.dynamicResolutionScale;
+    const renderWidth = Math.round(viewportWidth * dpr);
+    const renderHeight = Math.round(viewportHeight * dpr);
+    const internalRenderWidth = Math.max(1, Math.round(renderWidth * internalScale));
+    const internalRenderHeight = Math.max(1, Math.round(renderHeight * internalScale));
     const renderInfo = renderer.info.render;
     const memInfo = renderer.info.memory;
     return {
@@ -867,12 +1036,21 @@ export class GraphicsManager {
       p95FrameTimeMs: Math.round(this.p95FrameTimeMs * 10) / 10,
       dpr,
       watchdogDprFactor: this.watchdogDprFactor,
-      renderWidth: Math.round(viewportWidth * dpr),
-      renderHeight: Math.round(viewportHeight * dpr),
+      renderWidth,
+      renderHeight,
+      internalRenderWidth,
+      internalRenderHeight,
       shadowMapRes: effective.shadowsEnabled ? effective.shadowResolution : 0,
       shadowsEnabled: effective.shadowsEnabled,
       postProcessingEnabled: effective.postProcessingEnabled,
       bloomEnabled: effective.bloomEnabled,
+      motionBlurEnabled: effective.motionBlurEnabled,
+      motionBlurIntensity: effective.motionBlurIntensity,
+      dynamicResolutionEnabled: effective.dynamicResolutionEnabled,
+      dynamicResolutionMinScale: this.config.dynamicResolutionMinScale,
+      dynamicResolutionScale: internalScale,
+      combatActionActive: this.combatActionActive,
+      upscalingActive: effective.dynamicResolutionEnabled && internalScale < 0.99,
       anisotropy: effective.anisotropy,
       viewDistanceChunks: this.config.viewDistanceChunks,
       effectiveViewDistanceChunks: effective.viewDistanceChunks,

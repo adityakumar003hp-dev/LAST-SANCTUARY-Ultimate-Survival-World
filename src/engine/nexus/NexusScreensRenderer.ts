@@ -18,11 +18,20 @@ export class NexusScreensRenderer {
   private directoryTex: THREE.CanvasTexture;
   private nextBankToUpdate = 0;
   private tickTimer = 0;
+  private readonly floorGroups: Record<number, THREE.Group>;
+  private readonly bankFloors: Set<number>[] = [];
 
   constructor(
     floorGroups: Record<number, THREE.Group>,
     onRegisterFloor1Directory?: (mesh: THREE.Mesh) => void
   ) {
+    this.floorGroups = floorGroups;
+    for (let b = 0; b < NEXUS_SCREEN_BANK_COUNT; b++) {
+      this.bankFloors.push(new Set<number>());
+    }
+    for (const spec of NEXUS_ALL_SCREENS) {
+      this.bankFloors[spec.bank]?.add(spec.floor);
+    }
     const bezelMat = new THREE.MeshStandardMaterial({
       color: 0x0f141c,
       roughness: 0.28,
@@ -131,12 +140,27 @@ export class NexusScreensRenderer {
       return;
     }
 
-    // Render 2 banks per tick + F1 directory periodically
-    for (let step = 0; step < 2; step++) {
-      this.renderBank(this.nextBankToUpdate, systems, live);
+    // Render up to 2 visible banks per tick + F1 directory when F1 visible
+    let rendered = 0;
+    for (let tries = 0; tries < NEXUS_SCREEN_BANK_COUNT && rendered < 2; tries++) {
+      const bankIdx = this.nextBankToUpdate;
       this.nextBankToUpdate = (this.nextBankToUpdate + 1) % NEXUS_SCREEN_BANK_COUNT;
+      const floors = this.bankFloors[bankIdx];
+      let anyVisible = false;
+      if (floors) {
+        for (const fl of floors) {
+          if (this.floorGroups[fl]?.visible) {
+            anyVisible = true;
+            break;
+          }
+        }
+      }
+      if (anyVisible) {
+        this.renderBank(bankIdx, systems, live);
+        rendered++;
+      }
     }
-    if (this.nextBankToUpdate === 0) {
+    if (this.nextBankToUpdate === 0 && this.floorGroups[1]?.visible) {
       this.renderFloor1Directory(systems, live);
     }
   }

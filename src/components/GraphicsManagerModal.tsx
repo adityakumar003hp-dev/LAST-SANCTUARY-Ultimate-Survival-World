@@ -212,13 +212,23 @@ export const GraphicsManagerModal: React.FC<GraphicsManagerModalProps> = ({
               <div className="rounded-xl border border-neutral-800 bg-neutral-900/80 px-3 py-2">
                 <div className="flex items-center gap-1.5 text-[10px] font-mono uppercase text-neutral-400">
                   <Monitor className="h-3.5 w-3.5 text-sky-400" />
-                  <span>Render Scale</span>
+                  <span>{snap.upscalingActive ? 'CAS Upscaled' : 'Render Scale'}</span>
                 </div>
                 <div className="mt-0.5 font-mono tabular-nums text-sm font-bold text-neutral-100">
-                  {snap.renderWidth}×{snap.renderHeight}
+                  {snap.upscalingActive ? (
+                    <span className="text-sky-300">
+                      {snap.internalRenderWidth}×{snap.internalRenderHeight} → {snap.renderWidth}×{snap.renderHeight}
+                    </span>
+                  ) : (
+                    <span>
+                      {snap.renderWidth}×{snap.renderHeight}
+                    </span>
+                  )}
                 </div>
                 <div className="text-[10px] font-mono text-neutral-400 tabular-nums">
-                  {snap.dpr.toFixed(2)}x DPR · {snap.anisotropy}x AF
+                  {snap.upscalingActive
+                    ? `${Math.round(snap.dynamicResolutionScale * 100)}% DRS · CAS Sharp`
+                    : `${snap.dpr.toFixed(2)}x DPR · ${snap.anisotropy}x AF`}
                 </div>
               </div>
 
@@ -300,6 +310,67 @@ export const GraphicsManagerModal: React.FC<GraphicsManagerModalProps> = ({
                     </button>
                   ))}
                 </div>
+              </div>
+
+              {/* Dynamic Resolution Scaling & High-Performance CAS Upscaler */}
+              <div className="flex flex-col gap-2.5 pt-2.5 border-t border-neutral-800/80">
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center gap-1.5 text-xs font-bold text-sky-300">
+                      <Zap className="h-3.5 w-3.5" />
+                      <span>Dynamic Resolution Scaling (CAS Upscaler)</span>
+                      {snap?.upscalingActive && (
+                        <span className="rounded bg-sky-500/20 border border-sky-400/40 px-1.5 py-0.5 text-[9px] font-mono uppercase text-sky-300">
+                          Active {Math.round(snap.dynamicResolutionScale * 100)}%
+                        </span>
+                      )}
+                      {snap?.combatActionActive && (
+                        <span className="rounded bg-amber-500/20 border border-amber-400/40 px-1.5 py-0.5 text-[9px] font-mono uppercase text-amber-300">
+                          Combat Guard
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-neutral-400 mt-0.5">
+                      Dynamically scales internal render resolution during high-action combat and applies 5-tap Contrast-Adaptive Spatial Upscaling (CAS) to keep frame rates locked without blur.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={Boolean(snap?.isSoftwareGl)}
+                    onClick={() => applyPatch({ dynamicResolutionEnabled: !effectiveCfg.dynamicResolutionEnabled })}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer disabled:opacity-40 ${
+                      effectiveCfg.dynamicResolutionEnabled ? 'bg-sky-500' : 'bg-neutral-800'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        effectiveCfg.dynamicResolutionEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {effectiveCfg.dynamicResolutionEnabled && (
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold text-neutral-300">Minimum Combat Scale Floor</span>
+                    <div className="flex gap-1.5">
+                      {([0.65, 0.7, 0.75, 0.85] as const).map((minScale) => (
+                        <button
+                          key={minScale}
+                          type="button"
+                          onClick={() => applyPatch({ dynamicResolutionMinScale: minScale })}
+                          className={`px-2.5 py-1 rounded-lg text-[10px] font-mono font-bold cursor-pointer border ${
+                            Math.abs(effectiveCfg.dynamicResolutionMinScale - minScale) < 0.02
+                              ? 'bg-sky-500 text-neutral-950 border-sky-400'
+                              : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:border-neutral-700'
+                          }`}
+                        >
+                          {Math.round(minScale * 100)}%
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -469,6 +540,49 @@ export const GraphicsManagerModal: React.FC<GraphicsManagerModalProps> = ({
                     />
                   </button>
                 </div>
+
+                <div className="flex items-center justify-between gap-2 sm:col-span-2 pt-2 border-t border-neutral-800/70">
+                  <div className="flex flex-col">
+                    <span className="text-xs font-semibold text-neutral-200">Cinematic Speed Motion Blur</span>
+                    <span className="text-[10px] text-neutral-400">
+                      Camera-velocity &amp; high-speed sprint/vehicle directional blur
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    disabled={Boolean(snap?.isSoftwareGl)}
+                    onClick={() => applyPatch({ motionBlurEnabled: !effectiveCfg.motionBlurEnabled })}
+                    className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer disabled:opacity-40 ${
+                      effectiveCfg.motionBlurEnabled ? 'bg-amber-500' : 'bg-neutral-800'
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                        effectiveCfg.motionBlurEnabled ? 'translate-x-6' : 'translate-x-1'
+                      }`}
+                    />
+                  </button>
+                </div>
+
+                {effectiveCfg.motionBlurEnabled && (
+                  <div className="flex flex-col gap-1.5 sm:col-span-2">
+                    <div className="flex items-center justify-between text-xs font-semibold text-neutral-300">
+                      <span>Motion Blur Shutter Strength</span>
+                      <span className="font-mono tabular-nums text-amber-300">
+                        {Math.round(effectiveCfg.motionBlurIntensity * 100)}%
+                      </span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0.25"
+                      max="1.5"
+                      step="0.05"
+                      value={effectiveCfg.motionBlurIntensity}
+                      onChange={(e) => applyPatch({ motionBlurIntensity: parseFloat(e.target.value) })}
+                      className="accent-amber-500 cursor-pointer"
+                    />
+                  </div>
+                )}
               </div>
 
               {/* Shadow Res & Anisotropy Selectors */}
