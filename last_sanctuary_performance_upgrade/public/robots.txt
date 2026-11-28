@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+
+Sitemap: https://last-sanctuary-ultimate-survival-world.ai.studio/sitemap.xml
