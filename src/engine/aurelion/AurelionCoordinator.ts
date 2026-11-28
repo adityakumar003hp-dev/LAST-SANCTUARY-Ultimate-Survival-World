@@ -94,38 +94,71 @@ export class AurelionCoordinator {
     weatherType: string,
     extraUsage: { tapsActive: number; showerActive: boolean; stoveOn: boolean; acOn: boolean; basementTvOn: boolean }
   ) {
-    // Camera-aware 9-Level Cutaway Visibility (determined BEFORE floor visual/texture updates)
+    // Camera-aware 9-Level Cutaway & Strict Floor-by-Floor + Active Elevator Shaft Culling
     const isInside =
       Math.abs(playerRelPos.x) < 15.6 &&
       Math.abs(playerRelPos.z) < 12.8 &&
       playerRelPos.y >= -8.0 &&
       playerRelPos.y <= 26.2;
 
+    this.systems.update(delta, gameTimeMinutes, weatherType, extraUsage);
+
+    let activeElevId: ElevatorId | null = null;
+    let preEnableFloor: string | null = null;
+
     if (isInside) {
       this.arch.southWallMesh.visible = !(cameraRelPos.z < playerRelPos.z - 0.5);
       this.arch.northWallMesh.visible = !(cameraRelPos.z > playerRelPos.z + 0.5);
       this.arch.westWallMesh.visible = !(cameraRelPos.x < playerRelPos.x - 0.5);
       this.arch.eastWallMesh.visible = !(cameraRelPos.x > playerRelPos.x + 0.5);
-      this.arch.chandelierGroup.visible = true;
 
       const lvl = getLevelForLocalY(playerRelPos.y).id;
-      this.basements.b2Group.visible = lvl === 'B2';
-      this.basements.b1RingGroup.visible = lvl === 'B1';
-      this.lower.f1Group.visible = lvl === 'F1';
-      this.lower.f2Group.visible = lvl === 'F2' || lvl === 'F1'; // Preserve atrium ceiling view from F1
-      this.upper.f3Group.visible = lvl === 'F3' || lvl === 'F2' || lvl === 'F1';
-      this.upper.f4Group.visible = lvl === 'F4' || lvl === 'F3' || lvl === 'F2' || lvl === 'F1';
-      this.upper.f5Group.visible = lvl === 'F5';
-      this.crown.f6Group.visible = lvl === 'F6';
-      this.crown.f7Group.visible = lvl === 'F7';
+
+      // Identify active elevator shaft (riding inside or standing next to it on this floor)
+      let closestDist = 4.2;
+      for (const eid of ['main', 'service', 'private'] as ElevatorId[]) {
+        const cfg = AURELION_ELEVATOR_CONFIGS[eid];
+        const st = this.systems.elevators[eid];
+        const dHoriz = Math.hypot(playerRelPos.x - cfg.localX, playerRelPos.z - cfg.localZ);
+        const insideCab = dHoriz < 1.8 && Math.abs(playerRelPos.y - st.currentY) < 2.6;
+        if (insideCab) {
+          activeElevId = eid;
+          // Pre-enable destination floor slightly before arrival/door opening so there is zero sky flash
+          if (
+            st.targetFloor !== lvl &&
+            (Math.abs(st.currentY - st.targetY) < 2.8 || st.doorOpenFactor > 0.02 || !st.moving)
+          ) {
+            preEnableFloor = st.targetFloor;
+          }
+          break;
+        }
+        if (cfg.stops.includes(lvl) && dHoriz < closestDist) {
+          closestDist = dHoriz;
+          activeElevId = eid;
+        }
+      }
+
+      this.basements.b2Group.visible = lvl === 'B2' || preEnableFloor === 'B2';
+      this.basements.b1RingGroup.visible = lvl === 'B1' || preEnableFloor === 'B1';
+      this.lower.f1Group.visible = lvl === 'F1' || preEnableFloor === 'F1';
+      this.lower.f2Group.visible = lvl === 'F2' || preEnableFloor === 'F2';
+      this.upper.f3Group.visible = lvl === 'F3' || preEnableFloor === 'F3';
+      this.upper.f4Group.visible = lvl === 'F4' || preEnableFloor === 'F4';
+      this.upper.f5Group.visible = lvl === 'F5' || preEnableFloor === 'F5';
+      this.crown.f6Group.visible = lvl === 'F6' || preEnableFloor === 'F6';
+      this.crown.f7Group.visible = lvl === 'F7' || preEnableFloor === 'F7';
+
+      this.arch.chandelierGroup.visible = lvl === 'F1' || lvl === 'F2' || lvl === 'F3' || lvl === 'F4';
+      this.arch.elevRoot.visible = activeElevId !== null;
+      (['main', 'service', 'private'] as ElevatorId[]).forEach((eid) => {
+        this.arch.elevatorVisuals[eid].shaftGroup.visible = eid === activeElevId;
+      });
     } else {
       this.arch.southWallMesh.visible = true;
       this.arch.northWallMesh.visible = true;
       this.arch.westWallMesh.visible = true;
       this.arch.eastWallMesh.visible = true;
 
-      // Hide occluded enclosed interior floors when outside so interiors remain private
-      // and off-screen interior rooms/furniture do not burn GPU draw calls.
       const nearGroundPortal =
         Math.abs(playerRelPos.x) < 18.5 &&
         Math.abs(playerRelPos.z) < 17.5 &&
@@ -142,30 +175,45 @@ export class AurelionCoordinator {
       this.upper.f4Group.visible = false;
       this.upper.f5Group.visible = false;
       this.crown.f6Group.visible = false;
-      this.crown.f7Group.visible = nearRooftopCam; // Open-air rooftop Sky Palace stays visible when within compound view
+      this.crown.f7Group.visible = nearRooftopCam;
       this.arch.chandelierGroup.visible = nearGroundPortal;
+      this.arch.elevRoot.visible = nearGroundPortal;
+      (['main', 'service', 'private'] as ElevatorId[]).forEach((eid) => {
+        this.arch.elevatorVisuals[eid].shaftGroup.visible = nearGroundPortal && eid === 'main';
+      });
     }
 
-    this.systems.update(delta, gameTimeMinutes, weatherType, extraUsage);
-    syncAurelionElevatorsVisual(this.arch, this.systems);
+    if (this.arch.elevRoot.visible) {
+      syncAurelionElevatorsVisual(this.arch, this.systems);
+    }
     if (this.upper.f5Group.visible) {
       syncAurelionHydroponicsVisual(this.upper, this.systems);
     }
-    updateAurelionBasementVisuals(this.basements, this.systems, delta, extraUsage.basementTvOn);
-    updateAurelionCrownVisuals(this.crown, this.systems, delta);
+    if (this.basements.b2Group.visible || this.basements.b1RingGroup.visible) {
+      updateAurelionBasementVisuals(this.basements, this.systems, delta, extraUsage.basementTvOn);
+    }
+    if (this.crown.f6Group.visible || this.crown.f7Group.visible) {
+      updateAurelionCrownVisuals(this.crown, this.systems, delta);
+    }
 
-    // Sync Room Light Switches per floor + Tier Load Shedding
+    // Sync Room Light Switches + strictly disable PointLights on culled floors so shaders skip them
     const t2 = this.systems.tier2StandardPowered;
     const rl = this.systems.roomLights;
-    this.basements.b2Lights.forEach((l) => (l.intensity = rl.b2 && t2 ? 1.3 : 0.08));
-    this.basements.b1Lights.forEach((l) => (l.intensity = rl.b1 ? 1.25 : 0.12));
-    this.lower.f1Lights.forEach((l) => (l.intensity = rl.f1 && t2 ? 1.35 : 0.08));
-    this.lower.f2Lights.forEach((l) => (l.intensity = rl.f2 && t2 ? 1.25 : 0.08));
-    this.upper.f3Lights.forEach((l) => (l.intensity = rl.f3 ? 1.45 : 0.25)); // Tier 1 Critical Medical stays illuminated
-    this.upper.f4Lights.forEach((l) => (l.intensity = rl.f4 && t2 ? 1.3 : 0.08));
-    this.upper.f5Lights.forEach((l) => (l.intensity = rl.f5 && t2 ? 1.35 : 0.08));
-    this.crown.f6Lights.forEach((l) => (l.intensity = rl.f6 && this.systems.tier3LuxuryPowered ? 1.25 : 0.06));
-    this.crown.f7Lights.forEach((l) => (l.intensity = rl.f7 && this.systems.tier3LuxuryPowered ? 1.2 : 0.06));
+    const syncLights = (lights: THREE.PointLight[], floorVisible: boolean, intensity: number) => {
+      for (let i = 0; i < lights.length; i++) {
+        lights[i].visible = floorVisible && intensity > 0.01;
+        lights[i].intensity = intensity;
+      }
+    };
+    syncLights(this.basements.b2Lights, this.basements.b2Group.visible, rl.b2 && t2 ? 1.85 : 0.45);
+    syncLights(this.basements.b1Lights, this.basements.b1RingGroup.visible, rl.b1 ? 1.65 : 0.35);
+    syncLights(this.lower.f1Lights, this.lower.f1Group.visible, rl.f1 && t2 ? 1.75 : 0.35);
+    syncLights(this.lower.f2Lights, this.lower.f2Group.visible, rl.f2 && t2 ? 1.35 : 0.2);
+    syncLights(this.upper.f3Lights, this.upper.f3Group.visible, rl.f3 ? 1.45 : 0.3);
+    syncLights(this.upper.f4Lights, this.upper.f4Group.visible, rl.f4 && t2 ? 1.3 : 0.2);
+    syncLights(this.upper.f5Lights, this.upper.f5Group.visible, rl.f5 && t2 ? 1.35 : 0.2);
+    syncLights(this.crown.f6Lights, this.crown.f6Group.visible, rl.f6 && this.systems.tier3LuxuryPowered ? 1.25 : 0.18);
+    syncLights(this.crown.f7Lights, this.crown.f7Group.visible, rl.f7 && this.systems.tier3LuxuryPowered ? 1.2 : 0.12);
 
     // Gentle Chandelier Shimmer (only when visible)
     if (this.arch.chandelierGroup.visible) {
@@ -533,6 +581,9 @@ export class AurelionCoordinator {
 
   public dispose() {
     setAurelionCinemaVideo(this.crown, null);
+    for (const g of this.basements.mergedGeos) {
+      g.dispose();
+    }
     this.mats.dispose();
   }
 }

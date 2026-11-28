@@ -35,7 +35,8 @@ import {
   BatteryCharging,
   Radio,
   Wrench,
-  Skull
+  Skull,
+  Tv
 } from 'lucide-react';
 import {
   PlayerStats,
@@ -113,6 +114,8 @@ interface HUDProps {
   isCrouching?: boolean;
   isRadioOpen?: boolean;
   onToggleRadio?: () => void;
+  onOpenMediaDashboard?: () => void;
+  mediaBreakingBanner?: string | null;
   onOpenBlueprints?: () => void;
   onTriggerRebirth?: () => void;
 }
@@ -195,6 +198,8 @@ export const HUD: React.FC<HUDProps> = ({
   isCrouching = false,
   isRadioOpen = false,
   onToggleRadio,
+  onOpenMediaDashboard,
+  mediaBreakingBanner,
   onOpenBlueprints,
   onTriggerRebirth,
 }) => {
@@ -896,6 +901,16 @@ export const HUD: React.FC<HUDProps> = ({
               <span>CODEX</span>
             </button>
           )}
+          {onOpenMediaDashboard && (
+            <button
+              onClick={onOpenMediaDashboard}
+              className="flex items-center gap-0.5 px-2 py-0.5 rounded-lg bg-sky-500/15 text-sky-300 font-bold active:scale-95 cursor-pointer"
+              title="Global Media Network [Y]"
+            >
+              <Tv className="h-3 w-3" />
+              <span>MEDIA</span>
+            </button>
+          )}
           {onEnterPhotoMode && (
             <button
               onClick={onEnterPhotoMode}
@@ -1096,6 +1111,20 @@ export const HUD: React.FC<HUDProps> = ({
               >
                 <Radio className="h-3.5 w-3.5" />
                 <span>Radio</span>
+              </button>
+            </>
+          )}
+
+          {onOpenMediaDashboard && (
+            <>
+              <div className="h-3 w-[1px] bg-neutral-800" />
+              <button
+                onClick={onOpenMediaDashboard}
+                className="flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-neutral-800 transition-colors cursor-pointer text-xs text-sky-300 whitespace-nowrap shrink-0"
+                title={mediaBreakingBanner || 'Global Media Network & World News [Y]'}
+              >
+                <Tv className="h-3.5 w-3.5" />
+                <span>Media [Y]</span>
               </button>
             </>
           )}

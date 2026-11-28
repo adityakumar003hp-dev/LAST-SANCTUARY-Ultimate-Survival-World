@@ -8,6 +8,7 @@ import { UnifiedPhysicsManager } from './physics/UnifiedPhysicsManager';
 import { buildRealisticHumanoid } from './rendering/RealisticHumanoidBuilder';
 import { getWoodPBR, getMetalPBR, getFabricPBR, getSkinPBR } from '../utils/proceduralTextures';
 import type { InteriorStreamingManager } from './world/InteriorStreamingManager';
+import type { MediaTowerBuilder } from './media/MediaTowerBuilder';
 import {
   AURELION_ATRIUM_VOID,
   AURELION_ELEVATOR_CONFIGS,
@@ -16,6 +17,7 @@ import {
   AURELION_LEVELS,
   AURELION_ROOFTOP_INFINITY_POOL,
   AURELION_STAIR_VOID,
+  getLevelForLocalY,
 } from './aurelion/AurelionConfig';
 import {
   NEXUS_ELEVATORS,
@@ -85,6 +87,7 @@ export class PlayerController {
   public worldSeed: number = 42;
   public aiTrainManager?: any;
   public interiorStreamingManager?: InteriorStreamingManager;
+  public mediaTower?: MediaTowerBuilder | null = null;
   public aurelionElevatorsSnapshot?: Record<'main' | 'service' | 'private', { currentY: number; stops: readonly string[] }>;
   public nexusElevatorsSnapshot?: Record<NexusElevatorId, { currentY: number }>;
 
@@ -984,6 +987,14 @@ export class PlayerController {
       }
     }
 
+    // Oakridge Media Tower HQ (4 explorable floors + rooftop helipad & staircase)
+    if (!inStreamedInterior && this.mediaTower) {
+      const towerFloor = this.mediaTower.getFloorElevationAt(this.position.x, this.position.y, this.position.z);
+      if (towerFloor !== null) {
+        effectiveGroundY = towerFloor;
+      }
+    }
+
     // Water level check: natural water and the bounded rooftop swimming pool.
     const naturalWaterDepth = 0.0 - terrainY;
     const inNaturalWater = !inStreamedInterior && naturalWaterDepth > 1.6 && this.position.y < 0.2 && effectiveGroundY >= terrainY;
@@ -1432,6 +1443,25 @@ export class PlayerController {
       const dirZ = cosY * cosP;
 
       let safeDistance = this.thirdPersonDistance;
+      const insideAurelionEnvelope =
+        isInsideAurelionCore && this.position.y >= -8.0 && this.position.y <= 26.2;
+      let activeElevatorCfg: (typeof AURELION_ELEVATOR_CONFIGS)[keyof typeof AURELION_ELEVATOR_CONFIGS] | null = null;
+      if (insideAurelionEnvelope) {
+        for (const elevId of ['main', 'service', 'private'] as const) {
+          const cfg = AURELION_ELEVATOR_CONFIGS[elevId];
+          if (Math.hypot(aurRelX - cfg.localX, aurRelZ - cfg.localZ) < 1.65) {
+            activeElevatorCfg = cfg;
+            break;
+          }
+        }
+      }
+      const aurelionLvl = insideAurelionEnvelope ? getLevelForLocalY(this.position.y) : null;
+      const inAtriumVoid =
+        Boolean(aurelionLvl?.hasAtriumVoid) &&
+        aurRelX >= AURELION_ATRIUM_VOID.minX &&
+        aurRelX <= AURELION_ATRIUM_VOID.maxX &&
+        aurRelZ >= AURELION_ATRIUM_VOID.minZ &&
+        aurRelZ <= AURELION_ATRIUM_VOID.maxZ;
 
       // Sample along line of sight to detect wall/roof/ground clipping
       const stepCount = 5;
@@ -1442,8 +1472,22 @@ export class PlayerController {
         const testY = headY + dirY * testDist;
         const testZ = headZ + dirZ * testDist;
 
-        // Ground terrain check (skipped inside streamed building interiors below ground level)
-        if (!inStreamedInterior) {
+        // Ground terrain check (skipped inside streamed building interiors & Aurelion sub-levels)
+        if (insideAurelionEnvelope && aurelionLvl) {
+          const relTestX = testX - (-26);
+          const relTestZ = testZ - 38;
+          const hitOuterWall =
+            Math.abs(relTestX) >= aurelionLvl.halfWidth - 0.35 ||
+            Math.abs(relTestZ) >= aurelionLvl.halfDepth - 0.35;
+          const hitSlab =
+            !aurelionLvl.isOutdoorCrown &&
+            !inAtriumVoid &&
+            (testY >= aurelionLvl.ceilingY - 0.28 || testY <= aurelionLvl.floorY + 0.25);
+          if (hitOuterWall || hitSlab) {
+            safeDistance = Math.max(0.85, testDist - 0.35);
+            break;
+          }
+        } else if (!inStreamedInterior) {
           const groundHeight = getTerrainHeight(testX, testZ) + 0.4;
           if (testY <= groundHeight) {
             safeDistance = Math.max(1.2, testDist - 0.3);
@@ -1458,7 +1502,7 @@ export class PlayerController {
         }
 
         // Placed structure collision check
-        if (hasStructures && !inStreamedInterior) {
+        if (hasStructures && !inStreamedInterior && !insideAurelionEnvelope) {
           let hitStructure = false;
           for (const s of buildingMgr.structures) {
             const sdx = Math.abs(s.position[0] - testX);
@@ -1481,17 +1525,54 @@ export class PlayerController {
         }
       }
 
-      if (inStreamedInterior) {
+      if (activeElevatorCfg) {
+        safeDistance = Math.min(safeDistance, 1.32);
+      } else if (insideAurelionEnvelope) {
+        safeDistance = Math.min(safeDistance, aurelionLvl?.isOutdoorCrown ? 3.6 : 2.65);
+      } else if (inStreamedInterior) {
         safeDistance = Math.min(safeDistance, 2.85);
       }
 
       // Smooth camera distance pull-in
-      this.currentCamDistance = THREE.MathUtils.damp(this.currentCamDistance, safeDistance, 18, delta);
+      this.currentCamDistance = THREE.MathUtils.damp(
+        this.currentCamDistance,
+        safeDistance,
+        activeElevatorCfg ? 28 : 18,
+        delta
+      );
 
       let targetX = headX + dirX * this.currentCamDistance;
       let targetY = headY + dirY * this.currentCamDistance;
       let targetZ = headZ + dirZ * this.currentCamDistance;
-      if (inStreamedInterior && this.interiorStreamingManager) {
+      if (activeElevatorCfg) {
+        const shaftMinX = -26 + activeElevatorCfg.localX - activeElevatorCfg.cabW * 0.42;
+        const shaftMaxX = -26 + activeElevatorCfg.localX + activeElevatorCfg.cabW * 0.42;
+        const shaftMinZ = 38 + activeElevatorCfg.localZ - activeElevatorCfg.cabD * 0.42;
+        const shaftMaxZ = 38 + activeElevatorCfg.localZ + activeElevatorCfg.cabD * 0.42;
+        targetX = THREE.MathUtils.clamp(targetX, shaftMinX, shaftMaxX);
+        targetZ = THREE.MathUtils.clamp(targetZ, shaftMinZ, shaftMaxZ);
+        targetY = THREE.MathUtils.clamp(targetY, this.position.y + 0.4, this.position.y + 2.25);
+      } else if (insideAurelionEnvelope && aurelionLvl && !aurelionLvl.isOutdoorCrown) {
+        targetX = THREE.MathUtils.clamp(
+          targetX,
+          -26 - (aurelionLvl.halfWidth - 0.35),
+          -26 + (aurelionLvl.halfWidth - 0.35)
+        );
+        targetZ = THREE.MathUtils.clamp(
+          targetZ,
+          38 - (aurelionLvl.halfDepth - 0.35),
+          38 + (aurelionLvl.halfDepth - 0.35)
+        );
+        if (!inAtriumVoid) {
+          targetY = THREE.MathUtils.clamp(
+            targetY,
+            aurelionLvl.floorY + 0.28,
+            aurelionLvl.ceilingY - 0.28
+          );
+        } else {
+          targetY = Math.max(targetY, aurelionLvl.floorY + 0.28);
+        }
+      } else if (inStreamedInterior && this.interiorStreamingManager) {
         const ceilY = this.interiorStreamingManager.getInteriorCeilingY();
         targetY = Math.min(targetY, ceilY - 0.35);
       }
@@ -1506,10 +1587,12 @@ export class PlayerController {
         this.shakeIntensity = Math.max(0, this.shakeIntensity - delta * 3.5);
       }
 
-      // Smooth camera movement interpolation
-      this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, targetX, 22, delta);
-      this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, targetY, 22, delta);
-      this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, targetZ, 22, delta);
+      // Smooth camera movement interpolation (tighter vertical tracking inside moving elevator cabs)
+      const camDampXZ = activeElevatorCfg ? 32 : 22;
+      const camDampY = activeElevatorCfg ? 46 : 22;
+      this.camera.position.x = THREE.MathUtils.damp(this.camera.position.x, targetX, camDampXZ, delta);
+      this.camera.position.y = THREE.MathUtils.damp(this.camera.position.y, targetY, camDampY, delta);
+      this.camera.position.z = THREE.MathUtils.damp(this.camera.position.z, targetZ, camDampXZ, delta);
 
       this.camera.lookAt(headX, headY - 0.1, headZ);
     }

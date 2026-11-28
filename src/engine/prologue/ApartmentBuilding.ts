@@ -15,6 +15,8 @@ import { WildlifeManager } from '../WildlifeManager';
 import { ApartmentObjectBinding } from './ApartmentObjectBinding';
 import { ApartmentObjectAnimator, type ApartmentInteractableOptions, type ApartmentObjectAction } from './ApartmentObjectAnimator';
 import { AurelionCoordinator, type AurelionInteractionResult } from '../aurelion/AurelionCoordinator';
+import { drawSharedBroadcastCanvas } from '../media/SharedBroadcastRenderer';
+import type { SharedBroadcastScreenFeed } from '../media/MediaTypes';
 import {
   AURELION_F6_INDOOR_POOL,
   AURELION_LEVEL_ORDER,
@@ -62,6 +64,8 @@ export class ApartmentBuilding {
   public aurelion!: AurelionCoordinator;
   private currentGameTimeMinutes = 480;
   private currentWeatherType = 'clear';
+  public liveMediaFeed: SharedBroadcastScreenFeed | null = null;
+  private lastTvEmergencyFlag = false;
 
   // Floor groups for camera-aware cutaways & object bindings
   public floor1Group: THREE.Group;
@@ -815,15 +819,35 @@ export class ApartmentBuilding {
     }
   }
 
-  public updateTVScreenContent(isOn: boolean, isEmergency: boolean = false) {
+  public syncLiveBroadcastTV(mediaFeed: SharedBroadcastScreenFeed | null) {
+    this.liveMediaFeed = mediaFeed;
+    if (this.state.tvOn) {
+      const isEmerg = Boolean(mediaFeed && (mediaFeed.priority === 'emergency' || mediaFeed.status === 'eas_override'));
+      this.updateTVScreenContent(true, isEmerg, mediaFeed);
+      if (this.tvTexture) this.tvTexture.needsUpdate = true;
+    }
+  }
+
+  public updateTVScreenContent(
+    isOn: boolean,
+    isEmergency: boolean = false,
+    mediaFeed?: SharedBroadcastScreenFeed | null
+  ) {
     if (!this.tvContext) return;
     const ctx = this.tvContext;
     const w = this.tvCanvas.width;
     const h = this.tvCanvas.height;
+    this.lastTvEmergencyFlag = isEmergency;
+    const feed = mediaFeed ?? this.liveMediaFeed;
 
     if (!isOn) {
       ctx.fillStyle = '#0a0a0a';
       ctx.fillRect(0, 0, w, h);
+      return;
+    }
+
+    if (feed) {
+      drawSharedBroadcastCanvas(ctx, w, h, feed, { compact: false });
       return;
     }
 
@@ -1007,13 +1031,16 @@ export class ApartmentBuilding {
     }
   }
 
+  private readonly _tmpSummaryRel = new THREE.Vector3();
+  private readonly _tmpSummaryNexusRel = new THREE.Vector3();
+
   public getLocationSummary(playerPos: THREE.Vector3): { level: string; roomName: string } | null {
-    const rel = new THREE.Vector3(
+    const rel = this._tmpSummaryRel.set(
       playerPos.x - this.origin.x,
       playerPos.y - this.origin.y,
       playerPos.z - this.origin.z
     );
-    const nexusRel = new THREE.Vector3(rel.x + 48, rel.y, rel.z - 24);
+    const nexusRel = this._tmpSummaryNexusRel.set(rel.x + 48, rel.y, rel.z - 24);
     const nexusLoc = this.nexus?.getLocationSummary(nexusRel);
     if (nexusLoc) {
       return { level: nexusLoc.level, roomName: nexusLoc.roomName };
@@ -1086,12 +1113,16 @@ export class ApartmentBuilding {
           globalMetrics: {
             apocalypticSeverity: 0,
             powerGridStability: 1,
+            totalPopulation: 0,
             totalHealthy: 0,
             totalTransforming: 0,
             totalInfected: 0,
             totalEvacuated: 0,
             overrunCitiesCount: 0,
             activeLocalPedestrians: 0,
+            citizenDailyMultiplier: 3.0,
+            zombieDailyMultiplier: 2.0,
+            activeConversionSeconds: 60,
           },
           cities: [],
           activeZombies: [],

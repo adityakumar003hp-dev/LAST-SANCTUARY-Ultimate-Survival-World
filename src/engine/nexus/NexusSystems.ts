@@ -9,7 +9,7 @@ import {
 } from './NexusConfig';
 import type { RailwayServiceTelemetry } from '../world/AITrainManager';
 import type { RailwayStationOperationsSnapshot } from '../world/RailwayNPCManager';
-import type { CityOutbreakTelemetry, GlobalOutbreakMetrics } from '../world/GlobalOutbreakSimulator';
+import type { CityOutbreakTelemetry, GlobalOutbreakMetrics, GlobalPopulationStateSnapshot } from '../world/GlobalOutbreakSimulator';
 import type { SentryTurretState } from '../prologue/ApartmentTurrets';
 import type { WeatherTelemetry } from '../weather/WeatherManager';
 import type { ExtractionState } from '../world/WorldEventsManager';
@@ -133,6 +133,7 @@ export interface NexusLiveContext {
   outbreak: {
     isLocalOutbreakActive: boolean;
     globalMetrics: GlobalOutbreakMetrics;
+    populationState?: GlobalPopulationStateSnapshot;
     cities: CityOutbreakTelemetry[];
     activeZombies: Array<{ id: string; type: string; position: [number, number, number]; health: number; isBoss?: boolean; state: string }>;
     wildlifeCount: number;

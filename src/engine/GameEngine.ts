@@ -18,7 +18,7 @@ import {
 import { HarvestableResource, PlacedStructure, PlayerStats, Quest, SaveSlotMetadata, FullGameSave, GameMode, Difficulty, ItemDefinition, VehicleState, CompanionState, EcosystemDossier, EcosystemMetrics, InventorySlot, RailwayTicket, GraphicsQuality, GraphicsQualityMode, GraphicsManagerConfig, GraphicsManagerSnapshot, BaseLevel, BaseState, NPCRole } from '../types/game';
 import { GraphicsManager, probeGraphicsHardware } from './graphics/GraphicsManager';
 import { ITEMS } from '../data/items';
-import { saveGameToSlot } from '../utils/storage';
+import { saveGameToSlot, CURRENT_SAVE_VERSION } from '../utils/storage';
 import { ChunkManager } from './world/ChunkManager';
 import { WorldPersistence } from './world/WorldPersistence';
 import { WildlifeManager } from './WildlifeManager';
@@ -47,7 +47,7 @@ import { TacticalCombatEffects } from './combat/TacticalCombatEffects';
 import { WorldEventsManager, ExtractionState } from './world/WorldEventsManager';
 import { WeatherType, SandboxSettings, WeaponModId, RadiantBounty, SupplyDropState, ZombieEntity, EarthOriginConfig } from '../types/game';
 import { WorldCoordinates } from './world/WorldCoordinates';
-import { GlobalOutbreakSimulator } from './world/GlobalOutbreakSimulator';
+import { GlobalOutbreakSimulator, GlobalPopulationStateSnapshot } from './world/GlobalOutbreakSimulator';
 import { DEFAULT_EARTH_ORIGIN, EarthProjection, METERS_PER_DEG_LAT, normalizeLon } from './geo/EarthProjection';
 import { RealEarthDataset } from './geo/RealEarthDataset';
 import { RealWorldCities } from './geo/RealWorldCities';
@@ -56,6 +56,11 @@ import { AURELION_ELEVATOR_CONFIGS, AurelionDocument, AurelionLevelId } from './
 import type { AurelionDashboardSnapshot, ElevatorId } from './aurelion/AurelionSystems';
 import { NEXUS_ELEVATORS, NEXUS_FLOORS, type NexusElevatorId, type NexusFloorNumber } from './nexus/NexusConfig';
 import type { NexusDashboardSnapshot, NexusLiveContext, NexusLiveNpcMarker } from './nexus/NexusSystems';
+import { GlobalMediaManager } from './media/GlobalMediaManager';
+import { MediaTowerBuilder } from './media/MediaTowerBuilder';
+import { ReporterNPCManager } from './media/ReporterNPCManager';
+import { MediaWorldScreens } from './media/MediaWorldScreens';
+import type { GlobalMediaSnapshot, MediaChannelId, MediaWorldInputContext } from './media/MediaTypes';
 
 export interface GameEngineCallbacks {
   onStatsChange: (stats: PlayerStats) => void;
@@ -122,6 +127,8 @@ export interface GameEngineCallbacks {
   onOpenFishingModal?: () => void;
   onGetBounties?: () => RadiantBounty[];
   onAutoSaved?: (info: { slotId: string; timestamp: number; dayCount: number; timeString: string }) => void;
+  onMediaSnapshot?: (snapshot: GlobalMediaSnapshot) => void;
+  onOpenMediaDashboard?: () => void;
 }
 
 export class GameEngine {
@@ -161,6 +168,10 @@ export class GameEngine {
   public worldEventsManager: WorldEventsManager;
   public globalOutbreakSimulator: GlobalOutbreakSimulator;
   public interiorStreamingManager: InteriorStreamingManager;
+  public globalMediaManager: GlobalMediaManager;
+  public mediaTower: MediaTowerBuilder;
+  public reporterNPCManager: ReporterNPCManager;
+  public mediaWorldScreens: MediaWorldScreens;
   public earthOrigin: EarthOriginConfig = { ...DEFAULT_EARTH_ORIGIN };
 
   // Environment, Lights & Post-Processing
@@ -229,6 +240,13 @@ export class GameEngine {
   private isRunning: boolean = false;
   private isPaused: boolean = false;
   private frameId: number = 0;
+  private loopTickFn: ((timestamp?: number) => void) | null = null;
+  private lastRenderedFramePerfTime: number = 0;
+  private shadowMapDirty: boolean = true;
+  private lastShadowSunPos = new THREE.Vector3(-9999, -9999, -9999);
+  private lastShadowTargetPos = new THREE.Vector3(-9999, -9999, -9999);
+  private lastShadowStructCount: number = -1;
+  private lastShadowDoorSig: string = '';
   private clock: THREE.Timer;
   private localLightBudgetTimer: number = 0;
   private localLights: Array<THREE.PointLight | THREE.SpotLight> = [];
@@ -241,6 +259,7 @@ export class GameEngine {
   public activeSaveSlotName: string = 'Autosave Slot';
   public characterName: string = 'Survivor';
   private autoSaveTimer: number = 0;
+  private mediaUiSyncTimer: number = 0;
   private checkpointWriteQueue: Promise<void> = Promise.resolve();
 
   private enqueueCheckpointSave(saveData: FullGameSave): Promise<void> {
@@ -253,6 +272,11 @@ export class GameEngine {
   private scannerTimer: number = 0;
   private securityScreenTimer: number = 0;
   private uiSyncTimer: number = 0;
+  private interactionCheckTimer: number = 0;
+  private lastEmittedInteractionPrompt: string | null | undefined = undefined;
+  private _trackedSecurityEntities: Array<{ x: number; z: number; type: 'zombie' | 'creature' }> = [];
+  private _securityPlayerRel = { x: 0, z: 0 };
+  private readonly _matchedFogColor = new THREE.Color(0x87ceeb);
   private lastReportedBiomeId: string = '';
   private lastReportedWeather: WeatherType = 'clear';
   private lastReportedWeatherIntensity: number = -1;
@@ -426,13 +450,16 @@ export class GameEngine {
     this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
     this.renderer.toneMappingExposure = 1.08;
 
-    // Cap pixel ratio cleanly: 1.0 on mobile/software, up to 1.5 on GPU desktop
+    // Cap pixel ratio cleanly: max 1.25 on mobile/touch, 1.0 on software GL, max 2.0 on desktop
     this.renderer.setPixelRatio(
-      isMobile || this.isSoftwareGl ? 1.0 : Math.min(window.devicePixelRatio || 1, 1.5)
+      Math.min(window.devicePixelRatio || 1, this.graphicsManager.getDprCeiling())
     );
     // Three.js r187 removed PCFSoftShadowMap. PCFShadowMap is the supported PCF mode.
+    // On-demand shadow updates avoid redundant depth passes when stationary or indoors.
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
     this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.autoUpdate = false;
+    this.renderer.shadowMap.needsUpdate = true;
 
     container.appendChild(this.renderer.domElement);
 
@@ -527,10 +554,15 @@ export class GameEngine {
     this.weatherManager = new WeatherManager(this.scene);
     this.combatEffects = new TacticalCombatEffects(this.scene);
     this.worldEventsManager = new WorldEventsManager(this.scene, (x, z) => getTerrainHeight(x, z, seed));
-    this.globalOutbreakSimulator = new GlobalOutbreakSimulator(this.scene, seed);
+    this.globalOutbreakSimulator = new GlobalOutbreakSimulator(this.scene, seed, initialSave?.dayCount ?? 1);
     if (initialSave?.globalOutbreakState) {
       this.globalOutbreakSimulator.importSaveData(initialSave.globalOutbreakState);
     }
+    this.globalMediaManager = new GlobalMediaManager(initialSave?.mediaState);
+    this.mediaTower = new MediaTowerBuilder(this.scene);
+    this.player.mediaTower = this.mediaTower;
+    this.reporterNPCManager = new ReporterNPCManager(this.scene, this.globalMediaManager);
+    this.mediaWorldScreens = new MediaWorldScreens(this.scene);
     if (initialSave?.activeRailwayTicket) {
       this.activeRailwayTicket = initialSave.activeRailwayTicket;
     }
@@ -602,6 +634,8 @@ export class GameEngine {
     // Register solid world colliders with physics manager
     this.prologueManager.townMgr.registerColliders(this.physicsManager);
     this.prologueManager.companionMgr.registerColliders(this.physicsManager);
+    this.mediaTower.registerColliders(this.physicsManager);
+    this.reporterNPCManager.registerColliders(this.physicsManager);
     if (initialSave?.compoundState) {
       this.prologueManager.townMgr.apartmentBuilding.restoreCompoundState(initialSave.compoundState);
     }
@@ -660,7 +694,7 @@ export class GameEngine {
       this.player.velocity.set(0, 0, 0);
       this.player.isSleeping = false;
       this.player.yaw = initialSave.playerRotation;
-      this.chunkManager.updatePlayerPosition(this.player.position, true);
+      this.chunkManager.updatePlayerPosition(this.player.position, true, true, 1);
       if (initialSave.structures && initialSave.structures.length > 0) {
         this.buildingMgr.loadSavedStructures(initialSave.structures);
       } else {
@@ -765,16 +799,31 @@ export class GameEngine {
 
   private onVisibilityChange = () => {
     if (document.hidden) {
+      this.graphicsManager.cancelScheduledFrame();
       this.clock.reset();
     } else {
       this.clock.reset(); // Prevent a large delta after the tab becomes visible again
+      this.lastFramePerfTime = performance.now();
+      this.lastRenderedFramePerfTime = 0;
+      if (this.isRunning && !this.isPaused && this.loopTickFn) {
+        this.graphicsManager.scheduleNextFrame(this.loopTickFn, this.renderer, false);
+      }
     }
   };
 
   public setPaused(paused: boolean) {
+    if (this.isPaused === paused) return;
     this.isPaused = paused;
-    if (!paused) {
+    if (paused) {
+      this.graphicsManager.cancelScheduledFrame();
+      this.resetMotionBlurState();
+    } else {
       this.clock.reset(); // Discard paused time so simulation resumes smoothly
+      this.lastFramePerfTime = performance.now();
+      this.lastRenderedFramePerfTime = 0;
+      if (this.isRunning && !document.hidden && this.loopTickFn) {
+        this.graphicsManager.scheduleNextFrame(this.loopTickFn, this.renderer, false);
+      }
     }
   }
 
@@ -976,8 +1025,9 @@ export class GameEngine {
     this.fogDensityMultiplier = effective.fogDensityMultiplier;
     this.renderer.toneMappingExposure = effective.toneMappingExposure;
 
-    // Shadows
+    // Shadows (capped per device & updated on demand)
     this.renderer.shadowMap.enabled = effective.shadowsEnabled;
+    this.renderer.shadowMap.autoUpdate = false;
     if (effective.shadowsEnabled) {
       this.renderer.shadowMap.type = THREE.PCFShadowMap;
       if (this.dirLight) {
@@ -989,6 +1039,8 @@ export class GameEngine {
           effective.shadowNormalBias
         );
       }
+      this.shadowMapDirty = true;
+      this.renderer.shadowMap.needsUpdate = true;
     } else {
       if (this.dirLight) {
         this.dirLight.castShadow = false;
@@ -1128,30 +1180,34 @@ export class GameEngine {
 
   private startLoop() {
     this.lastFramePerfTime = performance.now();
+    this.lastRenderedFramePerfTime = 0;
     const tick = (timestamp?: number) => {
-      if (!this.isRunning) return;
-
-      // When tab is hidden, pause active rendering and yield CPU
-      if (document.hidden) {
-        this.graphicsManager.scheduleNextFrame(tick, this.renderer, true);
+      if (!this.isRunning || document.hidden || this.isPaused) {
+        this.graphicsManager.cancelScheduledFrame();
         return;
       }
 
       const now = timestamp ?? performance.now();
+      const targetFps = this.graphicsManager.config.targetFps;
+      if (targetFps < 60 && !this.graphicsManager.caps.isSoftwareGl && this.lastRenderedFramePerfTime > 0) {
+        const minIntervalMs = (1000 / targetFps) - 1.5;
+        if (now - this.lastRenderedFramePerfTime < minIntervalMs) {
+          this.graphicsManager.scheduleNextFrame(tick, this.renderer, false);
+          return;
+        }
+      }
+
+      this.lastRenderedFramePerfTime = now;
       const rawElapsed = Math.max(0.001, (now - this.lastFramePerfTime) / 1000);
       this.lastFramePerfTime = now;
 
       const workStart = performance.now();
 
-      if (!this.isPaused) {
-        // Strict bounded timestep (max 0.05s = 50ms) prevents physics tunneling / simulation death
-        this.clock.update(now);
-        const delta = Math.min(0.05, this.clock.getDelta());
-        this.update(delta, rawElapsed);
-        this.updateMotionBlurUniforms(delta);
-      } else {
-        this.resetMotionBlurState();
-      }
+      // Strict bounded timestep (max 0.05s = 50ms) prevents physics tunneling / simulation death
+      this.clock.update(now);
+      const delta = Math.min(0.05, this.clock.getDelta());
+      this.update(delta, rawElapsed);
+      this.updateMotionBlurUniforms(delta);
 
       this.updateLocalLightBudget();
       this.updateWorldFrustumCulling();
@@ -1184,10 +1240,15 @@ export class GameEngine {
         this.applyGraphicsConfiguration(false);
       }
 
-      this.graphicsManager.scheduleNextFrame(tick, this.renderer, false);
+      if (this.isRunning && !document.hidden && !this.isPaused) {
+        this.graphicsManager.scheduleNextFrame(tick, this.renderer, false);
+      }
     };
 
-    this.graphicsManager.scheduleNextFrame(tick, this.renderer, document.hidden);
+    this.loopTickFn = tick;
+    if (!document.hidden && !this.isPaused) {
+      this.graphicsManager.scheduleNextFrame(tick, this.renderer, false);
+    }
   }
 
   private resetMotionBlurState() {
@@ -1543,7 +1604,7 @@ export class GameEngine {
     waterNormal.offset.y = (waterNormal.offset.y + delta * 0.013) % 1;
 
     this.uiSyncTimer += delta;
-    const shouldSyncHud = this.uiSyncTimer >= 0.125; // ~8Hz React UI sync eliminates reconciliation stutter while staying crisp
+    const shouldSyncHud = this.uiSyncTimer >= 0.1; // 10Hz React UI sync eliminates reconciliation stutter while staying crisp
 
     // 2. Player, Train or Vehicle Movement & Physics
     if (this.aiTrainManager && this.aiTrainManager.activePassengerTrain) {
@@ -1824,7 +1885,8 @@ export class GameEngine {
       this.zombieMgr.isOutbreakActive,
       this.dayCount,
       this.isNight,
-      this.zombieMgr
+      this.zombieMgr,
+      this.sandboxSettings.dayLengthMultiplier
     );
     this.chunkManager.setApocalypticSeverity(this.globalOutbreakSimulator.apocalypticSeverity);
     this.interiorStreamingManager.update(
@@ -1848,6 +1910,7 @@ export class GameEngine {
       this.prologueManager.townMgr.gridPowerFactor = this.globalOutbreakSimulator.powerGridStability;
     }
     this.prologueManager.update(delta);
+    this.updateMediaEcosystem(delta, wx);
     this.storylineManager?.updateLocationProgress(this.player.position);
     const rescuedNow = this.rescueManager.update(
       delta,
@@ -1910,9 +1973,9 @@ export class GameEngine {
       }
     }
 
-    // Dynamic Security Screen & Aurelion Location update (throttled every 0.3s, canvas redraws gated by F1 visibility)
+    // Dynamic Security Screen & Aurelion Location update (throttled to 5Hz = 0.2s, zero per-tick alloc)
     this.securityScreenTimer += delta;
-    if (this.securityScreenTimer >= 0.3) {
+    if (this.securityScreenTimer >= 0.2) {
       this.securityScreenTimer = 0;
       const apt = this.prologueManager?.townMgr?.apartmentBuilding;
       if (apt) {
@@ -1923,13 +1986,15 @@ export class GameEngine {
           Math.abs(this.player.position.z - aptOrigin.z) < 36;
 
         if (f1Visible && nearApt) {
-          const trackedEntities: Array<{ x: number; z: number; type: 'zombie' | 'creature' }> = [];
+          const trackedEntities = this._trackedSecurityEntities;
+          trackedEntities.length = 0;
           if (this.zombieMgr?.zombies) {
             for (let i = 0; i < this.zombieMgr.zombies.length; i++) {
               const z = this.zombieMgr.zombies[i];
               if (z.state === 'dead') continue;
-              const dist = Math.hypot(z.position[0] - aptOrigin.x, z.position[2] - aptOrigin.z);
-              if (dist <= 5000) {
+              const dx = z.position[0] - aptOrigin.x;
+              const dz = z.position[2] - aptOrigin.z;
+              if (dx * dx + dz * dz <= 5000 * 5000) {
                 trackedEntities.push({ x: z.position[0], z: z.position[2], type: 'zombie' });
               }
             }
@@ -1937,17 +2002,16 @@ export class GameEngine {
           if (this.wildlifeManager?.creatures) {
             for (let i = 0; i < this.wildlifeManager.creatures.length; i++) {
               const c = this.wildlifeManager.creatures[i];
-              const dist = Math.hypot(c.group.position.x - aptOrigin.x, c.group.position.z - aptOrigin.z);
-              if (dist <= 5000) {
+              const dx = c.group.position.x - aptOrigin.x;
+              const dz = c.group.position.z - aptOrigin.z;
+              if (dx * dx + dz * dz <= 5000 * 5000) {
                 trackedEntities.push({ x: c.group.position.x, z: c.group.position.z, type: 'creature' });
               }
             }
           }
-          const playerRel = {
-            x: this.player.position.x - aptOrigin.x,
-            z: this.player.position.z - aptOrigin.z
-          };
-          apt.renderSecurityScreenContent(trackedEntities, playerRel);
+          this._securityPlayerRel.x = this.player.position.x - aptOrigin.x;
+          this._securityPlayerRel.z = this.player.position.z - aptOrigin.z;
+          apt.renderSecurityScreenContent(trackedEntities, this._securityPlayerRel);
           apt.renderWallClockContent(this.gameTimeMinutes, this.dayCount);
           apt.renderComputerScreenContent(this.playerStats, this.dayCount, this.gameTimeMinutes);
         }
@@ -2186,7 +2250,7 @@ export class GameEngine {
         (targetId, kind, zombieId) => {
           const k = kind as string;
           if (k === 'citizen') {
-            this.prologueManager?.outbreakMgr?.infectCitizen(targetId, zombieId);
+            this.prologueManager?.outbreakMgr?.infectCitizen(targetId, zombieId, this.isNight);
           } else if (k === 'survivor') {
             this.rescueManager.infectSurvivor(targetId);
           } else if (k === 'settlement') {
@@ -2194,14 +2258,18 @@ export class GameEngine {
           } else if (k === 'wildlife') {
             this.wildlifeManager.infectCreature(targetId);
           } else if (k === 'regional_npc') {
-            this.globalOutbreakSimulator.infectPedestrian(targetId);
+            this.globalOutbreakSimulator.infectPedestrian(targetId, this.isNight);
           }
         }
       );
     }
 
-    // 6. Raycast Interaction Prompt
-    this.checkInteractionPrompt();
+    // 6. Raycast Interaction Prompt (10 Hz throttled + diff-checked; every frame while placing structures)
+    this.interactionCheckTimer += delta;
+    if (this.interactionCheckTimer >= 0.1 || Boolean(this.buildingMgr.activeDef)) {
+      this.interactionCheckTimer = 0;
+      this.checkInteractionPrompt();
+    }
 
     // 7. Auto-save every 60s (1 minute real active time)
     this.autoSaveTimer += Math.min(1.0, Math.max(delta, realElapsedSec));
@@ -2296,42 +2364,53 @@ export class GameEngine {
       // Sunset / Dusk: Fiery golden hour
       const t = (hour - 17.0) / 3.5;
       sunColor.setRGB(1.0, 0.52 - t * 0.35, 0.2 - t * 0.15);
-      sunIntensity = 2.05 - t * 1.5;
-      this.hemiLight.color.setRGB(1.0 - t * 0.5, 0.54 - t * 0.35, 0.32 - t * 0.2);
-      this.hemiLight.groundColor.setRGB(0.18, 0.12, 0.1);
-      this.hemiLight.intensity = 0.65;
-      this.fillLight.color.setRGB(0.52, 0.45, 0.78);
-      this.fillLight.intensity = 0.28;
-      this.refreshOutdoorEnvironment('dusk', 0x26244b, 0xd46a44, 0x241816, 0xff9248, 0.72);
+      sunIntensity = 2.05 - t * 1.45;
+      this.hemiLight.color.setRGB(1.0 - t * 0.45, 0.56 - t * 0.32, 0.34 - t * 0.18);
+      this.hemiLight.groundColor.setRGB(0.22, 0.16, 0.14);
+      this.hemiLight.intensity = 0.72;
+      this.fillLight.color.setRGB(0.54, 0.46, 0.78);
+      this.fillLight.intensity = 0.3;
+      this.refreshOutdoorEnvironment('dusk', 0x26244b, 0xd46a44, 0x2b201c, 0xff9248, 0.72);
     } else {
-      // Night: Moonlight illumination
+      // Night: Moonlight illumination (with minimum ground bounce so dark materials retain silhouette)
       const isBloodMoon = this.isNight && (this.dayCount % 7 === 0 || this.dayCount === 1);
       if (isBloodMoon) {
-        sunColor.setRGB(0.85, 0.2, 0.2);
-        sunIntensity = 0.48;
-        this.hemiLight.color.setRGB(0.25, 0.08, 0.1);
-        this.hemiLight.groundColor.setRGB(0.06, 0.02, 0.03);
-        this.hemiLight.intensity = 0.34;
-        this.fillLight.color.setRGB(0.28, 0.08, 0.12);
-        this.fillLight.intensity = 0.18;
-        this.refreshOutdoorEnvironment('bloodmoon', 0x140508, 0x451218, 0x100507, 0xd93636, 0.45);
+        sunColor.setRGB(0.92, 0.28, 0.28);
+        sunIntensity = 0.56;
+        this.hemiLight.color.setRGB(0.42, 0.13, 0.16);
+        this.hemiLight.groundColor.setRGB(0.16, 0.06, 0.08);
+        this.hemiLight.intensity = 0.54;
+        this.fillLight.color.setRGB(0.36, 0.11, 0.15);
+        this.fillLight.intensity = 0.24;
+        this.refreshOutdoorEnvironment('bloodmoon', 0x1e070c, 0x56161e, 0x1b090c, 0xe04242, 0.52);
       } else {
-        sunColor.setRGB(0.68, 0.82, 1.0);
-        sunIntensity = 0.42;
-        this.hemiLight.color.setRGB(0.14, 0.22, 0.38);
-        this.hemiLight.groundColor.setRGB(0.04, 0.06, 0.1);
-        this.hemiLight.intensity = 0.28;
-        this.fillLight.color.setRGB(0.16, 0.25, 0.44);
-        this.fillLight.intensity = 0.16;
-        this.refreshOutdoorEnvironment('night', 0x060b16, 0x142038, 0x070a10, 0x9ec0f2, 0.4);
+        sunColor.setRGB(0.72, 0.85, 1.0);
+        sunIntensity = 0.48;
+        this.hemiLight.color.setRGB(0.24, 0.34, 0.54);
+        this.hemiLight.groundColor.setRGB(0.11, 0.14, 0.20);
+        this.hemiLight.intensity = 0.48;
+        this.fillLight.color.setRGB(0.22, 0.32, 0.52);
+        this.fillLight.intensity = 0.22;
+        this.refreshOutdoorEnvironment('night', 0x0a1222, 0x1c2b48, 0x101520, 0xa8c8f8, 0.48);
       }
     }
 
+    const insideAurelionEnvelope =
+      Math.abs(this.player.position.x + 26) < 16.0 &&
+      Math.abs(this.player.position.z - 38) < 13.5 &&
+      this.player.position.y >= -8.0 &&
+      this.player.position.y <= 21.8;
+    if (insideAurelionEnvelope) {
+      this.hemiLight.intensity = Math.max(this.hemiLight.intensity, 0.62);
+    }
+
     const horizonColor = this.atmosphericSky ? this.atmosphericSky.getHorizonColor() : GameEngine._sunColor;
-    this.scene.background = horizonColor;
+    this._matchedFogColor.copy(horizonColor);
+    this.scene.background = this._matchedFogColor;
     if (this.scene.fog instanceof THREE.FogExp2) {
-      this.scene.fog.color = horizonColor;
-      const rawFog = (this.isNight ? 0.014 : 0.0068) * this.fogDensityMultiplier * this.weatherFogMultiplier;
+      this.scene.fog.color.copy(this._matchedFogColor);
+      const interiorFogFactor = insideAurelionEnvelope ? 0.32 : 1.0;
+      const rawFog = (this.isNight ? 0.012 : 0.0068) * this.fogDensityMultiplier * this.weatherFogMultiplier * interiorFogFactor;
       this.scene.fog.density = Number.isFinite(rawFog) ? THREE.MathUtils.clamp(rawFog, 0.0005, 0.08) : 0.0068;
     }
 
@@ -2339,24 +2418,45 @@ export class GameEngine {
     const rawSunIntensity = sunIntensity * this.sunIntensityMultiplier;
     this.dirLight.intensity = Number.isFinite(rawSunIntensity) ? THREE.MathUtils.clamp(rawSunIntensity, 0.05, 4.5) : 1.5;
 
-    // Orbit sun / moon centered on the player for infinite world shadow coverage
+    // Orbit sun / moon & trigger shadow map update only when sun moves noticeably, player crosses >1.5m, or structures/doors toggle
     const sunAngle = ((hour - 6.0) / 24.0) * Math.PI * 2;
     const sunDist = 70;
     const sunHeight = Math.max(16, Math.sin(sunAngle) * 85);
     const sunX = Math.cos(sunAngle) * sunDist;
     const sunZ = Math.sin(sunAngle) * 55;
 
-    this.dirLight.position.set(
+    GameEngine._tmpVecA.set(
       this.player.position.x + sunX,
       this.player.position.y + sunHeight,
       this.player.position.z + sunZ
     );
-    this.dirLight.target.position.set(
-      this.player.position.x,
-      this.player.position.y,
-      this.player.position.z
-    );
-    this.dirLight.target.updateMatrixWorld();
+    const apt = this.prologueManager?.townMgr?.apartmentBuilding;
+    const structCount = this.buildingMgr?.structures?.length ?? 0;
+    const doorSig = apt
+      ? `${apt.compoundGateOpen ? 1 : 0}${apt.vehicleGateOpen ? 1 : 0}${apt.vehicleGate2Open ? 1 : 0}${apt.garageShutterOpen ? 1 : 0}`
+      : '';
+    const playerMovedSq = this.player.position.distanceToSquared(this.lastShadowTargetPos);
+    const sunMovedSq = GameEngine._tmpVecA.distanceToSquared(this.lastShadowSunPos);
+    const shouldRefreshShadows =
+      this.shadowMapDirty ||
+      playerMovedSq >= 2.25 ||
+      sunMovedSq >= 0.64 ||
+      structCount !== this.lastShadowStructCount ||
+      doorSig !== this.lastShadowDoorSig;
+
+    if (shouldRefreshShadows) {
+      this.dirLight.position.copy(GameEngine._tmpVecA);
+      this.dirLight.target.position.copy(this.player.position);
+      this.dirLight.target.updateMatrixWorld();
+      this.lastShadowSunPos.copy(GameEngine._tmpVecA);
+      this.lastShadowTargetPos.copy(this.player.position);
+      this.lastShadowStructCount = structCount;
+      this.lastShadowDoorSig = doorSig;
+      this.shadowMapDirty = false;
+      if (this.renderer.shadowMap.enabled) {
+        this.renderer.shadowMap.needsUpdate = true;
+      }
+    }
 
     // Keep atmospheric sky fill opposite the sun
     this.fillLight.position.set(
@@ -2826,7 +2926,11 @@ export class GameEngine {
       const apt = this.prologueManager.townMgr.apartmentBuilding;
       if (aptInteraction.id === 'tv') {
         const isOn = apt.toggleTV();
-        this.callbacks.onInteractionPrompt(isOn ? 'TV: Switched ON [Oakridge Emergency Broadcast]' : 'TV: Switched OFF');
+        if (isOn) {
+          apt.syncLiveBroadcastTV(this.globalMediaManager.getSharedScreenFeed());
+        }
+        const feedName = this.globalMediaManager.getSharedScreenFeed().channelName;
+        this.callbacks.onInteractionPrompt(isOn ? `TV: Switched ON [${feedName}]` : 'TV: Switched OFF');
         return;
       } else if (aptInteraction.id === 'fan') {
         const isOn = apt.toggleFan();
@@ -3310,6 +3414,70 @@ export class GameEngine {
         }
         return;
       }
+    }
+
+    // Oakridge Media Tower Stations & Broadcast Terminals
+    const mediaStation = this.mediaTower?.getNearestStation(this.player.position, 3.2);
+    if (mediaStation) {
+      soundEngine.playUIClick();
+      if (mediaStation.kind === 'elevator') {
+        const nextFloor = this.mediaTower.cycleElevatorFloor();
+        const targetY = this.mediaTower.getElevatorCabWorldY();
+        if (Math.abs(this.player.position.y - targetY) < 2.2) {
+          this.player.position.y = targetY;
+          this.player.velocity.y = 0;
+        }
+        this.callbacks.onInteractionPrompt(`Media Tower Lift dispatched to Floor ${nextFloor}.`);
+      } else if (mediaStation.kind === 'backup_generator') {
+        const fac = this.globalMediaManager.getFacilities().find((f) => f.id === 'fac_oakridge_tower');
+        const nextOn = !(fac?.backupPowerOn ?? false);
+        this.globalMediaManager.setFacilityBackupPower('fac_oakridge_tower', nextOn);
+        this.globalMediaManager.recordTerminalInteraction(mediaStation.id);
+        this.callbacks.onInteractionPrompt(
+          nextOn
+            ? 'Oakridge Media Tower Backup Generator: ONLINE (+Satellite & FM 94.7 Override Ready)'
+            : 'Oakridge Media Tower Backup Generator: STANDBY'
+        );
+      } else {
+        if (mediaStation.channelId) {
+          this.globalMediaManager.setActiveChannel(mediaStation.channelId);
+        }
+        this.globalMediaManager.recordTerminalInteraction(mediaStation.id);
+        this.globalMediaManager.recordStudioInspection(mediaStation.id);
+        this.callbacks.onMediaSnapshot?.(this.globalMediaManager.getSnapshot());
+        this.callbacks.onOpenMediaDashboard?.();
+      }
+      return;
+    }
+
+    // Media Reporters, Anchors & Broadcast Personnel
+    const nearbyReporter = this.reporterNPCManager?.getNearestReporter(this.player.position, 3.2);
+    if (nearbyReporter) {
+      soundEngine.playUIClick();
+      this.globalMediaManager.markReporterTalked(nearbyReporter.id);
+      const quote = this.reporterNPCManager.getDialogueForReporter(
+        nearbyReporter,
+        this.globalMediaManager.getWorldPhase()
+      );
+      this.callbacks.onPrologueSubtitle?.({
+        speaker: nearbyReporter.name,
+        role: `${nearbyReporter.profession} · ${nearbyReporter.channelId.replace(/_/g, ' ').toUpperCase()}`,
+        text: quote.replace(/^[^:]+:\s*"?|"?$/g, ''),
+        duration: 5.5,
+      });
+      this.callbacks.onMediaSnapshot?.(this.globalMediaManager.getSnapshot());
+      return;
+    }
+
+    // World Public Broadcast Screens & Local Reporting Kiosks
+    const nearbyWorldScreen = this.mediaWorldScreens?.getNearestScreen(this.player.position, 3.5);
+    if (nearbyWorldScreen) {
+      soundEngine.playUIClick();
+      const nextCh = this.globalMediaManager.cycleActiveChannel();
+      const feed = this.globalMediaManager.getSharedScreenFeed(nextCh);
+      this.callbacks.onMediaSnapshot?.(this.globalMediaManager.getSnapshot());
+      this.callbacks.onInteractionPrompt(`${nearbyWorldScreen.label}: Tuned to ${feed.channelName} [${feed.badge}]`);
+      return;
     }
 
     // Streamed Real-Earth & Regional Building Doorways
@@ -3816,6 +3984,7 @@ export class GameEngine {
       outbreak: {
         isLocalOutbreakActive: !!(this.zombieMgr?.isOutbreakActive || this.prologueManager?.outbreakMgr?.isOutbreakActive),
         globalMetrics: this.globalOutbreakSimulator.getGlobalMetrics(),
+        populationState: this.globalOutbreakSimulator.getPopulationState(),
         cities: this.globalOutbreakSimulator.getCityStates(),
         activeZombies,
         wildlifeCount: creatures.length,
@@ -3837,6 +4006,102 @@ export class GameEngine {
         baseLevel: this.baseLevel,
       },
     };
+  }
+
+  public getGlobalPopulationState(): GlobalPopulationStateSnapshot {
+    return this.globalOutbreakSimulator.getPopulationState();
+  }
+
+  public resetGlobalSimulation(initialDay: number = 1): void {
+    this.globalOutbreakSimulator.reset(initialDay);
+    this.globalMediaManager?.reset(initialDay);
+    if (this.globalMediaManager) {
+      this.callbacks.onMediaSnapshot?.(this.globalMediaManager.getSnapshot());
+    }
+  }
+
+  public getGlobalMediaSnapshot(): GlobalMediaSnapshot {
+    return this.globalMediaManager.getSnapshot();
+  }
+
+  public setActiveMediaChannel(channelId: MediaChannelId): void {
+    this.globalMediaManager.setActiveChannel(channelId);
+    const aurApt = this.prologueManager?.townMgr?.apartmentBuilding;
+    if (aurApt?.state.tvOn) {
+      aurApt.syncLiveBroadcastTV(this.globalMediaManager.getSharedScreenFeed());
+    }
+    this.callbacks.onMediaSnapshot?.(this.globalMediaManager.getSnapshot());
+  }
+
+  public setActiveRadioChannel(channelId: MediaChannelId): void {
+    this.globalMediaManager.setActiveRadioChannel(channelId);
+    this.callbacks.onMediaSnapshot?.(this.globalMediaManager.getSnapshot());
+  }
+
+  public toggleMediaFacilityBackup(facilityId: string, on: boolean): void {
+    this.globalMediaManager.setFacilityBackupPower(facilityId, on);
+    this.callbacks.onMediaSnapshot?.(this.globalMediaManager.getSnapshot());
+  }
+
+  public triggerMediaLiveIncident(): void {
+    this.globalMediaManager.triggerLiveReporterIncident(true);
+    this.callbacks.onMediaSnapshot?.(this.globalMediaManager.getSnapshot());
+  }
+
+  private updateMediaEcosystem(delta: number, wx: WeatherTelemetry): void {
+    if (!this.globalMediaManager) return;
+
+    const trainTelemetry = this.aiTrainManager ? this.aiTrainManager.getOperationsTelemetry() : [];
+    const delayedTrainCount = trainTelemetry.filter((t) => t.delaySeconds > 0 || t.holdOrdered).length;
+
+    const ctx: MediaWorldInputContext = {
+      dayCount: this.dayCount,
+      campaignDay: this.storylineManager?.campaignDay ?? this.prologueManager?.currentDay ?? this.dayCount,
+      gameTimeMinutes: this.gameTimeMinutes,
+      isNight: this.isNight,
+      weatherType: wx.weather,
+      weatherSeverity: wx.intensity,
+      visibilityPercent: wx.visibilityPercent,
+      meteorInFlight: Boolean(this.prologueManager?.meteorMgr?.isMeteorInFlight),
+      meteorImpacted: Boolean(this.prologueManager?.meteorMgr?.isImpacted || this.prologueManager?.meteoriteImpactTriggered),
+      cityOutbreakStarted: Boolean(this.prologueManager?.cityOutbreakStarted),
+      isOutbreakActive: Boolean(this.zombieMgr?.isOutbreakActive || this.prologueManager?.outbreakMgr?.isOutbreakActive),
+      prologueEventId: this.prologueManager?.currentEventId,
+      globalMetrics: this.globalOutbreakSimulator.getGlobalMetrics(),
+      cityStates: this.globalOutbreakSimulator.getCityStates(),
+      populationState: this.globalOutbreakSimulator.getPopulationState(),
+      activeTrainCount: trainTelemetry.length,
+      delayedTrainCount,
+      powerStatePowered: this.powerManager.state.isPowered,
+      powerGridStability: this.globalOutbreakSimulator.powerGridStability,
+      nearestCityName: this.playerStats.nearestCityName || 'Oakridge Valley',
+    };
+
+    if (this.vehicleManager) {
+      this.globalMediaManager.syncMediaVehicleTelemetry(this.vehicleManager.getMediaVehicleTelemetry());
+    }
+    this.globalMediaManager.update(delta, ctx);
+
+    this.mediaTower?.update(delta, this.globalMediaManager, this.globalOutbreakSimulator.powerGridStability);
+    this.mediaWorldScreens?.update(delta, this.globalMediaManager, this.player.position);
+    this.reporterNPCManager?.update(
+      delta,
+      this.globalMediaManager,
+      this.zombieMgr,
+      this.isNight,
+      Boolean(this.zombieMgr?.isOutbreakActive)
+    );
+
+    const aurApt = this.prologueManager?.townMgr?.apartmentBuilding;
+    if (aurApt?.state.tvOn) {
+      aurApt.syncLiveBroadcastTV(this.globalMediaManager.getSharedScreenFeed());
+    }
+
+    this.mediaUiSyncTimer += delta;
+    if (this.mediaUiSyncTimer >= 1.0) {
+      this.mediaUiSyncTimer = 0;
+      this.callbacks.onMediaSnapshot?.(this.globalMediaManager.getSnapshot());
+    }
   }
 
   public getNexusSnapshot(): NexusDashboardSnapshot | null {
@@ -4147,7 +4412,7 @@ export class GameEngine {
     // Town Citizen Prompt
     const nearbyCitizen = this.prologueManager.townMgr.getNearestCitizen(this.player.position, 3.5);
     if (nearbyCitizen) {
-      this.callbacks.onInteractionPrompt(`[E] Talk to ${nearbyCitizen.name} (${nearbyCitizen.role})`);
+      this.callbacks.onInteractionPrompt(`[E] Talk to ${nearbyCitizen.name} (${nearbyCitizen.ageGroup ?? 'Adult'} · ${nearbyCitizen.role})`);
       return;
     }
 
@@ -4157,8 +4422,37 @@ export class GameEngine {
       const stageTag =
         nearbyRegNpc.infectionStage === 'stunned'
           ? `TURNING IN ${Math.ceil(nearbyRegNpc.infectionTimer)}s`
-          : nearbyRegNpc.role;
+          : `${nearbyRegNpc.ageGroup} · ${nearbyRegNpc.role}`;
       this.callbacks.onInteractionPrompt(`[E] Talk to ${nearbyRegNpc.name} (${stageTag})`);
+      return;
+    }
+
+    // Oakridge Media Tower Stations Prompt
+    const mediaStationPrompt = this.mediaTower?.getNearestStation(this.player.position, 3.2);
+    if (mediaStationPrompt) {
+      const actionVerb =
+        mediaStationPrompt.kind === 'elevator'
+          ? 'Use Media Tower Lift'
+          : mediaStationPrompt.kind === 'backup_generator'
+            ? 'Toggle Media Tower Backup Power'
+            : `Inspect ${mediaStationPrompt.label} (Open Media Network)`;
+      this.callbacks.onInteractionPrompt(`[E] ${actionVerb}`);
+      return;
+    }
+
+    // Media Reporters & Field Crew Prompt
+    const mediaReporterPrompt = this.reporterNPCManager?.getNearestReporter(this.player.position, 3.2);
+    if (mediaReporterPrompt) {
+      this.callbacks.onInteractionPrompt(
+        `[E] Talk to ${mediaReporterPrompt.name} (${mediaReporterPrompt.profession} · ${mediaReporterPrompt.status.replace(/_/g, ' ').toUpperCase()})`
+      );
+      return;
+    }
+
+    // Public Broadcast Screen Prompt
+    const worldScreenPrompt = this.mediaWorldScreens?.getNearestScreen(this.player.position, 3.5);
+    if (worldScreenPrompt) {
+      this.callbacks.onInteractionPrompt(`[E] Cycle Channel on ${worldScreenPrompt.label}`);
       return;
     }
 
@@ -4906,6 +5200,7 @@ export class GameEngine {
       lon: originLon,
     };
     WorldCoordinates.setWorldOrigin(this.earthOrigin);
+    this.globalOutbreakSimulator.refreshAsteroidVisuals();
 
     this.chunkManager.clearLoadedChunks();
     this.interiorStreamingManager.disposeActiveSession();
@@ -4977,7 +5272,7 @@ export class GameEngine {
       };
 
       return {
-        saveVersion: 2,
+        saveVersion: CURRENT_SAVE_VERSION,
         earthOrigin: { ...this.earthOrigin },
         globalOutbreakState: this.globalOutbreakSimulator.exportSaveData(),
         metadata: meta,
@@ -5013,6 +5308,7 @@ export class GameEngine {
         compoundState: this.prologueManager?.townMgr?.apartmentBuilding?.exportCompoundState(),
         aurelionState: this.prologueManager?.townMgr?.apartmentBuilding?.exportAurelionState(),
         nexusState: this.prologueManager?.townMgr?.apartmentBuilding?.exportNexusState(),
+        mediaState: this.globalMediaManager?.exportSaveData(),
       };
     };
 
@@ -5085,6 +5381,9 @@ export class GameEngine {
     this.aiTrainManager?.dispose();
     this.interiorStreamingManager?.dispose();
     this.globalOutbreakSimulator?.dispose();
+    this.mediaTower?.dispose();
+    this.reporterNPCManager?.dispose();
+    this.mediaWorldScreens?.dispose();
     try {
       this.atmosphericSky?.dispose();
     } catch {}

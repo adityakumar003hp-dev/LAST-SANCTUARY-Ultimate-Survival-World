@@ -28,7 +28,8 @@ export type BuildingArchetype =
   | 'office'
   | 'warehouse'
   | 'school'
-  | 'cabin';
+  | 'cabin'
+  | 'media';
 
 export interface EnterableBuildingDef {
   id: string;
@@ -68,6 +69,7 @@ const ARCHETYPE_NAMES: Record<BuildingArchetype, string[]> = {
   warehouse: ['Logistics Warehouse', 'Freight Storage Depot', 'Distribution Shed'],
   school: ['Public Academy', 'Technical Institute', 'Community Library'],
   cabin: ['Outback Homestead', 'Timber Cabin', 'Roadside Shelter'],
+  media: ['Regional Broadcast Studio', 'WorldWatch Bureau', 'Satellite Uplink Center'],
 };
 
 const SHARED_MATERIALS = new Map<string, THREE.Material>();
@@ -765,6 +767,9 @@ export class RealEarthBuildings {
       village: { archetype: 'residential', w: 10, d: 9, h: 6.5, floors: 2 },
       airport: { archetype: 'office', w: 20, d: 15, h: 7.5, floors: 2 },
       freight_terminal: { archetype: 'warehouse', w: 20, d: 15, h: 7.5, floors: 2 },
+      media_station: { archetype: 'media', w: 15, d: 12, h: 8.2, floors: 2 },
+      broadcast_center: { archetype: 'media', w: 19, d: 15, h: 12.5, floors: 3 },
+      satellite_uplink: { archetype: 'media', w: 12, d: 10, h: 5.2, floors: 1 },
     };
 
     const spec = map[poi.type];

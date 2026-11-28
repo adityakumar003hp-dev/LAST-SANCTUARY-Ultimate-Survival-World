@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import {
   AURELION_LEVELS,
   AURELION_ROOMS,
@@ -6,6 +7,60 @@ import {
 } from './AurelionConfig';
 import { AurelionMaterials } from './AurelionMaterials';
 import { AurelionMansionSystems, HydroCropType } from './AurelionSystems';
+
+function mergeStaticGroupByMaterial(group: THREE.Group, trackedGeos: THREE.BufferGeometry[]): void {
+  group.updateMatrixWorld(true);
+  const buckets = new Map<string, { mat: THREE.Material; geos: THREE.BufferGeometry[] }>();
+  const toRemove: THREE.Mesh[] = [];
+
+  for (const child of group.children) {
+    if (!(child instanceof THREE.Mesh) || Array.isArray(child.material)) continue;
+    child.updateMatrix();
+    const rawGeo = child.geometry;
+    const g = rawGeo.index ? rawGeo.toNonIndexed() : rawGeo.clone();
+    g.applyMatrix4(child.matrix);
+    // Keep only position, normal, uv to ensure identical attribute layout across merged primitives
+    for (const attr of Object.keys(g.attributes)) {
+      if (attr !== 'position' && attr !== 'normal' && attr !== 'uv') {
+        g.deleteAttribute(attr);
+      }
+    }
+    const key = child.material.uuid;
+    let bucket = buckets.get(key);
+    if (!bucket) {
+      bucket = { mat: child.material, geos: [] };
+      buckets.set(key, bucket);
+    }
+    bucket.geos.push(g);
+    toRemove.push(child);
+  }
+
+  for (const m of toRemove) {
+    group.remove(m);
+    m.geometry.dispose();
+  }
+
+  for (const { mat, geos } of buckets.values()) {
+    if (geos.length === 0) continue;
+    if (geos.length === 1) {
+      trackedGeos.push(geos[0]);
+      group.add(new THREE.Mesh(geos[0], mat));
+      continue;
+    }
+    const allHaveUv = geos.every((g) => Boolean(g.getAttribute('uv')));
+    if (!allHaveUv) {
+      for (const g of geos) {
+        if (g.getAttribute('uv')) g.deleteAttribute('uv');
+      }
+    }
+    const merged = mergeGeometries(geos, false);
+    for (const g of geos) g.dispose();
+    if (merged) {
+      trackedGeos.push(merged);
+      group.add(new THREE.Mesh(merged, mat));
+    }
+  }
+}
 
 export interface B2FarmBedVisual {
   id: number;
@@ -34,6 +89,7 @@ export interface AurelionBasementHandles {
   basementTvTex: THREE.CanvasTexture;
   b2Lights: THREE.PointLight[];
   b1Lights: THREE.PointLight[];
+  mergedGeos: THREE.BufferGeometry[];
   scadaTimer?: number;
   tvTimer?: number;
   lastTvOn?: boolean;
@@ -196,6 +252,12 @@ export function buildAurelionBasements(
 
   const b2Lights: THREE.PointLight[] = [];
   const b1Lights: THREE.PointLight[] = [];
+  const mergedGeos: THREE.BufferGeometry[] = [];
+
+  // Soft interior bounce HemisphereLight inside B2 so dark metal/stone retains depth without black crush
+  const b2BounceHemi = new THREE.HemisphereLight(0xdbeafe, 0x3b4452, 0.72);
+  b2BounceHemi.position.set(0, AURELION_LEVELS.B2.floorY + 3.0, 0);
+  b2Group.add(b2BounceHemi);
 
   // Shared mechanical & agricultural PBR materials (tracked on AurelionMaterials for cleanup)
   const safetyYellowMat = mats.trackCustomMaterial(
@@ -1013,6 +1075,11 @@ export function buildAurelionBasements(
       }
     }
 
+    mergeStaticGroupByMaterial(bedGrp, mergedGeos);
+    mergeStaticGroupByMaterial(sproutGroup, mergedGeos);
+    mergeStaticGroupByMaterial(growingGroup, mergedGeos);
+    mergeStaticGroupByMaterial(ripeGroup, mergedGeos);
+
     bedGrp.add(sproutGroup, growingGroup, ripeGroup);
     b2Group.add(bedGrp);
 
@@ -1057,13 +1124,16 @@ export function buildAurelionBasements(
   for (const [lx, lz] of [
     [-10, -7],
     [-10, 7],
+    [-1, 8.2],
+    [2.8, 7.6],
     [0, 0],
     [2, 4],
     [10, -7],
     [10, 7],
   ] as const) {
-    const l = new THREE.PointLight(0xdbeafe, 1.3, 18, 1.4);
-    l.position.set(lx, b2Y + 2.9, lz);
+    const l = new THREE.PointLight(0xdbeafe, 1.85, 22, 1.15);
+    l.castShadow = false;
+    l.position.set(lx, b2Y + 2.95, lz);
     b2Lights.push(l);
     b2Group.add(l);
   }
@@ -1154,7 +1224,8 @@ export function buildAurelionBasements(
     [0, 9.5],
     [0, -9.5],
   ] as const) {
-    const l = new THREE.PointLight(0xe0f2fe, 1.25, 16, 1.4);
+    const l = new THREE.PointLight(0xe0f2fe, 1.65, 20, 1.2);
+    l.castShadow = false;
     l.position.set(lx, b1Y + 3.0, lz);
     b1Lights.push(l);
     b1RingGroup.add(l);
@@ -1177,6 +1248,7 @@ export function buildAurelionBasements(
     basementTvTex,
     b2Lights,
     b1Lights,
+    mergedGeos,
   };
 }
 

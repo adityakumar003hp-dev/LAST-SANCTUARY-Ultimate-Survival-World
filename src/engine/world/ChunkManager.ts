@@ -179,7 +179,12 @@ export class ChunkManager {
    * Updates streaming around player position.
    * Loads newly entered chunks, unloads far chunks, triggers background worker prefetching, and updates LODs.
    */
-  public updatePlayerPosition(playerPos: THREE.Vector3, force: boolean = false, allowChunkBuild: boolean = true) {
+  public updatePlayerPosition(
+    playerPos: THREE.Vector3,
+    force: boolean = false,
+    allowChunkBuild: boolean = true,
+    maxForcedBatch: number = 4
+  ) {
     if (this.isUpdating) return;
 
     if (!force) {
@@ -245,8 +250,8 @@ export class ChunkManager {
     // Sort chunks to load by distance so closest load first
     chunksToLoad.sort((a, b) => a.dist - b.dist);
 
-    // Limit loads per tick (max 1 chunk per frame, or 0 during spike cooldown frames) to prevent micro-stutters
-    const batchCount = !allowChunkBuild && !force ? 0 : Math.min(chunksToLoad.length, force ? 4 : 1);
+    // Limit loads per tick (max 1 chunk per frame, or staggered batch on load) to prevent micro-stutters
+    const batchCount = !allowChunkBuild && !force ? 0 : Math.min(chunksToLoad.length, force ? maxForcedBatch : 1);
     for (let i = 0; i < batchCount; i++) {
       const { coord } = chunksToLoad[i];
       const key = WorldCoordinates.chunkKey(coord.cx, coord.cz);

@@ -1,8 +1,9 @@
 import React, { useMemo, useState } from 'react';
-import { Radio, RefreshCw, X, CheckCircle2, ArrowRight } from 'lucide-react';
+import { Radio, RefreshCw, X, CheckCircle2, ArrowRight, Tv } from 'lucide-react';
 import { RadiantBounty, WeatherType } from '../types/game';
 import { generateProceduralRadioBroadcast } from '../data/bounties';
 import { soundEngine } from '../utils/audio';
+import type { GlobalMediaSnapshot, MediaChannelId } from '../engine/media/MediaTypes';
 
 interface SurvivalRadioPanelProps {
   isOpen: boolean;
@@ -15,6 +16,9 @@ interface SurvivalRadioPanelProps {
   activeBossNearby: boolean;
   bounties: RadiantBounty[];
   onClaimBounty: (bountyId: string) => void;
+  mediaSnapshot?: GlobalMediaSnapshot | null;
+  onSelectRadioChannel?: (channelId: MediaChannelId) => void;
+  onOpenMediaNetwork?: () => void;
 }
 
 export const SurvivalRadioPanel: React.FC<SurvivalRadioPanelProps> = ({
@@ -28,8 +32,20 @@ export const SurvivalRadioPanel: React.FC<SurvivalRadioPanelProps> = ({
   activeBossNearby,
   bounties,
   onClaimBounty,
+  mediaSnapshot,
+  onSelectRadioChannel,
+  onOpenMediaNetwork,
 }) => {
   const [tuneOffset, setTuneOffset] = useState(0);
+
+  const liveMediaRadio = useMemo(() => {
+    if (!mediaSnapshot) return null;
+    return (
+      mediaSnapshot.channels.find((c) => c.definition.id === mediaSnapshot.activeRadioChannelId) ??
+      mediaSnapshot.channels.find((c) => c.definition.id === 'oakridge_radio') ??
+      null
+    );
+  }, [mediaSnapshot]);
 
   const broadcast = useMemo(() => {
     return generateProceduralRadioBroadcast({
@@ -61,6 +77,48 @@ export const SurvivalRadioPanel: React.FC<SurvivalRadioPanelProps> = ({
           <X className="h-4 w-4" />
         </button>
       </div>
+
+      {/* Live Global Media Radio Feed (Oakridge Radio 94.7 FM / Civil Defense) */}
+      {liveMediaRadio && (
+        <div className="mt-2.5 rounded-xl border border-sky-900/60 bg-sky-950/30 p-2.5 space-y-1.5">
+          <div className="flex items-center justify-between gap-2 text-[11px] font-mono text-sky-300">
+            <span>{liveMediaRadio.definition.name} · 94.7 FM</span>
+            <span>Comms {mediaSnapshot?.commsHealthPct ?? 100}%</span>
+          </div>
+          <div className="text-xs font-semibold text-white">{liveMediaRadio.headline}</div>
+          {liveMediaRadio.bodyLines[0] && (
+            <p className="text-[11px] text-neutral-300 leading-snug">{liveMediaRadio.bodyLines[0]}</p>
+          )}
+          <div className="flex items-center justify-between gap-2 pt-1">
+            {onSelectRadioChannel && mediaSnapshot && (
+              <button
+                type="button"
+                onClick={() => {
+                  soundEngine.playRadioBroadcastBeep();
+                  const idx = mediaSnapshot.channels.findIndex(
+                    (c) => c.definition.id === mediaSnapshot.activeRadioChannelId
+                  );
+                  const next = mediaSnapshot.channels[(idx + 1) % mediaSnapshot.channels.length];
+                  if (next) onSelectRadioChannel(next.definition.id);
+                }}
+                className="rounded border border-sky-700/70 bg-sky-900/40 px-2 py-0.5 text-[10px] font-semibold text-sky-200 hover:bg-sky-800/60 cursor-pointer"
+              >
+                Next Station
+              </button>
+            )}
+            {onOpenMediaNetwork && (
+              <button
+                type="button"
+                onClick={onOpenMediaNetwork}
+                className="flex items-center gap-1 rounded border border-neutral-700 bg-neutral-900 px-2 py-0.5 text-[10px] font-semibold text-neutral-200 hover:bg-neutral-800 cursor-pointer"
+              >
+                <Tv className="h-3 w-3 text-sky-400" />
+                <span>Media Hub</span>
+              </button>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Telemetry metadata line (no pills) */}
       <div className="mt-2.5 flex items-center justify-between text-[11px] font-mono text-neutral-400 tabular-nums">

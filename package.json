@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
-    "validate:compound": "node scripts/validate-compound.mjs"
+    "validate:compound": "node scripts/validate-compound.mjs",
+    "validate:global-outbreak": "node scripts/validate-global-outbreak.mjs"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

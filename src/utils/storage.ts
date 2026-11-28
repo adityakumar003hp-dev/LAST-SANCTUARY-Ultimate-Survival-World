@@ -5,7 +5,7 @@ const DB_NAME = 'LastSanctuaryRebirthDB';
 const DB_VERSION = 1;
 const STORE_SAVES = 'saves';
 const STORE_METADATA = 'save_metadata';
-export const CURRENT_SAVE_VERSION = 3;
+export const CURRENT_SAVE_VERSION = 4;
 
 // Serialize writes per slot so an older checkpoint can never overtake a newer one.
 const slotWriteQueues = new Map<string, Promise<void>>();
@@ -64,6 +64,52 @@ export function migrateSaveData(raw: FullGameSave): FullGameSave {
     continentOrOcean: raw.playerStats.continentOrOcean ?? earthOrigin.continent,
   };
 
+  const defaultWorldPhase: NonNullable<FullGameSave['mediaState']>['worldPhase'] =
+    (raw.dayCount ?? 1) >= 5
+      ? 'late_stage'
+      : (raw.dayCount ?? 1) >= 3 || (raw.globalOutbreakState?.apocalypticSeverity && raw.globalOutbreakState.apocalypticSeverity > 0.15)
+        ? 'outbreak'
+        : (raw.dayCount ?? 1) === 2
+          ? 'asteroid_approaching'
+          : 'normal_world';
+
+  const mediaState: FullGameSave['mediaState'] = raw.mediaState
+    ? {
+        ...raw.mediaState,
+        version: raw.mediaState.version ?? 1,
+        activeChannelId: raw.mediaState.activeChannelId || 'oakridge_news_24',
+        activeRadioChannelId: raw.mediaState.activeRadioChannelId || 'oakridge_radio',
+        worldPhase: (raw.mediaState.worldPhase || defaultWorldPhase) as NonNullable<FullGameSave['mediaState']>['worldPhase'],
+        channelStatuses: raw.mediaState.channelStatuses ?? {},
+        facilityStates: raw.mediaState.facilityStates ?? {},
+        reporterStates: raw.mediaState.reporterStates ?? {},
+        broadcastHistory: Array.isArray(raw.mediaState.broadcastHistory) ? raw.mediaState.broadcastHistory : [],
+        emergencyRecordings: Array.isArray(raw.mediaState.emergencyRecordings) ? raw.mediaState.emergencyRecordings : [],
+        interactedTerminalIds: Array.isArray(raw.mediaState.interactedTerminalIds) ? raw.mediaState.interactedTerminalIds : [],
+        inspectedStudioIds: Array.isArray(raw.mediaState.inspectedStudioIds) ? raw.mediaState.inspectedStudioIds : [],
+        commsHealthPct: Number.isFinite(raw.mediaState.commsHealthPct) ? raw.mediaState.commsHealthPct : 100,
+        lastUpdatedAt: raw.mediaState.lastUpdatedAt ?? Date.now(),
+      }
+    : {
+        version: 1,
+        activeChannelId: 'oakridge_news_24',
+        activeRadioChannelId: 'oakridge_radio',
+        worldPhase: defaultWorldPhase,
+        asteroidStageIndex: (raw.dayCount ?? 1) >= 2 ? 4 : 0,
+        liveIncidentStage: 'standby',
+        liveIncidentTimer: 0,
+        liveIncidentReporterId: 'rep_field_01',
+        channelStatuses: {},
+        facilityStates: {},
+        reporterStates: {},
+        broadcastHistory: [],
+        emergencyRecordings: [],
+        interactedTerminalIds: [],
+        inspectedStudioIds: [],
+        commsHealthPct: Math.round((raw.globalOutbreakState?.powerGridStability ?? 1) * 100),
+        lastUpdatedAt: Date.now(),
+      };
+
   return {
     ...raw,
     saveVersion: CURRENT_SAVE_VERSION,
@@ -75,6 +121,7 @@ export function migrateSaveData(raw: FullGameSave): FullGameSave {
     bounties: Array.isArray(raw.bounties) ? raw.bounties : raw.bounties,
     structures: Array.isArray(raw.structures) ? raw.structures : [],
     quests: Array.isArray(raw.quests) ? raw.quests : [],
+    mediaState,
   };
 }
 

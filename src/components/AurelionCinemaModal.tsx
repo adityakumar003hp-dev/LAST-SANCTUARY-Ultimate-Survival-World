@@ -31,18 +31,22 @@ import {
   Star,
 } from 'lucide-react';
 import type { AurelionDashboardSnapshot } from '../engine/aurelion/AurelionSystems';
+import type { GlobalMediaSnapshot, MediaChannelId } from '../engine/media/MediaTypes';
 
-export type CinemaTab = 'home' | 'youtube' | 'media' | 'ott' | 'estate';
+export type CinemaTab = 'home' | 'youtube' | 'news' | 'media' | 'ott' | 'estate';
 export type StreamingServiceId = 'netflix' | 'disney' | 'prime';
 
 export interface AurelionCinemaModalProps {
   isOpen: boolean;
   snapshot: AurelionDashboardSnapshot | null;
+  mediaSnapshot?: GlobalMediaSnapshot | null;
   videoRef: React.RefObject<HTMLVideoElement | null>;
   activeVideoTitle: string | null;
   isWallProjected: boolean;
   onToggleCinemaPower: () => void;
   onSyncWallLabel: (appLabel: string, title: string) => void;
+  onSelectMediaChannel?: (channelId: MediaChannelId) => void;
+  onOpenGlobalMediaDashboard?: () => void;
   onLoadLocalOrUrlVideo: (src: string, title: string, projectTo3DWall: boolean) => void;
   onToggleWallProjection: (projectTo3DWall: boolean) => void;
   onStopWallVideo: () => void;
@@ -386,11 +390,14 @@ function parseYouTubeInput(rawInput: string): { type: 'video' | 'playlist'; id: 
 export const AurelionCinemaModal: React.FC<AurelionCinemaModalProps> = ({
   isOpen,
   snapshot,
+  mediaSnapshot,
   videoRef,
   activeVideoTitle,
   isWallProjected,
   onToggleCinemaPower,
   onSyncWallLabel,
+  onSelectMediaChannel,
+  onOpenGlobalMediaDashboard,
   onLoadLocalOrUrlVideo,
   onToggleWallProjection,
   onStopWallVideo,
@@ -447,13 +454,16 @@ export const AurelionCinemaModal: React.FC<AurelionCinemaModalProps> = ({
         onSyncWallLabel('3D WALL PROJECTOR', activeVideoTitle || 'LOCAL / STREAM VIDEO');
       } else if (tab === 'ott') {
         onSyncWallLabel('ANDROID TV APPS', 'OTT STREAMING & KNOWLEDGE BROWSER');
+      } else if (tab === 'news') {
+        const ch = mediaSnapshot?.channels.find((c) => c.definition.id === mediaSnapshot.activeChannelId);
+        onSyncWallLabel(ch?.definition.name.toUpperCase() || 'OAKRIDGE NEWS 24', ch?.headline || 'LIVE GLOBAL BROADCAST');
       } else if (tab === 'estate') {
         onSyncWallLabel('AURELION CHANNELS', 'LIVE COMPOUND & ESTATE TELEMETRY');
       } else {
         onSyncWallLabel('ANDROID TV OS', 'SMART TV HOME · 4K DOLBY CINEMA');
       }
     },
-    [activeVideoTitle, onSyncWallLabel, ytEmbed.title]
+    [activeVideoTitle, mediaSnapshot, onSyncWallLabel, ytEmbed.title]
   );
 
   const openStreamingService = useCallback(
@@ -551,6 +561,15 @@ export const AurelionCinemaModal: React.FC<AurelionCinemaModalProps> = ({
           setActiveTab('youtube');
           onSyncWallLabel('YOUTUBE TV', preset.title);
         },
+      },
+      {
+        id: 'tile_global_news',
+        title: 'Global News TV',
+        subtitle: '6 Live Oakridge & WorldWatch Broadcast Channels',
+        badge: 'LIVE TV',
+        accentClass: 'border-cyan-500/45 bg-gradient-to-br from-cyan-950/60 to-[#081523]',
+        badgeClass: 'bg-cyan-500 text-slate-950',
+        action: () => selectTab('news'),
       },
     ],
     [onSyncWallLabel, openStreamingService, selectTab]
@@ -872,6 +891,7 @@ export const AurelionCinemaModal: React.FC<AurelionCinemaModalProps> = ({
             <div className="flex md:flex-col gap-1.5">
               {[
                 { id: 'home' as const, label: 'Smart TV Grid', icon: Home },
+                { id: 'news' as const, label: 'Global News TV', icon: Tv },
                 { id: 'youtube' as const, label: 'YouTube Player', icon: Youtube },
                 { id: 'media' as const, label: '3D Wall Projector', icon: Film },
                 { id: 'ott' as const, label: 'Web Search & OTT', icon: Globe },
@@ -1739,6 +1759,58 @@ export const AurelionCinemaModal: React.FC<AurelionCinemaModalProps> = ({
                           {snapshot?.agriculture.growLightsPowered ? 'ON' : 'OFF'}
                         </div>
                       </div>
+                    </div>
+                  </div>
+                )}
+                {/* TAB 6: GLOBAL MEDIA NETWORK LIVE CHANNELS */}
+                {activeTab === 'news' && (
+                  <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div>
+                        <h3 className="text-base font-bold text-white">Global Media Network · Live Broadcast Tuner</h3>
+                        <p className="text-xs text-neutral-400">
+                          Synchronized with Oakridge Media Tower, living-room TVs, and world screens
+                        </p>
+                      </div>
+                      {onOpenGlobalMediaDashboard && (
+                        <button
+                          onClick={onOpenGlobalMediaDashboard}
+                          className="rounded-lg bg-sky-600 hover:bg-sky-500 px-3 py-1.5 text-xs font-bold text-white cursor-pointer"
+                        >
+                          Open Full Media Control
+                        </button>
+                      )}
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                      {(mediaSnapshot?.channels ?? []).map((ch) => {
+                        const isActive = mediaSnapshot?.activeChannelId === ch.definition.id;
+                        const isEmergency = ch.priority === 'emergency' || ch.status === 'eas_override';
+                        return (
+                          <button
+                            key={ch.definition.id}
+                            onClick={() => {
+                              onSelectMediaChannel?.(ch.definition.id);
+                              onSyncWallLabel(ch.definition.name.toUpperCase(), ch.headline);
+                            }}
+                            className={`rounded-xl border p-3.5 text-left cursor-pointer transition-colors ${
+                              isActive
+                                ? 'border-amber-400 bg-sky-950/50'
+                                : 'border-neutral-800 bg-neutral-900/70 hover:border-neutral-600'
+                            }`}
+                          >
+                            <div className="flex items-center justify-between text-xs font-mono">
+                              <span style={{ color: ch.definition.accentHex }}>{ch.definition.channelBadge}</span>
+                              <span className={isEmergency ? 'text-rose-400' : 'text-emerald-400'}>
+                                {isActive ? 'ON AIR' : ch.status.replace('_', ' ')}
+                              </span>
+                            </div>
+                            <div className="mt-1 text-sm font-bold text-white">{ch.definition.name}</div>
+                            <div className="mt-1 text-xs text-neutral-300 line-clamp-2">{ch.headline}</div>
+                            <div className="mt-2 text-[11px] text-neutral-400">{ch.definition.leadPresenter}</div>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 )}

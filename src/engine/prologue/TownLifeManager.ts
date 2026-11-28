@@ -804,6 +804,7 @@ export class TownLifeManager {
       id: string;
       name: string;
       role: string;
+      ageGroup: 'Child' | 'Teenager' | 'Young Adult' | 'Adult' | 'Middle-aged Adult' | 'Elderly';
       bType: string;
       pos: [number, number, number];
       rot: number;
@@ -815,6 +816,7 @@ export class TownLifeManager {
         id: 'mr_henderson',
         name: 'Mr. Henderson',
         role: 'Market Shopkeeper',
+        ageGroup: 'Middle-aged Adult',
         bType: 'market',
         pos: [-7.5, 0, -48],
         rot: Math.PI / 2,
@@ -830,6 +832,7 @@ export class TownLifeManager {
         id: 'barista_sam',
         name: 'Sam',
         role: 'Corner Cafe Barista',
+        ageGroup: 'Young Adult',
         bType: 'cafe',
         pos: [-8.5, 0, -60],
         rot: Math.PI / 2,
@@ -845,6 +848,7 @@ export class TownLifeManager {
         id: 'officer_davis',
         name: 'Officer Davis',
         role: 'Town Police Chief',
+        ageGroup: 'Adult',
         bType: 'police',
         pos: [11, 0, -16],
         rot: -Math.PI / 2,
@@ -860,6 +864,7 @@ export class TownLifeManager {
         id: 'nurse_sarah',
         name: 'Nurse Sarah',
         role: 'Clinic Head Nurse',
+        ageGroup: 'Adult',
         bType: 'clinic',
         pos: [10, 0, -52],
         rot: -Math.PI / 2,
@@ -875,6 +880,7 @@ export class TownLifeManager {
         id: 'firefighter_ray',
         name: 'Ray',
         role: 'Fire Captain',
+        ageGroup: 'Middle-aged Adult',
         bType: 'fire',
         pos: [12, 0, -32],
         rot: -Math.PI / 2,
@@ -890,6 +896,7 @@ export class TownLifeManager {
         id: 'jogger_leo',
         name: 'Leo',
         role: 'Park Jogger',
+        ageGroup: 'Young Adult',
         bType: 'park',
         pos: [14, 0, 8],
         rot: 0,
@@ -905,6 +912,7 @@ export class TownLifeManager {
         id: 'mrs_gable',
         name: 'Mrs. Gable',
         role: 'Town Resident',
+        ageGroup: 'Elderly',
         bType: 'park',
         pos: [15, 0, 18],
         rot: Math.PI / 2,
@@ -917,9 +925,34 @@ export class TownLifeManager {
         ],
       },
       {
+        id: 'student_ava',
+        name: 'Ava',
+        role: 'School Student',
+        ageGroup: 'Child',
+        bType: 'school',
+        pos: [-35, 0, -47],
+        rot: Math.PI / 3,
+        shirt: 0x4f77a8,
+        pants: 0x343b49,
+        lines: ['I am waiting for class to start.', 'The teachers said today would be a normal school day.'],
+      },
+      {
+        id: 'student_noah',
+        name: 'Noah',
+        role: 'School Student',
+        ageGroup: 'Teenager',
+        bType: 'school',
+        pos: [-41, 0, -47],
+        rot: -Math.PI / 3,
+        shirt: 0x386b9e,
+        pants: 0x272f3b,
+        lines: ['I have a science project due this week.', 'The sky looked strange over the hills earlier.'],
+      },
+      {
         id: 'mechanic_dan',
         name: 'Dan',
         role: 'Gas Station Mechanic',
+        ageGroup: 'Middle-aged Adult',
         bType: 'gas',
         pos: [35, 0, 2],
         rot: -Math.PI / 2,
@@ -935,6 +968,7 @@ export class TownLifeManager {
         id: 'mayor_wilson',
         name: 'Mayor Wilson',
         role: 'Town Mayor',
+        ageGroup: 'Elderly',
         bType: 'hall',
         pos: [34, 0, 18],
         rot: -Math.PI / 2,
@@ -950,6 +984,8 @@ export class TownLifeManager {
 
     citizenDefs.forEach((d) => {
       const g = this.createCitizenMesh(d.id, d.shirt, d.pants);
+      const ageScale = d.ageGroup === 'Child' ? 0.70 : d.ageGroup === 'Teenager' ? 0.86 : d.ageGroup === 'Young Adult' ? 0.96 : d.ageGroup === 'Elderly' ? 0.94 : d.ageGroup === 'Middle-aged Adult' ? 0.99 : 1.0;
+      g.scale.setScalar(ageScale);
       g.name = `citizen_${d.id}`;
       g.position.set(d.pos[0], getTerrainHeight(d.pos[0], d.pos[2]), d.pos[2]);
       g.rotation.y = d.rot;
@@ -959,6 +995,7 @@ export class TownLifeManager {
         id: d.id,
         name: d.name,
         role: d.role,
+        ageGroup: d.ageGroup,
         buildingType: d.bType,
         position: [d.pos[0], g.position.y, d.pos[2]],
         rotationY: d.rot,
@@ -983,6 +1020,8 @@ export class TownLifeManager {
       mrs_gable: { skinColor: 0xe5bfa0, hairColor: 0xb8b6b4, hairStyle: 'bun', genderPresentation: 'feminine', fabricStyle: 'wool' },
       mechanic_dan: { skinColor: 0xb98258, hairColor: 0x221a16, hairStyle: 'short', genderPresentation: 'masculine', hasBeard: true, fabricStyle: 'denim' },
       mayor_wilson: { skinColor: 0xdcb290, hairColor: 0x625e5c, hairStyle: 'fedora', genderPresentation: 'masculine', fabricStyle: 'wool' },
+      student_ava: { skinColor: 0xe0b58e, hairColor: 0x39251b, hairStyle: 'ponytail', genderPresentation: 'feminine', fabricStyle: 'wool' },
+      student_noah: { skinColor: 0xc9936a, hairColor: 0x211a16, hairStyle: 'short', genderPresentation: 'masculine', fabricStyle: 'wool' },
     };
 
     const custom = profileMap[id] ?? {};
@@ -1067,7 +1106,7 @@ export class TownLifeManager {
       const rArm = mesh.getObjectByName('rArm');
       const head = mesh.getObjectByName('head');
       if (c.infectionStage === 'stunned') {
-        // Visibly stunned/convulsing crouch while the 60-second conversion timer runs.
+        // Visibly stunned/cowering animation while the day/night conversion timer runs.
         const shiver = Math.sin(this.walkTime * 22 + idx) * 0.08;
         if (lArm && rArm) {
           lArm.rotation.x = THREE.MathUtils.damp(lArm.rotation.x, -0.55 + shiver, 6, delta);
@@ -1105,6 +1144,7 @@ export class TownLifeManager {
         role: citizen.role,
         clothHex: citizen.shirtColor,
         pantsHex: citizen.pantColor,
+        victimScale: citizen.ageGroup === 'Child' ? 0.70 : citizen.ageGroup === 'Teenager' ? 0.86 : citizen.ageGroup === 'Young Adult' ? 0.96 : citizen.ageGroup === 'Elderly' ? 0.94 : citizen.ageGroup === 'Middle-aged Adult' ? 0.99 : 1.0,
       }
     );
     if (!spawned) return false;
@@ -1169,7 +1209,8 @@ export class TownLifeManager {
 
     // 3. Living Town Citizens
     this.citizens.forEach((c) => {
-      physMgr.registerCylinderCollider(`citizen_${c.id}`, 'npc', c.position, 0.45, 1.8);
+      const scale = c.ageGroup === 'Child' ? 0.70 : c.ageGroup === 'Teenager' ? 0.86 : c.ageGroup === 'Young Adult' ? 0.96 : c.ageGroup === 'Elderly' ? 0.94 : c.ageGroup === 'Middle-aged Adult' ? 0.99 : 1.0;
+      physMgr.registerCylinderCollider(`citizen_${c.id}`, 'npc', c.position, 0.45 * scale, 1.8 * scale);
     });
 
     // 4. Moving traffic cars

@@ -293,20 +293,54 @@ export const GraphicsManagerModal: React.FC<GraphicsManagerModalProps> = ({
               </div>
 
               <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-neutral-800/80">
+                <div>
+                  <div className="text-xs font-bold text-emerald-300">Low Heat / Mobile Saver Mode</div>
+                  <p className="text-[10px] text-neutral-400">
+                    Caps frame rate (30 or 45 FPS) and scales resolution down to 0.75x if frames exceed 22ms.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() =>
+                    applyPatch({
+                      lowHeatSaver: !effectiveCfg.lowHeatSaver,
+                      targetFps: !effectiveCfg.lowHeatSaver
+                        ? effectiveCfg.targetFps === 60
+                          ? 30
+                          : effectiveCfg.targetFps
+                        : effectiveCfg.targetFps,
+                      dynamicResolutionEnabled: !effectiveCfg.lowHeatSaver
+                        ? true
+                        : effectiveCfg.dynamicResolutionEnabled,
+                    })
+                  }
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                    effectiveCfg.lowHeatSaver ? 'bg-emerald-500' : 'bg-neutral-800'
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                      effectiveCfg.lowHeatSaver ? 'translate-x-6' : 'translate-x-1'
+                    }`}
+                  />
+                </button>
+              </div>
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-neutral-800/80">
                 <span className="text-xs font-semibold text-neutral-300">Target Smooth Frame Rate</span>
                 <div className="flex gap-1.5">
-                  {([30, 60] as const).map((fps) => (
+                  {([30, 45, 60] as const).map((fps) => (
                     <button
                       key={fps}
                       type="button"
                       onClick={() => applyPatch({ targetFps: fps })}
-                      className={`px-3 py-1 rounded-lg text-xs font-mono font-bold cursor-pointer border ${
+                      className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold cursor-pointer border ${
                         effectiveCfg.targetFps === fps
                           ? 'bg-cyan-500 text-neutral-950 border-cyan-400'
                           : 'bg-neutral-900 text-neutral-300 border-neutral-800 hover:border-neutral-700'
                       }`}
                     >
-                      {fps} FPS {fps === 30 ? '(Stable)' : '(Smooth)'}
+                      {fps} FPS {fps === 30 ? '(Cool)' : fps === 45 ? '(Mobile)' : '(Smooth)'}
                     </button>
                   ))}
                 </div>
@@ -589,12 +623,12 @@ export const GraphicsManagerModal: React.FC<GraphicsManagerModalProps> = ({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
                 <div className="flex flex-col gap-1.5">
                   <span className="text-[11px] font-semibold text-neutral-400">Shadow Map Resolution</span>
-                  <div className="grid grid-cols-4 gap-1">
-                    {([512, 1024, 2048, 3072] as const).map((res) => (
+                  <div className="grid grid-cols-2 gap-1">
+                    {([512, 1024] as const).map((res) => (
                       <button
                         key={res}
                         type="button"
-                        disabled={!effectiveCfg.shadowsEnabled}
+                        disabled={!effectiveCfg.shadowsEnabled || (Boolean(snap?.isMobile) && res > 512)}
                         onClick={() => applyPatch({ shadowResolution: res })}
                         className={`py-1 rounded text-[10px] font-mono font-bold border cursor-pointer disabled:opacity-35 ${
                           effectiveCfg.shadowResolution === res && effectiveCfg.shadowsEnabled
@@ -602,7 +636,7 @@ export const GraphicsManagerModal: React.FC<GraphicsManagerModalProps> = ({
                             : 'bg-neutral-950 text-neutral-300 border-neutral-800'
                         }`}
                       >
-                        {res}
+                        {res}px {res === 512 ? '(Mobile)' : '(Desktop)'}
                       </button>
                     ))}
                   </div>

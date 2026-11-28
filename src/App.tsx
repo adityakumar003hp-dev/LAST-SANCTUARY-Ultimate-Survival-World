@@ -26,6 +26,8 @@ import { CinematicOverlay } from './components/prologue/CinematicOverlay';
 import { PerformanceDiagnostic } from './components/PerformanceDiagnostic';
 import { GraphicsManagerModal } from './components/GraphicsManagerModal';
 import { SurvivalRadioPanel } from './components/SurvivalRadioPanel';
+import { GlobalMediaDashboard } from './components/GlobalMediaDashboard';
+import type { GlobalMediaSnapshot, MediaChannelId } from './engine/media/MediaTypes';
 import { FishingModal } from './components/FishingModal';
 import { ProloguePhase, PrologueSubtitle, StoryCompanion } from './types/prologue';
 import {
@@ -223,6 +225,7 @@ export default function App() {
   const [isCraftingOpen, setIsCraftingOpen] = useState(false);
   const [craftingStation, setCraftingStation] = useState<string | undefined>(undefined);
   const [isMapOpen, setIsMapOpen] = useState(false);
+  const [, setMapTelemetryTick] = useState(0);
   const [isJournalOpen, setIsJournalOpen] = useState(false);
   const [isCharacterOpen, setIsCharacterOpen] = useState(false);
   const [isPauseOpen, setIsPauseOpen] = useState(false);
@@ -262,6 +265,8 @@ export default function App() {
   const [isRailwayNetworkMapOpen, setIsRailwayNetworkMapOpen] = useState(false);
   const [isBaseDashboardOpen, setIsBaseDashboardOpen] = useState(false);
   const [liveBaseState, setLiveBaseState] = useState<BaseState | null>(null);
+  const [isMediaDashboardOpen, setIsMediaDashboardOpen] = useState(false);
+  const [mediaSnapshot, setMediaSnapshot] = useState<GlobalMediaSnapshot | null>(null);
   const [isTrainControlCenterOpen, setIsTrainControlCenterOpen] = useState(false);
   const [isCompendiumOpen, setIsCompendiumOpen] = useState(false);
   const [codexState, setCodexState] = useState<CodexState>(() => loadCodexState());
@@ -623,6 +628,8 @@ export default function App() {
       setIsApartmentStatusOpen(false);
       setIsSecurityCommandCenterOpen(false);
       setIsBaseDashboardOpen(false);
+      setIsMediaDashboardOpen(false);
+      setMediaSnapshot(null);
       setIsTrainControlCenterOpen(false);
       setIsCompendiumOpen(false);
       setIsPhotoMode(false);
@@ -768,7 +775,15 @@ export default function App() {
         onOpenAurelionDocument: (docId: string) => setActiveAurelionDocId(docId),
         onOpenAurelionCinema: () => {
           setAurelionSnapshot(engineRef.current?.getAurelionSnapshot() ?? null);
+          setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
           setIsAurelionCinemaOpen(true);
+        },
+        onMediaSnapshot: (snap: GlobalMediaSnapshot) => {
+          setMediaSnapshot(snap);
+        },
+        onOpenMediaDashboard: () => {
+          setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
+          setIsMediaDashboardOpen(true);
         },
         onAurelionLocationChange: (loc: { level: string; roomName: string } | null) => setAurelionLocation(loc),
         onOpenNexusElevator: (elevatorId: NexusElevatorId) => {
@@ -980,9 +995,12 @@ export default function App() {
       if (isBaseDashboardOpen) {
         setLiveBaseState(engine.getBaseState());
       }
+      if (isMapOpen) {
+        setMapTelemetryTick((t) => (t + 1) % 1_000_000);
+      }
     }, 300);
     return () => clearInterval(timer);
-  }, [gameState, isBaseDashboardOpen]);
+  }, [gameState, isBaseDashboardOpen, isMapOpen]);
 
   // Quick-Consume (Medkits, Bandages, Food, Clean Water) from Hotbar or Inventory
   const handleQuickConsume = useCallback(
@@ -1123,6 +1141,19 @@ export default function App() {
   }, [isApartmentStatusOpen, activeElevatorModal, isAurelionCinemaOpen]);
 
   useEffect(() => {
+    if (!isMediaDashboardOpen && !isAurelionCinemaOpen && !isRadioOpen) return;
+    if (engineRef.current) {
+      setMediaSnapshot(engineRef.current.getGlobalMediaSnapshot());
+    }
+    const timer = window.setInterval(() => {
+      if (engineRef.current) {
+        setMediaSnapshot(engineRef.current.getGlobalMediaSnapshot());
+      }
+    }, 650);
+    return () => window.clearInterval(timer);
+  }, [isMediaDashboardOpen, isAurelionCinemaOpen, isRadioOpen]);
+
+  useEffect(() => {
     if (!nexusElevatorModal && !nexusFloor1Tab && !nexusDepartmentState) return;
     const timer = window.setInterval(() => {
       if (engineRef.current) {
@@ -1177,6 +1208,7 @@ export default function App() {
     isSecurityCommandCenterOpen ||
     isRailwayNetworkMapOpen ||
     isBaseDashboardOpen ||
+    isMediaDashboardOpen ||
     isTrainControlCenterOpen ||
     isCompendiumOpen ||
     isAchievementsOpen ||
@@ -1416,6 +1448,13 @@ export default function App() {
       } else if (code === 'KeyN') {
         setShowMinimap((prev) => !prev);
         soundEngine.playUIClick();
+      } else if (code === 'KeyY') {
+        setIsMediaDashboardOpen((prev) => {
+          const next = !prev;
+          if (next) setMediaSnapshot(engine.getGlobalMediaSnapshot());
+          return next;
+        });
+        soundEngine.playUIClick();
       } else if (code === 'KeyP') {
         setIsPhotoMode((prev) => !prev);
         soundEngine.playUIClick();
@@ -1451,6 +1490,7 @@ export default function App() {
           isSecurityCommandCenterOpen ||
           isRailwayNetworkMapOpen ||
           isBaseDashboardOpen ||
+          isMediaDashboardOpen ||
           isTrainControlCenterOpen ||
           isCompendiumOpen ||
           isAchievementsOpen ||
@@ -1485,6 +1525,7 @@ export default function App() {
           setIsSecurityCommandCenterOpen(false);
           setIsRailwayNetworkMapOpen(false);
           setIsBaseDashboardOpen(false);
+          setIsMediaDashboardOpen(false);
           setIsTrainControlCenterOpen(false);
           setIsCompendiumOpen(false);
           setIsAchievementsOpen(false);
@@ -1626,6 +1667,7 @@ export default function App() {
     isSecurityCommandCenterOpen,
     isRailwayNetworkMapOpen,
     isBaseDashboardOpen,
+    isMediaDashboardOpen,
     isTrainControlCenterOpen,
     isCompendiumOpen,
     isAchievementsOpen,
@@ -2219,6 +2261,17 @@ export default function App() {
                   soundEngine.playRadioBroadcastBeep();
                   setIsRadioOpen((p) => !p);
                 }}
+                onOpenMediaDashboard={() => {
+                  setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
+                  setIsMediaDashboardOpen(true);
+                  soundEngine.playUIClick();
+                }}
+                mediaBreakingBanner={
+                  mediaSnapshot?.liveIncidentHeadline ??
+                  (mediaSnapshot && mediaSnapshot.worldPhase !== 'normal_world'
+                    ? mediaSnapshot.channels.find((c) => c.definition.id === mediaSnapshot.activeChannelId)?.headline ?? null
+                    : null)
+                }
                 onOpenBlueprints={() => {
                   soundEngine.playUIClick();
                   setIsBlueprintModalOpen(true);
@@ -2240,6 +2293,16 @@ export default function App() {
                 activeBossNearby={Boolean(bossStatus)}
                 bounties={bounties}
                 onClaimBounty={handleClaimBounty}
+                mediaSnapshot={mediaSnapshot}
+                onSelectRadioChannel={(channelId: MediaChannelId) => {
+                  engineRef.current?.setActiveRadioChannel(channelId);
+                  setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
+                }}
+                onOpenMediaNetwork={() => {
+                  setIsRadioOpen(false);
+                  setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
+                  setIsMediaDashboardOpen(true);
+                }}
               />
 
               <CornerMinimap
@@ -2536,6 +2599,14 @@ export default function App() {
               nearestCityName={stats.nearestCityName}
               globalCities={engineRef.current?.globalOutbreakSimulator.getCityStates()}
               globalMetrics={engineRef.current?.globalOutbreakSimulator.getGlobalMetrics()}
+              populationState={engineRef.current?.getGlobalPopulationState()}
+              dayCount={dayCount}
+              isNight={isNight}
+              isOutbreakActive={Boolean(engineRef.current?.zombieMgr.isOutbreakActive)}
+              onResetSimulation={() => {
+                engineRef.current?.resetGlobalSimulation(dayCount);
+                setMapTelemetryTick((t) => (t + 1) % 1_000_000);
+              }}
               onTravelToGeoCoordinate={(lat, lon, label) => {
                 engineRef.current?.teleportToGeoCoordinate(lat, lon, label);
               }}
@@ -3110,6 +3181,7 @@ export default function App() {
           <AurelionCinemaModal
             isOpen={isAurelionCinemaOpen}
             snapshot={aurelionSnapshot ?? engineRef.current?.getAurelionSnapshot() ?? null}
+            mediaSnapshot={mediaSnapshot}
             videoRef={cinemaVideoRef}
             activeVideoTitle={cinemaVideoTitle}
             isWallProjected={isCinemaWallProjected}
@@ -3124,6 +3196,15 @@ export default function App() {
             onSyncWallLabel={(appLabel, title) => {
               const vid = isCinemaWallProjected ? cinemaVideoRef.current : null;
               engineRef.current?.setAurelionCinemaMedia(vid, appLabel, title);
+            }}
+            onSelectMediaChannel={(channelId: MediaChannelId) => {
+              engineRef.current?.setActiveMediaChannel(channelId);
+              setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
+            }}
+            onOpenGlobalMediaDashboard={() => {
+              setIsAurelionCinemaOpen(false);
+              setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
+              setIsMediaDashboardOpen(true);
             }}
             onLoadLocalOrUrlVideo={(src, title, projectTo3DWall) => {
               const vid = cinemaVideoRef.current;
@@ -3508,6 +3589,31 @@ export default function App() {
               />
             </Suspense>
           )}
+
+          {/* Global Media Network & World News Console [Y] */}
+          <GlobalMediaDashboard
+            isOpen={isMediaDashboardOpen}
+            snapshot={mediaSnapshot ?? engineRef.current?.getGlobalMediaSnapshot() ?? null}
+            globalMetrics={engineRef.current?.globalOutbreakSimulator.getGlobalMetrics() ?? null}
+            populationSnapshot={engineRef.current?.globalOutbreakSimulator.getPopulationState() ?? null}
+            onSelectChannel={(channelId: MediaChannelId) => {
+              engineRef.current?.setActiveMediaChannel(channelId);
+              setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
+            }}
+            onSelectRadioChannel={(channelId: MediaChannelId) => {
+              engineRef.current?.setActiveRadioChannel(channelId);
+              setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
+            }}
+            onToggleFacilityBackup={(facilityId: string, on: boolean) => {
+              engineRef.current?.toggleMediaFacilityBackup(facilityId, on);
+              setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
+            }}
+            onTriggerLiveIncident={() => {
+              engineRef.current?.triggerMediaLiveIncident();
+              setMediaSnapshot(engineRef.current?.getGlobalMediaSnapshot() ?? null);
+            }}
+            onClose={() => setIsMediaDashboardOpen(false)}
+          />
 
           {/* Central Train Control Dispatch Console [T] */}
           <Suspense fallback={null}>

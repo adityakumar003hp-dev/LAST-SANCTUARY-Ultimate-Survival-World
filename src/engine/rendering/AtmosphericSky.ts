@@ -102,11 +102,16 @@ export class AtmosphericSky {
           vec3 effTop = mix(topColor, overcastTint * 0.72, weatherOvercast * 0.85);
           vec3 effHor = mix(horizonColor, overcastTint * 1.15, weatherOvercast * 0.78);
           vec3 sky;
-          if (height > 0.0) {
-            float hFactor = clamp(height * 1.9, 0.0, 1.0);
-            sky = mix(effHor, effTop, pow(hFactor, 0.58));
-          } else {
-            sky = mix(effHor, bottomColor, clamp(-height * 3.8, 0.0, 1.0));
+          float above = smoothstep(-0.08, 0.08, height);
+          float hFactor = clamp(max(height, 0.0) * 1.85, 0.0, 1.0);
+          vec3 upperSky = mix(effHor, effTop, pow(hFactor, 0.56));
+          vec3 lowerSky = mix(effHor, bottomColor, smoothstep(0.0, 0.28, max(-height, 0.0)));
+          sky = mix(lowerSky, upperSky, above);
+
+          // Multi-stop Blood Moon crimson horizon scatter so distant fog melts seamlessly into the dome
+          if (isBloodMoon > 0.05 && isNight > 0.1) {
+            float bloodBand = exp(-pow((height - 0.03) * 4.2, 2.0));
+            sky += vec3(0.24, 0.035, 0.045) * bloodBand * isBloodMoon * isNight * (1.0 - weatherOvercast * 0.45);
           }
 
           // Azimuthal horizon glow toward the sun during golden hour & dawn
@@ -303,9 +308,9 @@ export class AtmosphericSky {
     } else {
       // Night / Midnight / Blood Moon
       if (isBloodMoon) {
-        uniforms.topColor.value.setRGB(0.08, 0.02, 0.04);
-        uniforms.bottomColor.value.setRGB(0.18, 0.04, 0.06);
-        uniforms.horizonColor.value.setRGB(0.35, 0.08, 0.1);
+        uniforms.topColor.value.setRGB(0.07, 0.015, 0.03);
+        uniforms.bottomColor.value.setRGB(0.14, 0.03, 0.045);
+        uniforms.horizonColor.value.setRGB(0.32, 0.07, 0.09);
         uniforms.isBloodMoon.value = 1.0;
       } else {
         uniforms.topColor.value.setRGB(0.02, 0.04, 0.08);

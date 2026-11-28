@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import type { AITrainManager, RailwayServiceTelemetry } from '../world/AITrainManager';
+import type { SharedBroadcastScreenFeed } from '../media/MediaTypes';
 
 export interface CommandScreenSpec {
   id: string;
@@ -169,25 +170,35 @@ export class CommandCenterScreens {
     return COMMAND_CENTER_25_SCREENS.length;
   }
 
-  public update(delta: number, aiTrainMgr: AITrainManager | null, status: CompoundLiveStatus) {
+  public update(
+    delta: number,
+    aiTrainMgr: AITrainManager | null,
+    status: CompoundLiveStatus,
+    mediaFeed?: SharedBroadcastScreenFeed | null
+  ) {
     this.sweepAngle = (this.sweepAngle + delta * 1.6) % (Math.PI * 2);
     this.bankTickTimer += delta;
     if (this.bankTickTimer >= 0.08) {
       this.bankTickTimer = 0;
       const telemetry = aiTrainMgr ? aiTrainMgr.getOperationsTelemetry() : [];
-      this.renderBank(this.nextBankIndex, telemetry, status);
+      this.renderBank(this.nextBankIndex, telemetry, status, mediaFeed);
       this.nextBankIndex = (this.nextBankIndex + 1) % 5;
     }
   }
 
-  private renderBank(bank: number, telemetry: RailwayServiceTelemetry[], status: CompoundLiveStatus) {
+  private renderBank(
+    bank: number,
+    telemetry: RailwayServiceTelemetry[],
+    status: CompoundLiveStatus,
+    mediaFeed?: SharedBroadcastScreenFeed | null
+  ) {
     const ctx = this.contexts[bank];
     if (!ctx) return;
 
     const specs = COMMAND_CENTER_25_SCREENS.filter((s) => s.bank === bank);
     for (const spec of specs) {
       const ox = spec.cell * 320;
-      this.drawCell(ctx, ox, 0, 320, 240, spec, telemetry, status);
+      this.drawCell(ctx, ox, 0, 320, 240, spec, telemetry, status, mediaFeed);
     }
     this.textures[bank].needsUpdate = true;
   }
@@ -200,7 +211,8 @@ export class CommandCenterScreens {
     h: number,
     spec: CommandScreenSpec,
     telemetry: RailwayServiceTelemetry[],
-    status: CompoundLiveStatus
+    status: CompoundLiveStatus,
+    mediaFeed?: SharedBroadcastScreenFeed | null
   ) {
     // Background + outer border
     ctx.fillStyle = '#07111d';
@@ -353,6 +365,31 @@ export class CommandCenterScreens {
       });
       ctx.fillStyle = '#38bdf8';
       ctx.fillText(`SENTRIES: ${status.turretCount} ONLINE [HOSTILE ONLY]`, cx, y + h - 14);
+      return;
+    }
+
+    if ((spec.index === 18 || spec.index === 20) && mediaFeed) {
+      const isEmerg = mediaFeed.priority === 'emergency' || mediaFeed.status === 'eas_override';
+      ctx.fillStyle = isEmerg ? '#f43f5e' : '#38bdf8';
+      ctx.font = 'bold 12px monospace';
+      ctx.fillText(
+        `${mediaFeed.channelName.slice(0, 22).toUpperCase()} · ${mediaFeed.signalStrengthPct}% SIG`,
+        cx,
+        cy
+      );
+      ctx.fillStyle = '#f8fafc';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.fillText(mediaFeed.headline.slice(0, 36), cx, cy + 24);
+      ctx.fillStyle = '#94a3b8';
+      ctx.font = '11px monospace';
+      ctx.fillText(mediaFeed.subheadline.slice(0, 32), cx, cy + 52);
+      ctx.fillText(`PHASE: ${mediaFeed.worldPhase.toUpperCase()}`, cx, cy + 72);
+      if (mediaFeed.lines[0]) {
+        ctx.fillStyle = '#cbd5e1';
+        ctx.fillText(mediaFeed.lines[0].slice(0, 34), cx, cy + 98);
+      }
+      ctx.fillStyle = isEmerg ? '#fbbf24' : '#34d399';
+      ctx.fillText(mediaFeed.ticker.slice(0, 34), cx, y + h - 14);
       return;
     }
 

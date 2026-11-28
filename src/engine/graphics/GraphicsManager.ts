@@ -13,6 +13,7 @@ export const QUALITY_PRESET_STORAGE_KEY = 'last_sanctuary_quality_preset';
 
 export interface GraphicsHardwareCapabilities {
   isMobile: boolean;
+  hasTouch?: boolean;
   isSoftwareGl: boolean;
   gpuRendererName: string;
   maxRenderBufferDim: number;
@@ -74,18 +75,19 @@ export function clampParticleDensity(value: number): number {
 
 export function getPresetGraphicsConfig(
   preset: GraphicsQualityMode,
-  caps: Pick<GraphicsHardwareCapabilities, 'isMobile' | 'isSoftwareGl' | 'deviceMemoryGb'>
+  caps: Pick<GraphicsHardwareCapabilities, 'isMobile' | 'hasTouch' | 'isSoftwareGl' | 'deviceMemoryGb'>
 ): GraphicsManagerConfig {
-  // Unknown memory is treated conservatively. Several mobile browsers do not
-  // expose deviceMemory, and assuming 8 GB caused high presets to OOM on phones.
   const lowMem = caps.deviceMemoryGb <= 4;
-  const baseTargetFps: GraphicsTargetFps = caps.isSoftwareGl ? 30 : 60;
+  const touchOrMobile = caps.isMobile || Boolean(caps.hasTouch);
+  const desktopShadowCap: 512 | 1024 = touchOrMobile ? 512 : 1024;
+  const baseTargetFps: GraphicsTargetFps = caps.isSoftwareGl ? 30 : touchOrMobile ? 45 : 60;
 
   if (caps.isSoftwareGl || preset === 'performance') {
     return {
       preset: caps.isSoftwareGl && (preset === 'ultra_5x' || preset === 'absolute_realism') ? 'performance' : preset,
       autoGovernor: true,
-      targetFps: baseTargetFps,
+      lowHeatSaver: touchOrMobile || caps.isSoftwareGl,
+      targetFps: touchOrMobile || caps.isSoftwareGl ? 30 : baseTargetFps,
       renderScale: null,
       shadowsEnabled: false,
       shadowResolution: 0,
@@ -94,7 +96,7 @@ export function getPresetGraphicsConfig(
       motionBlurEnabled: false,
       motionBlurIntensity: 0.65,
       dynamicResolutionEnabled: !caps.isSoftwareGl,
-      dynamicResolutionMinScale: 0.65,
+      dynamicResolutionMinScale: 0.75,
       anisotropyLevel: 1,
       viewDistanceChunks: 1,
       particleDensity: 0.45,
@@ -106,16 +108,17 @@ export function getPresetGraphicsConfig(
     return {
       preset: 'balanced',
       autoGovernor: true,
-      targetFps: 60,
+      lowHeatSaver: touchOrMobile,
+      targetFps: touchOrMobile ? 45 : 60,
       renderScale: null,
       shadowsEnabled: !caps.isMobile && !lowMem,
-      shadowResolution: caps.isMobile || lowMem ? 0 : 2048,
+      shadowResolution: caps.isMobile || lowMem ? 0 : desktopShadowCap,
       postProcessingEnabled: !caps.isMobile && !lowMem,
       bloomEnabled: false,
       motionBlurEnabled: !caps.isMobile,
       motionBlurIntensity: 0.85,
       dynamicResolutionEnabled: true,
-      dynamicResolutionMinScale: 0.7,
+      dynamicResolutionMinScale: 0.75,
       anisotropyLevel: 4,
       viewDistanceChunks: 2,
       particleDensity: 0.75,
@@ -127,10 +130,11 @@ export function getPresetGraphicsConfig(
     return {
       preset: 'quality',
       autoGovernor: true,
-      targetFps: 60,
+      lowHeatSaver: false,
+      targetFps: touchOrMobile ? 45 : 60,
       renderScale: null,
       shadowsEnabled: !caps.isMobile && !lowMem,
-      shadowResolution: caps.isMobile || lowMem ? 0 : 2048,
+      shadowResolution: caps.isMobile || lowMem ? 0 : desktopShadowCap,
       postProcessingEnabled: !caps.isMobile && !lowMem,
       bloomEnabled: !caps.isMobile && !lowMem,
       motionBlurEnabled: !caps.isMobile,
@@ -144,17 +148,16 @@ export function getPresetGraphicsConfig(
     };
   }
 
-  // Highest current-engine fidelity. Mobile/low-memory devices receive a safe
-  // adaptive variant; desktop-class devices unlock the full available pipeline.
   if (preset === 'absolute_realism') {
     const constrained = caps.isMobile || lowMem;
     return {
       preset: 'absolute_realism',
       autoGovernor: true,
-      targetFps: 60,
+      lowHeatSaver: false,
+      targetFps: touchOrMobile ? 45 : 60,
       renderScale: null,
       shadowsEnabled: !constrained,
-      shadowResolution: constrained ? 0 : 3072,
+      shadowResolution: constrained ? 0 : desktopShadowCap,
       postProcessingEnabled: !constrained,
       bloomEnabled: !constrained,
       motionBlurEnabled: !caps.isMobile,
@@ -172,10 +175,11 @@ export function getPresetGraphicsConfig(
   return {
     preset: 'ultra_5x',
     autoGovernor: true,
-    targetFps: 60,
+    lowHeatSaver: false,
+    targetFps: touchOrMobile ? 45 : 60,
     renderScale: null,
     shadowsEnabled: !caps.isMobile && !lowMem,
-    shadowResolution: caps.isMobile || lowMem ? 0 : 2048,
+    shadowResolution: caps.isMobile || lowMem ? 0 : desktopShadowCap,
     postProcessingEnabled: !caps.isMobile && !lowMem,
     bloomEnabled: !caps.isMobile && !lowMem,
     motionBlurEnabled: !caps.isMobile,
@@ -190,7 +194,7 @@ export function getPresetGraphicsConfig(
 }
 
 export function loadStoredGraphicsConfig(
-  caps: Pick<GraphicsHardwareCapabilities, 'isMobile' | 'isSoftwareGl' | 'deviceMemoryGb'>
+  caps: Pick<GraphicsHardwareCapabilities, 'isMobile' | 'hasTouch' | 'isSoftwareGl' | 'deviceMemoryGb'>
 ): GraphicsManagerConfig {
   const defaultPreset: GraphicsQualityMode =
     caps.isSoftwareGl || caps.isMobile ? 'performance' : 'balanced';
@@ -209,28 +213,33 @@ export function loadStoredGraphicsConfig(
             ? parsed.preset
             : defaultPreset;
         const base = getPresetGraphicsConfig(preset, caps);
+        const touchOrMobile = caps.isMobile || Boolean(caps.hasTouch);
         const constrainedDevice = caps.isMobile || caps.isSoftwareGl || caps.deviceMemoryGb <= 4;
+        const maxShadow = touchOrMobile ? 512 : 1024;
+        const rawShadowRes =
+          parsed.shadowResolution === 0 ||
+          parsed.shadowResolution === 512 ||
+          parsed.shadowResolution === 1024 ||
+          parsed.shadowResolution === 2048 ||
+          parsed.shadowResolution === 3072
+            ? Math.min(parsed.shadowResolution, maxShadow) as 0 | 512 | 1024
+            : base.shadowResolution;
         return {
           ...base,
           preset,
           autoGovernor: typeof parsed.autoGovernor === 'boolean' ? parsed.autoGovernor : base.autoGovernor,
-          targetFps: parsed.targetFps === 30 || parsed.targetFps === 60 ? parsed.targetFps : base.targetFps,
+          lowHeatSaver: typeof parsed.lowHeatSaver === 'boolean' ? parsed.lowHeatSaver : base.lowHeatSaver,
+          targetFps:
+            parsed.targetFps === 30 || parsed.targetFps === 45 || parsed.targetFps === 60
+              ? parsed.targetFps
+              : base.targetFps,
           renderScale:
             typeof parsed.renderScale === 'number' && Number.isFinite(parsed.renderScale)
-              ? Math.min(clampRenderScale(parsed.renderScale), constrainedDevice ? 1.15 : 2.0)
+              ? Math.min(clampRenderScale(parsed.renderScale), touchOrMobile ? 1.25 : 2.0)
               : null,
           shadowsEnabled:
             !constrainedDevice && typeof parsed.shadowsEnabled === 'boolean' ? parsed.shadowsEnabled : base.shadowsEnabled,
-          shadowResolution:
-            parsed.shadowResolution === 0 ||
-            parsed.shadowResolution === 512 ||
-            parsed.shadowResolution === 1024 ||
-            parsed.shadowResolution === 2048 ||
-            parsed.shadowResolution === 3072
-              ? constrainedDevice && parsed.shadowResolution > 1024
-                ? 1024
-                : parsed.shadowResolution
-              : base.shadowResolution,
+          shadowResolution: rawShadowRes,
           postProcessingEnabled:
             typeof parsed.postProcessingEnabled === 'boolean'
               ? parsed.postProcessingEnabled && !constrainedDevice
@@ -307,10 +316,16 @@ export function saveStoredGraphicsConfig(config: GraphicsManagerConfig): void {
 }
 
 export function probeGraphicsHardware(): GraphicsHardwareCapabilities {
+  const hasTouch =
+    typeof window !== 'undefined' &&
+    typeof navigator !== 'undefined' &&
+    ('ontouchstart' in window || navigator.maxTouchPoints > 0);
   const isMobile =
     typeof navigator !== 'undefined' &&
     typeof window !== 'undefined' &&
-    (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) || window.innerWidth <= 840);
+    (/Android|iPhone|iPad|iPod|Mobile/i.test(navigator.userAgent) ||
+      window.innerWidth <= 840 ||
+      (hasTouch && window.innerWidth <= 1180));
   const reportedMemory = typeof navigator !== 'undefined'
     ? (navigator as Navigator & { deviceMemory?: number }).deviceMemory
     : undefined;
@@ -321,6 +336,7 @@ export function probeGraphicsHardware(): GraphicsHardwareCapabilities {
   if (typeof document === 'undefined') {
     return {
       isMobile: false,
+      hasTouch: false,
       isSoftwareGl: false,
       gpuRendererName: 'Node Headless',
       maxRenderBufferDim: 4096,
@@ -338,6 +354,7 @@ export function probeGraphicsHardware(): GraphicsHardwareCapabilities {
     if (!gl) {
       return {
         isMobile,
+        hasTouch,
         isSoftwareGl: true,
         gpuRendererName: 'Fallback Software Renderer',
         maxRenderBufferDim: 2048,
@@ -366,6 +383,7 @@ export function probeGraphicsHardware(): GraphicsHardwareCapabilities {
 
     return {
       isMobile,
+      hasTouch,
       isSoftwareGl,
       gpuRendererName,
       maxRenderBufferDim,
@@ -377,6 +395,7 @@ export function probeGraphicsHardware(): GraphicsHardwareCapabilities {
   } catch {
     return {
       isMobile,
+      hasTouch,
       isSoftwareGl: false,
       gpuRendererName: 'WebGL GPU',
       maxRenderBufferDim: 4096,
@@ -420,6 +439,8 @@ export class GraphicsManager {
   private recoveryTimer: number = 0;
   private chunkCooldownFrames: number = 0;
 
+  private lowHeatRecoveryTimer: number = 0;
+
   // Loop handle tracking (RAF / timer / fence)
   private activeRafId: number = 0;
   private activeTimeoutId: number = 0;
@@ -436,12 +457,22 @@ export class GraphicsManager {
     }
   }
 
+  public getDprCeiling(): number {
+    if (this.caps.isSoftwareGl) return 1.0;
+    return this.caps.isMobile || this.caps.hasTouch ? 1.25 : 2.0;
+  }
+
+  public getShadowResolutionCeiling(): 512 | 1024 {
+    return this.caps.isMobile || this.caps.hasTouch ? 512 : 1024;
+  }
+
   public setPreset(preset: GraphicsQualityMode, preserveCustomViewDistance = false): GraphicsManagerConfig {
     const next = getPresetGraphicsConfig(preset, this.caps);
     if (preserveCustomViewDistance) {
       next.viewDistanceChunks = this.config.viewDistanceChunks;
     }
     next.autoGovernor = this.config.autoGovernor;
+    next.lowHeatSaver = this.config.lowHeatSaver;
     next.targetFps = this.caps.isSoftwareGl ? 30 : this.config.targetFps;
     this.config = next;
     this.resetGovernor();
@@ -454,7 +485,18 @@ export class GraphicsManager {
       ...this.config,
       ...patch,
     };
+    const touchOrMobile = this.caps.isMobile || Boolean(this.caps.hasTouch);
+    const maxShadow = this.getShadowResolutionCeiling();
 
+    if (patch.lowHeatSaver === true && patch.targetFps === undefined && next.targetFps === 60) {
+      next.targetFps = 30;
+    }
+    if (next.lowHeatSaver) {
+      next.dynamicResolutionEnabled = !this.caps.isSoftwareGl;
+      if (next.targetFps === 60) {
+        next.targetFps = 45;
+      }
+    }
     if (patch.viewDistanceChunks !== undefined) {
       next.viewDistanceChunks = clampViewDistanceChunks(patch.viewDistanceChunks);
     }
@@ -473,6 +515,10 @@ export class GraphicsManager {
     if (patch.dynamicResolutionMinScale !== undefined) {
       next.dynamicResolutionMinScale = clampDynamicMinScale(patch.dynamicResolutionMinScale);
     }
+    if (next.shadowResolution > maxShadow) {
+      next.shadowResolution = maxShadow;
+    }
+
     if (this.caps.isSoftwareGl) {
       next.shadowsEnabled = false;
       next.postProcessingEnabled = false;
@@ -497,7 +543,9 @@ export class GraphicsManager {
       next.viewDistanceChunks = Math.min(next.viewDistanceChunks, 2);
       next.particleDensity = Math.min(next.particleDensity, 0.75);
       next.maxLocalLights = Math.min(next.maxLocalLights, 3);
-      next.renderScale = next.renderScale === null ? null : Math.min(next.renderScale, 1.15);
+      next.renderScale = next.renderScale === null ? null : Math.min(next.renderScale, 1.25);
+    } else if (touchOrMobile && next.renderScale !== null) {
+      next.renderScale = Math.min(next.renderScale, 1.25);
     }
 
     this.config = next;
@@ -523,11 +571,16 @@ export class GraphicsManager {
     this.dynamicResolutionScale = 1.0;
     this.drsStepTimer = 0;
     this.drsRecoverTimer = 0;
+    this.lowHeatRecoveryTimer = 0;
     this.combatActionActive = false;
     this.lowFpsTimer = 0;
     this.recoveryTimer = 0;
     this.governorState = this.config.autoGovernor ? 'optimal' : 'manual';
-    this.governorActionLabel = this.config.autoGovernor ? 'Full Fidelity' : 'Manual Control';
+    this.governorActionLabel = this.config.lowHeatSaver
+      ? `Low Heat · ${this.config.targetFps} FPS Cap`
+      : this.config.autoGovernor
+      ? 'Full Fidelity'
+      : 'Manual Control';
   }
 
   /**
@@ -536,6 +589,7 @@ export class GraphicsManager {
   public computeSafePixelRatio(desiredDpr: number, viewportWidth: number, viewportHeight: number): number {
     const w = Math.max(280, viewportWidth);
     const h = Math.max(240, viewportHeight);
+    const dprCeiling = this.getDprCeiling();
     const safeMaxDim = Math.min(4096, Math.floor(Math.min(this.caps.maxRenderBufferDim, this.caps.maxTextureDim) * 0.92));
     const maxDprForCanvas = Math.min(safeMaxDim / w, safeMaxDim / h);
     const pixelBudget = this.caps.isMobile || this.caps.isSoftwareGl || this.caps.deviceMemoryGb <= 4
@@ -544,9 +598,8 @@ export class GraphicsManager {
         ? 4_500_000
         : 6_000_000;
     const maxDprForPixelBudget = Math.sqrt(pixelBudget / (w * h));
-    const scaled = desiredDpr * this.watchdogDprFactor;
-    // Never force a minimum DPR that exceeds the device's actual buffer limit.
-    return Math.max(0.35, Math.min(scaled, maxDprForCanvas, maxDprForPixelBudget));
+    const scaled = Math.min(dprCeiling, desiredDpr) * this.watchdogDprFactor;
+    return Math.max(0.35, Math.min(scaled, dprCeiling, maxDprForCanvas, maxDprForPixelBudget));
   }
 
   /**
@@ -554,22 +607,24 @@ export class GraphicsManager {
    */
   public getEffectiveTarget(rawDeviceDpr = 1.0, hasComposer = true): GraphicsEffectiveTarget {
     const rawDpr = Math.max(1, rawDeviceDpr || 1);
+    const dprCeiling = this.getDprCeiling();
     let baseDpr = 1.0;
     if (this.config.renderScale !== null) {
-      baseDpr = this.config.renderScale;
+      baseDpr = Math.min(this.config.renderScale, dprCeiling);
     } else if (this.caps.isSoftwareGl || this.config.preset === 'performance') {
       baseDpr = 1.0;
     } else if (this.config.preset === 'balanced') {
-      baseDpr = Math.min(rawDpr, this.caps.isMobile ? 1.1 : 1.35);
+      baseDpr = Math.min(rawDpr, dprCeiling, this.caps.isMobile || this.caps.hasTouch ? 1.15 : 1.35);
     } else if (this.config.preset === 'quality') {
-      baseDpr = Math.min(Math.max(rawDpr, 1.25), this.caps.isMobile ? 1.4 : 1.65);
+      baseDpr = Math.min(Math.max(rawDpr, 1.2), dprCeiling, 1.65);
     } else {
-      baseDpr = Math.min(Math.max(rawDpr, 1.55), this.caps.isMobile ? 1.7 : 2.0);
+      baseDpr = Math.min(Math.max(rawDpr, 1.25), dprCeiling, 2.0);
     }
 
     let dprFactor = 1.0;
     let shadowsEnabled = this.config.shadowsEnabled && !this.caps.isSoftwareGl;
-    let shadowRes: number = shadowsEnabled ? this.config.shadowResolution : 0;
+    const maxShadowCap = this.getShadowResolutionCeiling();
+    let shadowRes: number = shadowsEnabled ? Math.min(this.config.shadowResolution, maxShadowCap) : 0;
     let postEnabled = this.config.postProcessingEnabled && !this.caps.isSoftwareGl && hasComposer;
     let bloomEnabled = this.config.bloomEnabled && postEnabled;
     let anisotropy = Math.min(this.caps.maxAnisotropy, this.config.anisotropyLevel);
@@ -579,26 +634,32 @@ export class GraphicsManager {
       ? 2
       : this.caps.isMobile
         ? Math.min(3, this.config.maxLocalLights)
-      : this.config.maxLocalLights;
+        : this.config.maxLocalLights;
+
+    if (this.config.lowHeatSaver) {
+      dprFactor = Math.min(dprFactor, 0.92);
+      bloomEnabled = false;
+      particleDensity = Math.min(particleDensity, 0.65);
+    }
 
     if (this.governorLevel >= 1) {
-      dprFactor = 0.85;
+      dprFactor = Math.min(dprFactor, 0.85);
       particleDensity = Math.max(0.3, particleDensity * 0.85);
     }
     if (this.governorLevel >= 2) {
-      dprFactor = 0.72;
+      dprFactor = Math.min(dprFactor, 0.72);
       bloomEnabled = false;
       postEnabled = false;
       particleDensity = Math.max(0.25, particleDensity * 0.65);
     }
     if (this.governorLevel >= 3) {
-      dprFactor = 0.65;
-      if (shadowRes > 1024) shadowRes = 1024;
+      dprFactor = Math.min(dprFactor, 0.65);
+      if (shadowRes > maxShadowCap) shadowRes = maxShadowCap;
       viewDistanceChunks = Math.max(1, viewDistanceChunks - 1);
       maxLocalLights = Math.max(2, maxLocalLights - 1);
     }
     if (this.governorLevel >= 4) {
-      dprFactor = 0.6;
+      dprFactor = Math.min(dprFactor, 0.6);
       shadowsEnabled = false;
       shadowRes = 0;
       anisotropy = 1;
@@ -609,7 +670,7 @@ export class GraphicsManager {
 
     this.watchdogDprFactor = dprFactor;
     if (shadowRes > 0) {
-      shadowRes = Math.min(this.caps.maxTextureDim, shadowRes);
+      shadowRes = Math.min(this.caps.maxTextureDim, maxShadowCap, shadowRes);
     }
 
     const preset = this.config.preset;
@@ -720,10 +781,28 @@ export class GraphicsManager {
     let changed = false;
     let emergencyTrimRequested = false;
 
-    // 1. Combat-Aware Dynamic Resolution Scaling with High-Performance CAS Upscaling
+    // 1. Low Heat / Mobile Saver & Combat-Aware Dynamic Resolution Scaling
+    if (this.config.lowHeatSaver && !this.caps.isSoftwareGl) {
+      // Drop to 0.75x immediately if frame work exceeds 22ms to curb GPU heat
+      if (frameWorkMs > 22 || this.avgFrameTimeMs > 22) {
+        this.lowHeatRecoveryTimer = 0;
+        if (this.dynamicResolutionScale > 0.755) {
+          this.dynamicResolutionScale = 0.75;
+          changed = true;
+        }
+      } else if (this.dynamicResolutionScale < 0.99 && frameWorkMs < 15.5 && this.avgFrameTimeMs < 17) {
+        this.lowHeatRecoveryTimer += rawElapsedSec;
+        if (this.lowHeatRecoveryTimer >= 2.8) {
+          this.lowHeatRecoveryTimer = 0;
+          this.dynamicResolutionScale = Math.min(1.0, this.dynamicResolutionScale + 0.12);
+          changed = true;
+        }
+      }
+    }
+
     if (this.config.dynamicResolutionEnabled) {
       const minScale = this.config.dynamicResolutionMinScale;
-      const rawTiers = [1.0, 0.92, 0.85, 0.78, 0.70, 0.65, 0.60];
+      const rawTiers = [1.0, 0.92, 0.85, 0.75, 0.70, 0.65, 0.60];
       const tiers = rawTiers.filter((t) => t >= minScale - 0.001);
       if (tiers.length === 0 || tiers[tiers.length - 1] > minScale + 0.01) {
         tiers.push(minScale);
@@ -741,6 +820,7 @@ export class GraphicsManager {
       this.combatActionActive = combatIntensity >= 0.22;
       const frameBudgetThreshold = combatIntensity >= 0.35 ? targetFrameMs * 0.95 : targetFrameMs * 1.06;
       const needsDownscale =
+        (this.config.lowHeatSaver && frameWorkMs > 22) ||
         this.rollingFps < targetFps * 0.92 ||
         this.avgFrameTimeMs > frameBudgetThreshold ||
         (combatIntensity >= 0.45 && this.p95FrameTimeMs > targetFrameMs * 1.16);
@@ -748,7 +828,7 @@ export class GraphicsManager {
       if (needsDownscale && currIdx < tiers.length - 1) {
         this.drsRecoverTimer = 0;
         this.drsStepTimer += rawElapsedSec;
-        const stepInterval = combatIntensity >= 0.45 ? 0.35 : 0.75;
+        const stepInterval = this.config.lowHeatSaver && frameWorkMs > 22 ? 0.1 : combatIntensity >= 0.45 ? 0.35 : 0.75;
         if (this.drsStepTimer >= stepInterval) {
           this.drsStepTimer = 0;
           const jump = this.rollingFps < targetFps * 0.72 && currIdx + 2 < tiers.length ? 2 : 1;
@@ -758,7 +838,7 @@ export class GraphicsManager {
             changed = true;
           }
         }
-      } else if (!needsDownscale && currIdx > 0) {
+      } else if (!needsDownscale && currIdx > 0 && !(this.config.lowHeatSaver && frameWorkMs > 18)) {
         this.drsStepTimer = 0;
         const hasHeadroom =
           this.rollingFps >= targetFps * 0.95 &&
@@ -779,7 +859,7 @@ export class GraphicsManager {
         this.drsStepTimer = Math.max(0, this.drsStepTimer - rawElapsedSec * 0.5);
         this.drsRecoverTimer = Math.max(0, this.drsRecoverTimer - rawElapsedSec * 0.5);
       }
-    } else {
+    } else if (!this.config.lowHeatSaver) {
       this.combatActionActive = combatIntensity >= 0.22;
       if (this.dynamicResolutionScale < 0.99) {
         this.dynamicResolutionScale = 1.0;
@@ -792,12 +872,14 @@ export class GraphicsManager {
       this.governorActionLabel =
         this.config.dynamicResolutionEnabled && this.dynamicResolutionScale < 0.99
           ? `DRS ${Math.round(this.dynamicResolutionScale * 100)}% CAS`
+          : this.config.lowHeatSaver
+          ? `Low Heat · ${targetFps} FPS Cap`
           : 'Manual Control';
       return { changed, emergencyTrimRequested: false };
     }
 
-    const minAcceptableFps = targetFps === 60 ? 40 : 22;
-    const recoveryFps = targetFps === 60 ? 54 : 27;
+    const minAcceptableFps = targetFps === 60 ? 40 : targetFps === 45 ? 32 : 22;
+    const recoveryFps = targetFps === 60 ? 54 : targetFps === 45 ? 40 : 27;
 
     const isLagging = this.rollingFps < minAcceptableFps || this.p95FrameTimeMs > targetFrameMs * 2.15;
     if (isLagging) {
@@ -834,10 +916,15 @@ export class GraphicsManager {
           this.governorState = 'stabilized';
         }
       } else {
-        this.governorState = this.config.dynamicResolutionEnabled && this.dynamicResolutionScale < 0.99 ? 'stabilized' : 'optimal';
+        this.governorState =
+          (this.config.dynamicResolutionEnabled || this.config.lowHeatSaver) && this.dynamicResolutionScale < 0.99
+            ? 'stabilized'
+            : 'optimal';
         this.governorActionLabel =
-          this.config.dynamicResolutionEnabled && this.dynamicResolutionScale < 0.99
-            ? `DRS ${Math.round(this.dynamicResolutionScale * 100)}% CAS`
+          (this.config.dynamicResolutionEnabled || this.config.lowHeatSaver) && this.dynamicResolutionScale < 0.99
+            ? `DRS ${Math.round(this.dynamicResolutionScale * 100)}%${this.config.lowHeatSaver ? ' Low Heat' : ' CAS'}`
+            : this.config.lowHeatSaver
+            ? `Low Heat · ${targetFps} FPS Cap`
             : 'Full Fidelity';
       }
     }
@@ -848,7 +935,7 @@ export class GraphicsManager {
   private describeGovernorLevel(level: number): string {
     switch (level) {
       case 0:
-        return 'Full Fidelity';
+        return this.config.lowHeatSaver ? `Low Heat · ${this.config.targetFps} FPS Cap` : 'Full Fidelity';
       case 1:
         return 'Step 1 · Dynamic Scale 85%';
       case 2:
@@ -883,6 +970,7 @@ export class GraphicsManager {
   /**
    * Schedules next frame using WebGL2 fenceSync (`afterDraw`) on software GL so CPU rendering never
    * starves the main thread, or requestAnimationFrame on hardware GPUs.
+   * Pauses completely when `isHidden` is true so mobile CPU/GPU sleeps cleanly.
    */
   public scheduleNextFrame(
     tickFn: (timestamp?: number) => void,
@@ -892,7 +980,6 @@ export class GraphicsManager {
     this.cancelScheduledFrame();
 
     if (isHidden) {
-      this.activeTimeoutId = window.setTimeout(() => tickFn(), 200);
       return;
     }
 
@@ -1030,6 +1117,7 @@ export class GraphicsManager {
     return {
       preset: this.config.preset,
       autoGovernor: this.config.autoGovernor,
+      lowHeatSaver: this.config.lowHeatSaver,
       targetFps: this.config.targetFps,
       fps: Math.round(this.rollingFps),
       frameTimeMs: Math.round(this.avgFrameTimeMs * 10) / 10,

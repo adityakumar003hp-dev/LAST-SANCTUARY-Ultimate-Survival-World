@@ -166,6 +166,8 @@ export class AurelionMansionSystems {
   // Three Working Elevators
   public elevators: Record<ElevatorId, ElevatorState>;
 
+  private simAccum = 0.2;
+
   constructor() {
     for (let i = 0; i < 12; i++) {
       const cropType: HydroCropType = i % 3 === 0 ? 'vegetables' : i % 3 === 1 ? 'herbs' : 'berries';
@@ -223,132 +225,154 @@ export class AurelionMansionSystems {
     weatherType: string = 'clear',
     extraUsage = { tapsActive: 0, showerActive: false, stoveOn: false, acOn: true }
   ) {
-    // 1. Solar Generation (F7 Crown Photovoltaic Canopy)
-    const hour = (gameTimeMinutes % 1440) / 60;
-    const sunElev = Math.max(0, Math.sin(((hour - 6) / 12) * Math.PI));
-    const weatherFactor =
-      weatherType === 'storm' || weatherType === 'blizzard'
-        ? 0.25
-        : weatherType === 'rain' || weatherType === 'fog' || weatherType === 'toxic_fog'
-          ? 0.45
-          : 1.0;
-    this.solarKw = Number((18.0 * sunElev * weatherFactor).toFixed(2));
+    // Throttle water pressure, power load calculations & crop growth ticks to 5 Hz (every 200ms)
+    this.simAccum += delta;
+    if (this.simAccum >= 0.2) {
+      const stepDelta = Math.min(0.5, this.simAccum);
+      this.simAccum = 0;
 
-    // 2. Generator Power (B2 Main Power Hall)
-    const gameHoursDelta = delta / 36.0; // Matches Day/Night scale (~1 game hour per 36 real sec)
-    if (this.generatorRunning) {
-      if (this.fuelLiters > 0.05) {
-        this.generatorKw = 35.0;
-        this.fuelLiters = Math.max(0, this.fuelLiters - 7.5 * gameHoursDelta);
+      // 1. Solar Generation (F7 Crown Photovoltaic Canopy)
+      const hour = (gameTimeMinutes % 1440) / 60;
+      const sunElev = Math.max(0, Math.sin(((hour - 6) / 12) * Math.PI));
+      const weatherFactor =
+        weatherType === 'storm' || weatherType === 'blizzard'
+          ? 0.25
+          : weatherType === 'rain' || weatherType === 'fog' || weatherType === 'toxic_fog'
+            ? 0.45
+            : 1.0;
+      this.solarKw = Number((18.0 * sunElev * weatherFactor).toFixed(2));
+
+      // 2. Generator Power (B2 Main Power Hall)
+      const gameHoursDelta = stepDelta / 36.0;
+      if (this.generatorRunning) {
+        if (this.fuelLiters > 0.05) {
+          this.generatorKw = 35.0;
+          this.fuelLiters = Math.max(0, this.fuelLiters - 7.5 * gameHoursDelta);
+        } else {
+          this.fuelLiters = 0;
+          this.generatorRunning = false;
+          this.generatorKw = 0;
+        }
       } else {
-        this.fuelLiters = 0;
-        this.generatorRunning = false;
         this.generatorKw = 0;
       }
-    } else {
-      this.generatorKw = 0;
-    }
 
-    const totalGenerationKw = this.solarKw + this.generatorKw;
+      const totalGenerationKw = this.solarKw + this.generatorKw;
 
-    // 3. Demand Calculation by Priority Tier
-    const litFloorsCount = Object.values(this.roomLights).filter(Boolean).length;
-    const tier1Kw = 2.4; // Medical life-support + B1 Railway/Security + Private Lift standby
-    const b2GrowingAny = this.b2FarmBeds.some((b) => b.stage > 0 && b.stage < 3);
-    const tier2Kw =
-      1.2 + // Main & Service lift standby
-      litFloorsCount * 0.22 +
-      (this.purifierActive ? 1.8 : 0) +
-      (this.waterPumpActive ? 0.95 : 0) +
-      (this.hydroBeds.some((b) => b.stage > 0 && b.stage < 3) ? 2.1 : 0.4) +
-      (b2GrowingAny ? 0.85 : 0.25) +
-      (extraUsage.stoveOn ? 1.4 : 0);
-    const tier3Kw =
-      (this.hvacMode === 'comfort' ? 2.4 : this.hvacMode === 'eco' ? 1.1 : 0) +
-      (extraUsage.acOn ? 0.9 : 0) +
-      (this.cinemaOn ? 1.4 : 0) +
-      (this.aquariumLightsOn ? 0.6 : 0) +
-      1.6; // Infinity Pool + Indoor Pool pumps & heaters
+      // 3. Demand Calculation by Priority Tier
+      let litFloorsCount = 0;
+      const rl = this.roomLights;
+      if (rl.b2) litFloorsCount++;
+      if (rl.b1) litFloorsCount++;
+      if (rl.f1) litFloorsCount++;
+      if (rl.f2) litFloorsCount++;
+      if (rl.f3) litFloorsCount++;
+      if (rl.f4) litFloorsCount++;
+      if (rl.f5) litFloorsCount++;
+      if (rl.f6) litFloorsCount++;
+      if (rl.f7) litFloorsCount++;
 
-    // Evaluate Load Shedding based on battery % and priority mode
-    const battPct = (this.batteryKwh / this.batteryCapacityKwh) * 100;
-    if (this.powerPriorityMode === 'critical') {
-      this.tier1CriticalPowered = this.batteryKwh > 0.5 || totalGenerationKw >= tier1Kw;
-      this.tier2StandardPowered = false;
-      this.tier3LuxuryPowered = false;
-    } else if (this.powerPriorityMode === 'balanced') {
-      this.tier1CriticalPowered = this.batteryKwh > 0.5 || totalGenerationKw >= tier1Kw;
-      this.tier2StandardPowered = battPct > 12 || totalGenerationKw >= tier1Kw + tier2Kw;
-      this.tier3LuxuryPowered = battPct > 28 || totalGenerationKw >= tier1Kw + tier2Kw + tier3Kw;
-    } else {
-      // luxury mode runs everything until battery hits 5%
-      this.tier1CriticalPowered = this.batteryKwh > 0.5 || totalGenerationKw >= tier1Kw;
-      this.tier2StandardPowered = battPct > 5 || totalGenerationKw >= tier1Kw + tier2Kw;
-      this.tier3LuxuryPowered = battPct > 8 || totalGenerationKw >= tier1Kw + tier2Kw + tier3Kw;
-    }
+      const tier1Kw = 2.4;
+      let b2GrowingCount = 0;
+      for (let i = 0; i < this.b2FarmBeds.length; i++) {
+        const s = this.b2FarmBeds[i].stage;
+        if (s > 0 && s < 3) b2GrowingCount++;
+      }
+      let hydroGrowingCount = 0;
+      for (let i = 0; i < this.hydroBeds.length; i++) {
+        const s = this.hydroBeds[i].stage;
+        if (s > 0 && s < 3) hydroGrowingCount++;
+      }
 
-    this.totalDemandKw = Number(
-      (
-        (this.tier1CriticalPowered ? tier1Kw : 0) +
-        (this.tier2StandardPowered ? tier2Kw : 0) +
-        (this.tier3LuxuryPowered ? tier3Kw : 0)
-      ).toFixed(2)
-    );
+      const tier2Kw =
+        1.2 +
+        litFloorsCount * 0.22 +
+        (this.purifierActive ? 1.8 : 0) +
+        (this.waterPumpActive ? 0.95 : 0) +
+        (hydroGrowingCount > 0 ? 2.1 : 0.4) +
+        (b2GrowingCount > 0 ? 0.85 : 0.25) +
+        (extraUsage.stoveOn ? 1.4 : 0);
+      const tier3Kw =
+        (this.hvacMode === 'comfort' ? 2.4 : this.hvacMode === 'eco' ? 1.1 : 0) +
+        (extraUsage.acOn ? 0.9 : 0) +
+        (this.cinemaOn ? 1.4 : 0) +
+        (this.aquariumLightsOn ? 0.6 : 0) +
+        1.6;
 
-    const netKw = totalGenerationKw - this.totalDemandKw;
-    this.batteryKwh = Math.max(0, Math.min(this.batteryCapacityKwh, this.batteryKwh + netKw * gameHoursDelta));
+      const battPct = (this.batteryKwh / this.batteryCapacityKwh) * 100;
+      if (this.powerPriorityMode === 'critical') {
+        this.tier1CriticalPowered = this.batteryKwh > 0.5 || totalGenerationKw >= tier1Kw;
+        this.tier2StandardPowered = false;
+        this.tier3LuxuryPowered = false;
+      } else if (this.powerPriorityMode === 'balanced') {
+        this.tier1CriticalPowered = this.batteryKwh > 0.5 || totalGenerationKw >= tier1Kw;
+        this.tier2StandardPowered = battPct > 12 || totalGenerationKw >= tier1Kw + tier2Kw;
+        this.tier3LuxuryPowered = battPct > 28 || totalGenerationKw >= tier1Kw + tier2Kw + tier3Kw;
+      } else {
+        this.tier1CriticalPowered = this.batteryKwh > 0.5 || totalGenerationKw >= tier1Kw;
+        this.tier2StandardPowered = battPct > 5 || totalGenerationKw >= tier1Kw + tier2Kw;
+        this.tier3LuxuryPowered = battPct > 8 || totalGenerationKw >= tier1Kw + tier2Kw + tier3Kw;
+      }
 
-    // 4. Water Collection, Booster Pump Pressure & RO/UV Filtration (B2 Reserve -> Pump -> RO/UV Plant -> Potable)
-    if (weatherType === 'rain' || weatherType === 'storm') {
-      this.rawWaterLiters = Math.min(this.maxWaterCapacityLiters, this.rawWaterLiters + 320 * gameHoursDelta);
-    }
-    const pumpPressurized = this.waterPumpActive && this.tier2StandardPowered && this.rawWaterLiters > 5;
-    const targetPressure = pumpPressurized ? 3.85 : this.rawWaterLiters > 5 ? 0.65 : 0.0;
-    this.waterPressureBar += (targetPressure - this.waterPressureBar) * Math.min(1, delta * 3.5);
+      this.totalDemandKw = Number(
+        (
+          (this.tier1CriticalPowered ? tier1Kw : 0) +
+          (this.tier2StandardPowered ? tier2Kw : 0) +
+          (this.tier3LuxuryPowered ? tier3Kw : 0)
+        ).toFixed(2)
+      );
 
-    const purificationRateLph = pumpPressurized ? 280 : 90;
-    if (this.purifierActive && this.tier2StandardPowered && this.rawWaterLiters > 1 && this.treatedWaterLiters < this.maxWaterCapacityLiters) {
-      const purified = Math.min(purificationRateLph * gameHoursDelta, this.rawWaterLiters, this.maxWaterCapacityLiters - this.treatedWaterLiters);
-      this.rawWaterLiters -= purified;
-      this.treatedWaterLiters += purified;
-    }
-    const fixtureDraw = (extraUsage.tapsActive * 45 + (extraUsage.showerActive ? 140 : 0)) * gameHoursDelta;
-    const hydroDraw = this.hydroBeds.filter((b) => b.stage > 0 && b.stage < 3).length * 4.5 * gameHoursDelta;
-    const b2FarmDraw = this.b2FarmBeds.filter((b) => b.stage > 0 && b.stage < 3).length * 3.2 * gameHoursDelta;
-    this.treatedWaterLiters = Math.max(0, this.treatedWaterLiters - fixtureDraw - hydroDraw - b2FarmDraw);
+      const netKw = totalGenerationKw - this.totalDemandKw;
+      this.batteryKwh = Math.max(0, Math.min(this.batteryCapacityKwh, this.batteryKwh + netKw * gameHoursDelta));
 
-    // 5. Floor 5 Hydroponics + B2 Raised Drip-Irrigated Farm Beds Growth
-    const hasGrowthResources = this.tier2StandardPowered && this.treatedWaterLiters > 15;
-    if (hasGrowthResources) {
-      for (const bed of this.hydroBeds) {
-        if (bed.stage === 1 || bed.stage === 2) {
-          bed.growthProgress = Math.min(1, bed.growthProgress + delta * 0.012);
-          if (bed.growthProgress >= 1) {
-            bed.stage = 3;
-          } else if (bed.growthProgress >= 0.45) {
-            bed.stage = 2;
+      // 4. Water Collection, Booster Pump Pressure & RO/UV Filtration
+      if (weatherType === 'rain' || weatherType === 'storm') {
+        this.rawWaterLiters = Math.min(this.maxWaterCapacityLiters, this.rawWaterLiters + 320 * gameHoursDelta);
+      }
+      const pumpPressurized = this.waterPumpActive && this.tier2StandardPowered && this.rawWaterLiters > 5;
+      const targetPressure = pumpPressurized ? 3.85 : this.rawWaterLiters > 5 ? 0.65 : 0.0;
+      this.waterPressureBar += (targetPressure - this.waterPressureBar) * Math.min(1, stepDelta * 3.5);
+
+      const purificationRateLph = pumpPressurized ? 280 : 90;
+      if (this.purifierActive && this.tier2StandardPowered && this.rawWaterLiters > 1 && this.treatedWaterLiters < this.maxWaterCapacityLiters) {
+        const purified = Math.min(purificationRateLph * gameHoursDelta, this.rawWaterLiters, this.maxWaterCapacityLiters - this.treatedWaterLiters);
+        this.rawWaterLiters -= purified;
+        this.treatedWaterLiters += purified;
+      }
+      const fixtureDraw = (extraUsage.tapsActive * 45 + (extraUsage.showerActive ? 140 : 0)) * gameHoursDelta;
+      const hydroDraw = hydroGrowingCount * 4.5 * gameHoursDelta;
+      const b2FarmDraw = b2GrowingCount * 3.2 * gameHoursDelta;
+      this.treatedWaterLiters = Math.max(0, this.treatedWaterLiters - fixtureDraw - hydroDraw - b2FarmDraw);
+
+      // 5. Floor 5 Hydroponics + B2 Raised Drip-Irrigated Farm Beds Growth
+      const hasGrowthResources = this.tier2StandardPowered && this.treatedWaterLiters > 15;
+      if (hasGrowthResources) {
+        for (let i = 0; i < this.hydroBeds.length; i++) {
+          const bed = this.hydroBeds[i];
+          if (bed.stage === 1 || bed.stage === 2) {
+            bed.growthProgress = Math.min(1, bed.growthProgress + stepDelta * 0.012);
+            if (bed.growthProgress >= 1) bed.stage = 3;
+            else if (bed.growthProgress >= 0.45) bed.stage = 2;
+          }
+        }
+        const b2DripBoost = this.waterPumpActive ? 0.015 : 0.006;
+        for (let i = 0; i < this.b2FarmBeds.length; i++) {
+          const bed = this.b2FarmBeds[i];
+          if (bed.stage === 1 || bed.stage === 2) {
+            bed.growthProgress = Math.min(1, bed.growthProgress + stepDelta * b2DripBoost);
+            if (bed.growthProgress >= 1) bed.stage = 3;
+            else if (bed.growthProgress >= 0.45) bed.stage = 2;
           }
         }
       }
-      const b2DripBoost = this.waterPumpActive ? 0.015 : 0.006;
-      for (const bed of this.b2FarmBeds) {
-        if (bed.stage === 1 || bed.stage === 2) {
-          bed.growthProgress = Math.min(1, bed.growthProgress + delta * b2DripBoost);
-          if (bed.growthProgress >= 1) {
-            bed.stage = 3;
-          } else if (bed.growthProgress >= 0.45) {
-            bed.stage = 2;
-          }
-        }
+
+      // 6. Maintenance slight gradual wear
+      if (this.generatorRunning) {
+        this.maintenanceIntegrity = Math.max(35, this.maintenanceIntegrity - stepDelta * 0.008);
       }
     }
 
-    // 6. Maintenance slight gradual wear
-    if (this.generatorRunning) {
-      this.maintenanceIntegrity = Math.max(35, this.maintenanceIntegrity - delta * 0.008);
-    }
-
-    // 7. Three-Elevator State Machine
+    // 7. Three-Elevator State Machine (runs every frame for smooth vertical ride & doors)
     (['main', 'service', 'private'] as ElevatorId[]).forEach((id) => {
       const elev = this.elevators[id];
       const reqTier = AURELION_ELEVATOR_CONFIGS[id].tierRequirement;

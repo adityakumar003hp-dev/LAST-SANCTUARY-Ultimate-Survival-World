@@ -83,6 +83,7 @@ export interface TownCitizen {
   id: string;
   name: string;
   role: string;
+  ageGroup?: 'Child' | 'Teenager' | 'Young Adult' | 'Adult' | 'Middle-aged Adult' | 'Elderly';
   buildingType: string;
   position: [number, number, number];
   rotationY: number;

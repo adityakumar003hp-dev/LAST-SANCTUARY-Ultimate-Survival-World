@@ -67,6 +67,29 @@ export class ApartmentTurrets {
   private hostileFactionTargets = new Map<string, HostileFactionTurretTarget>();
   private tracerGeo: THREE.CylinderGeometry;
   private tracerMat: THREE.MeshBasicMaterial;
+  private laserCoreGeo: THREE.CylinderGeometry;
+  private laserGlowGeo: THREE.CylinderGeometry;
+  private laserFadeTex: THREE.CanvasTexture | null = null;
+  private sharedMaterials: {
+    armorMetal: THREE.MeshStandardMaterial;
+    gunMetal: THREE.MeshStandardMaterial;
+    stripe: THREE.MeshStandardMaterial;
+    darkTrim: THREE.MeshStandardMaterial;
+    flash: THREE.MeshBasicMaterial;
+  };
+  private sharedGeos: {
+    baseOctagon: THREE.CylinderGeometry;
+    stripeRing: THREE.CylinderGeometry;
+    collar: THREE.CylinderGeometry;
+    chassis: THREE.BoxGeometry;
+    cheek: THREE.BoxGeometry;
+    drum: THREE.CylinderGeometry;
+    mantlet: THREE.BoxGeometry;
+    barrel: THREE.CylinderGeometry;
+    comp: THREE.CylinderGeometry;
+    sensor: THREE.SphereGeometry;
+    muzzle: THREE.ConeGeometry;
+  };
 
   private turrets: Array<{
     state: SentryTurretState;
@@ -75,17 +98,48 @@ export class ApartmentTurrets {
     pitchGroup: THREE.Group;
     sensorLed: THREE.Mesh;
     sensorMat: THREE.MeshBasicMaterial;
-    laserLine: THREE.Line;
-    laserMat: THREE.LineBasicMaterial;
+    laserPivot: THREE.Group;
+    laserCoreMat: THREE.MeshBasicMaterial;
+    laserGlowMat: THREE.MeshBasicMaterial;
     muzzleFlashL: THREE.Mesh;
     muzzleFlashR: THREE.Mesh;
     muzzleLight: THREE.PointLight;
     flashTimer: number;
+    recoilTimer: number;
     homeYaw: number;
+    cachedTargetX: number;
+    cachedTargetY: number;
+    cachedTargetZ: number;
+    cachedTargetId: string | null;
+    cachedFactionTarget: HostileFactionTurretTarget | null;
   }> = [];
 
   private parentOrigin: THREE.Vector3;
+  private targetScanTimer: number = 0.2;
   private readonly _tmpTargetPos = new THREE.Vector3();
+  private readonly _tmpMuzzlePos = new THREE.Vector3();
+  private readonly _tmpDir = new THREE.Vector3();
+  private readonly _tmpStep = new THREE.Vector3();
+  private readonly _tmpUnitZ = new THREE.Vector3(0, 0, 1);
+
+  private static createLaserFadeTexture(): THREE.CanvasTexture | null {
+    if (typeof document === 'undefined') return null;
+    const canvas = document.createElement('canvas');
+    canvas.width = 16;
+    canvas.height = 128;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return null;
+    const grad = ctx.createLinearGradient(0, canvas.height, 0, 0);
+    grad.addColorStop(0.0, 'rgba(255,255,255,0.95)');
+    grad.addColorStop(0.45, 'rgba(255,255,255,0.65)');
+    grad.addColorStop(0.85, 'rgba(255,255,255,0.22)');
+    grad.addColorStop(1.0, 'rgba(255,255,255,0.0)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.needsUpdate = true;
+    return tex;
+  }
 
   constructor(parent: THREE.Group, origin: THREE.Vector3) {
     this.parentOrigin = origin;
@@ -104,6 +158,48 @@ export class ApartmentTurrets {
       transparent: true,
       opacity: 0.95,
     });
+
+    // Unit-length (1m) additive dual-layer laser beam geometries anchored at z=0..1
+    this.laserCoreGeo = new THREE.CylinderGeometry(0.008, 0.012, 1.0, 6, 1, true);
+    this.laserCoreGeo.translate(0, 0.5, 0);
+    this.laserCoreGeo.rotateX(Math.PI / 2);
+
+    this.laserGlowGeo = new THREE.CylinderGeometry(0.022, 0.046, 1.0, 8, 1, true);
+    this.laserGlowGeo.translate(0, 0.5, 0);
+    this.laserGlowGeo.rotateX(Math.PI / 2);
+
+    this.laserFadeTex = ApartmentTurrets.createLaserFadeTexture();
+
+    this.sharedMaterials = {
+      armorMetal: new THREE.MeshStandardMaterial({ color: 0x22272e, roughness: 0.42, metalness: 0.78 }),
+      gunMetal: new THREE.MeshStandardMaterial({ color: 0x14171a, roughness: 0.32, metalness: 0.88 }),
+      stripe: new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.6 }),
+      darkTrim: new THREE.MeshStandardMaterial({ color: 0x0f1115, roughness: 0.7 }),
+      flash: new THREE.MeshBasicMaterial({ color: 0xffaa22, transparent: true, opacity: 0.9 }),
+    };
+
+    const barrelGeo = new THREE.CylinderGeometry(0.055, 0.065, 1.45, 8);
+    barrelGeo.rotateX(Math.PI / 2);
+    const compGeo = new THREE.CylinderGeometry(0.075, 0.06, 0.18, 8);
+    compGeo.rotateX(Math.PI / 2);
+    const drumGeo = new THREE.CylinderGeometry(0.24, 0.24, 0.28, 10);
+    drumGeo.rotateZ(Math.PI / 2);
+    const muzzleGeo = new THREE.ConeGeometry(0.16, 0.42, 6);
+    muzzleGeo.rotateX(Math.PI / 2);
+
+    this.sharedGeos = {
+      baseOctagon: new THREE.CylinderGeometry(0.55, 0.68, 1.35, 8),
+      stripeRing: new THREE.CylinderGeometry(0.57, 0.61, 0.22, 8),
+      collar: new THREE.CylinderGeometry(0.48, 0.48, 0.16, 10),
+      chassis: new THREE.BoxGeometry(0.65, 0.52, 0.85),
+      cheek: new THREE.BoxGeometry(0.08, 0.44, 0.82),
+      drum: drumGeo,
+      mantlet: new THREE.BoxGeometry(0.48, 0.36, 0.35),
+      barrel: barrelGeo,
+      comp: compGeo,
+      sensor: new THREE.SphereGeometry(0.075, 8, 8),
+      muzzle: muzzleGeo,
+    };
 
     // Exactly 20 armed AI sentries mounted across the expanded 100 x 126.5 m perimeter:
     // two flanking each of the five gates (10) plus ten along the 20 perimeter towers/walls.
@@ -135,58 +231,22 @@ export class ApartmentTurrets {
     turretRoot.position.copy(localPos);
     this.group.add(turretRoot);
 
-    // World position of the turret
     const worldPos = new THREE.Vector3().addVectors(this.parentOrigin, localPos);
-
-    // Materials
-    const armorMetalMat = new THREE.MeshStandardMaterial({
-      color: 0x22272e,
-      roughness: 0.42,
-      metalness: 0.78,
-    });
-    const gunMetalMat = new THREE.MeshStandardMaterial({
-      color: 0x14171a,
-      roughness: 0.32,
-      metalness: 0.88,
-    });
-    const stripeMat = new THREE.MeshStandardMaterial({
-      color: 0xf59e0b,
-      roughness: 0.6,
-    });
-    const darkTrimMat = new THREE.MeshStandardMaterial({
-      color: 0x0f1115,
-      roughness: 0.7,
-    });
-    const flashMat = new THREE.MeshBasicMaterial({
-      color: 0xffaa22,
-      transparent: true,
-      opacity: 0.9,
-    });
+    const mats = this.sharedMaterials;
+    const geos = this.sharedGeos;
 
     // 1. Fortified Pedestal Stand
     const pedestalGroup = new THREE.Group();
-    const baseOctagon = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.55, 0.68, 1.35, 8),
-      armorMetalMat
-    );
+    const baseOctagon = new THREE.Mesh(geos.baseOctagon, mats.armorMetal);
     baseOctagon.position.y = 0.675;
-    baseOctagon.castShadow = true;
     baseOctagon.receiveShadow = true;
     pedestalGroup.add(baseOctagon);
 
-    // Warning hazard stripe band
-    const stripeRing = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.57, 0.61, 0.22, 8),
-      stripeMat
-    );
+    const stripeRing = new THREE.Mesh(geos.stripeRing, mats.stripe);
     stripeRing.position.y = 0.85;
     pedestalGroup.add(stripeRing);
 
-    // Heavy mounting collar & bolt flange
-    const collar = new THREE.Mesh(
-      new THREE.CylinderGeometry(0.48, 0.48, 0.16, 12),
-      darkTrimMat
-    );
+    const collar = new THREE.Mesh(geos.collar, mats.darkTrim);
     collar.position.y = 1.42;
     pedestalGroup.add(collar);
     turretRoot.add(pedestalGroup);
@@ -197,116 +257,94 @@ export class ApartmentTurrets {
     yawGroup.rotation.y = defaultYaw;
     turretRoot.add(yawGroup);
 
-    // Turret main armored chassis
-    const chassis = new THREE.Mesh(
-      new THREE.BoxGeometry(0.65, 0.52, 0.85),
-      armorMetalMat
-    );
+    const chassis = new THREE.Mesh(geos.chassis, mats.armorMetal);
     chassis.position.set(0, 0.28, 0);
-    chassis.castShadow = true;
     yawGroup.add(chassis);
 
-    // Armored angled cheek plates
     for (const side of [-0.34, 0.34]) {
-      const cheek = new THREE.Mesh(
-        new THREE.BoxGeometry(0.08, 0.44, 0.82),
-        darkTrimMat
-      );
+      const cheek = new THREE.Mesh(geos.cheek, mats.darkTrim);
       cheek.position.set(side, 0.28, 0);
       yawGroup.add(cheek);
     }
 
-    // Ammo drum canisters on sides
     for (const side of [-0.44, 0.44]) {
-      const drum = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.24, 0.24, 0.28, 12),
-        gunMetalMat
-      );
-      drum.rotation.z = Math.PI / 2;
+      const drum = new THREE.Mesh(geos.drum, mats.gunMetal);
       drum.position.set(side, 0.25, -0.05);
-      drum.castShadow = true;
       yawGroup.add(drum);
     }
 
-    // 3. Vertical Pitch Gimbal Assembly (dual autocannon barrels & sensor)
+    // 3. Vertical Pitch Gimbal Assembly
     const pitchGroup = new THREE.Group();
     pitchGroup.position.set(0, 0.32, 0.22);
     yawGroup.add(pitchGroup);
 
-    // Mantlet / barrel housing
-    const mantlet = new THREE.Mesh(
-      new THREE.BoxGeometry(0.48, 0.36, 0.35),
-      gunMetalMat
-    );
-    mantlet.castShadow = true;
+    const mantlet = new THREE.Mesh(geos.mantlet, mats.gunMetal);
     pitchGroup.add(mantlet);
 
-    // Twin heavy autocannon barrels
     for (const bx of [-0.16, 0.16]) {
-      const barrel = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.055, 0.065, 1.45, 8),
-        gunMetalMat
-      );
-      barrel.rotation.x = Math.PI / 2;
+      const barrel = new THREE.Mesh(geos.barrel, mats.gunMetal);
       barrel.position.set(bx, 0, 0.85);
-      barrel.castShadow = true;
       pitchGroup.add(barrel);
 
-      // Flared muzzle compensator
-      const comp = new THREE.Mesh(
-        new THREE.CylinderGeometry(0.075, 0.06, 0.18, 8),
-        darkTrimMat
-      );
-      comp.rotation.x = Math.PI / 2;
+      const comp = new THREE.Mesh(geos.comp, mats.darkTrim);
       comp.position.set(bx, 0, 1.58);
       pitchGroup.add(comp);
     }
 
-    // 4. Optical Sensor Visor & Targeting Laser
+    // 4. Optical Sensor Visor & Dual-Layer Additive Glow Targeting Laser
     const sensorMat = new THREE.MeshBasicMaterial({ color: 0x00ff88 });
-    const sensorLed = new THREE.Mesh(
-      new THREE.SphereGeometry(0.075, 8, 8),
-      sensorMat
-    );
+    const sensorLed = new THREE.Mesh(geos.sensor, sensorMat);
     sensorLed.position.set(0, 0.22, 0.2);
     pitchGroup.add(sensorLed);
 
-    // Targeting Laser Beam
-    const laserMat = new THREE.LineBasicMaterial({
-      color: 0x00ff88,
+    const laserPivot = new THREE.Group();
+    laserPivot.position.set(0, 0.22, 0.25);
+    laserPivot.scale.z = 18.0;
+
+    const laserCoreMat = new THREE.MeshBasicMaterial({
+      color: 0x22ff99,
+      map: this.laserFadeTex,
       transparent: true,
-      opacity: 0.7,
-      linewidth: 2,
+      opacity: 0.72,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
     });
-    const laserGeo = new THREE.BufferGeometry().setFromPoints([
-      new THREE.Vector3(0, 0.22, 0.25),
-      new THREE.Vector3(0, 0.22, 28.0),
-    ]);
-    const laserLine = new THREE.Line(laserGeo, laserMat);
-    pitchGroup.add(laserLine);
+    const laserGlowMat = new THREE.MeshBasicMaterial({
+      color: 0x10ff88,
+      map: this.laserFadeTex,
+      transparent: true,
+      opacity: 0.24,
+      blending: THREE.AdditiveBlending,
+      depthWrite: false,
+      side: THREE.DoubleSide,
+    });
 
-    // 5. Dual Muzzle Flashes & Dynamic Lighting
-    const muzzleGeo = new THREE.ConeGeometry(0.16, 0.42, 6);
-    muzzleGeo.rotateX(Math.PI / 2);
+    const coreMesh = new THREE.Mesh(this.laserCoreGeo, laserCoreMat);
+    const glowMesh = new THREE.Mesh(this.laserGlowGeo, laserGlowMat);
+    laserPivot.add(coreMesh, glowMesh);
+    pitchGroup.add(laserPivot);
 
-    const muzzleFlashL = new THREE.Mesh(muzzleGeo, flashMat);
+    // 5. Dual Muzzle Flashes & Non-Shadow Muzzle Light
+    const muzzleFlashL = new THREE.Mesh(geos.muzzle, mats.flash);
     muzzleFlashL.position.set(-0.16, 0, 1.78);
     muzzleFlashL.visible = false;
     pitchGroup.add(muzzleFlashL);
 
-    const muzzleFlashR = new THREE.Mesh(muzzleGeo, flashMat);
+    const muzzleFlashR = new THREE.Mesh(geos.muzzle, mats.flash);
     muzzleFlashR.position.set(0.16, 0, 1.78);
     muzzleFlashR.visible = false;
     pitchGroup.add(muzzleFlashR);
 
     const muzzleLight = new THREE.PointLight(0xffaa22, 0, 18, 2.0);
+    muzzleLight.castShadow = false;
     muzzleLight.position.set(0, 0, 1.8);
     pitchGroup.add(muzzleLight);
 
     this.turrets.push({
       state: {
         id,
-        name: `Perimeter Sentry ${id.slice(-2)}`, 
+        name: `Perimeter Sentry ${id.slice(-2)}`,
         worldPosition: worldPos,
         targetId: null,
         targetType: null,
@@ -330,13 +368,20 @@ export class ApartmentTurrets {
       pitchGroup,
       sensorLed,
       sensorMat,
-      laserLine,
-      laserMat,
+      laserPivot,
+      laserCoreMat,
+      laserGlowMat,
       muzzleFlashL,
       muzzleFlashR,
       muzzleLight,
       flashTimer: 0,
+      recoilTimer: 0,
       homeYaw: defaultYaw,
+      cachedTargetX: 0,
+      cachedTargetY: 0,
+      cachedTargetZ: 0,
+      cachedTargetId: null,
+      cachedFactionTarget: null,
     });
   }
 
@@ -349,9 +394,26 @@ export class ApartmentTurrets {
     const range = 32.0;
     const rangeSq = range * range;
 
-    for (const turret of this.turrets) {
+    // Throttle heavy perimeter target scans to 5 Hz (every 200ms)
+    this.targetScanTimer += delta;
+    const shouldScanTargets = this.targetScanTimer >= 0.2;
+    if (shouldScanTargets) {
+      this.targetScanTimer = 0;
+    }
+
+    const zombies = zombieMgr?.zombies ?? null;
+
+    for (let ti = 0; ti < this.turrets.length; ti++) {
+      const turret = this.turrets[ti];
       const st = turret.state;
       st.scanTime += delta;
+
+      if (turret.recoilTimer > 0) {
+        turret.recoilTimer -= delta;
+        if (turret.recoilTimer <= 0) {
+          turret.pitchGroup.position.z = 0.22;
+        }
+      }
 
       // Handle muzzle flash fade
       if (turret.flashTimer > 0) {
@@ -363,60 +425,90 @@ export class ApartmentTurrets {
         }
       }
 
-      // Step 1: Acquire only explicitly hostile NPCs and hostile factions without per-entity Vector3 allocations.
-      let targetX = 0;
-      let targetY = 0;
-      let targetZ = 0;
-      let hasTarget = false;
-      let targetDistSq = Infinity;
-      let foundZombieId: string | null = null;
-      let foundFactionTarget: HostileFactionTurretTarget | null = null;
-
       const wx = st.worldPosition.x;
       const wy = st.worldPosition.y;
       const wz = st.worldPosition.z;
 
-      if (zombieMgr?.zombies) {
-        const zombies = zombieMgr.zombies;
-        for (let zi = 0; zi < zombies.length; zi++) {
-          const z = zombies[zi];
-          if (z.state === 'dead' || z.health <= 0) continue;
-          const dx = z.position[0] - wx;
-          const dy = z.position[1] + 1.2 - wy;
-          const dz = z.position[2] - wz;
+      if (shouldScanTargets) {
+        let targetDistSq = Infinity;
+        let foundZombieId: string | null = null;
+        let foundFactionTarget: HostileFactionTurretTarget | null = null;
+        let bestX = 0;
+        let bestY = 0;
+        let bestZ = 0;
+
+        if (zombies) {
+          for (let zi = 0; zi < zombies.length; zi++) {
+            const z = zombies[zi];
+            if (z.state === 'dead' || z.health <= 0) continue;
+            const dx = z.position[0] - wx;
+            const dy = z.position[1] + 1.2 - wy;
+            const dz = z.position[2] - wz;
+            const dSq = dx * dx + dy * dy + dz * dz;
+            if (dSq < rangeSq && dSq < targetDistSq) {
+              targetDistSq = dSq;
+              bestX = z.position[0];
+              bestY = z.position[1] + 1.2;
+              bestZ = z.position[2];
+              foundZombieId = z.id;
+              foundFactionTarget = null;
+            }
+          }
+        }
+
+        for (const candidate of this.hostileFactionTargets.values()) {
+          if (
+            !candidate.id ||
+            !candidate.factionId?.trim() ||
+            candidate.id.toLowerCase() === 'player' ||
+            candidate.id.toLowerCase().startsWith('player_') ||
+            candidate.isPlayer ||
+            candidate.allegiance !== 'hostile' ||
+            !candidate.isAlive ||
+            candidate.health <= 0
+          ) {
+            continue;
+          }
+          const dx = candidate.position.x - wx;
+          const dy = candidate.position.y - wy;
+          const dz = candidate.position.z - wz;
           const dSq = dx * dx + dy * dy + dz * dz;
           if (dSq < rangeSq && dSq < targetDistSq) {
             targetDistSq = dSq;
-            targetX = z.position[0];
-            targetY = z.position[1] + 1.2;
-            targetZ = z.position[2];
-            hasTarget = true;
-            foundZombieId = z.id;
-            foundFactionTarget = null;
+            bestX = candidate.position.x;
+            bestY = candidate.position.y;
+            bestZ = candidate.position.z;
+            foundZombieId = null;
+            foundFactionTarget = candidate;
           }
         }
-      }
 
-      for (const candidate of this.hostileFactionTargets.values()) {
-        if (!candidate.id || !candidate.factionId?.trim() || (candidate.id.toLowerCase() === 'player' || candidate.id.toLowerCase().startsWith('player_')) || candidate.isPlayer ||
-            candidate.allegiance !== 'hostile' || !candidate.isAlive || candidate.health <= 0) continue;
-        const dx = candidate.position.x - wx;
-        const dy = candidate.position.y - wy;
-        const dz = candidate.position.z - wz;
-        const dSq = dx * dx + dy * dy + dz * dz;
-        if (dSq < rangeSq && dSq < targetDistSq) {
-          targetDistSq = dSq;
-          targetX = candidate.position.x;
-          targetY = candidate.position.y;
-          targetZ = candidate.position.z;
-          hasTarget = true;
-          foundZombieId = null;
-          foundFactionTarget = candidate;
+        turret.cachedTargetId = foundZombieId;
+        turret.cachedFactionTarget = foundFactionTarget;
+        turret.cachedTargetX = bestX;
+        turret.cachedTargetY = bestY;
+        turret.cachedTargetZ = bestZ;
+      } else if (turret.cachedFactionTarget) {
+        const f = turret.cachedFactionTarget;
+        if (!f.isAlive || f.health <= 0 || f.allegiance !== 'hostile') {
+          turret.cachedFactionTarget = null;
+        } else {
+          turret.cachedTargetX = f.position.x;
+          turret.cachedTargetY = f.position.y;
+          turret.cachedTargetZ = f.position.z;
         }
       }
 
-      // Step 2: Aiming & Target Acquisition
+      const foundZombieId = turret.cachedTargetId;
+      const foundFactionTarget = turret.cachedFactionTarget;
+      const hasTarget = Boolean(foundZombieId || foundFactionTarget);
+
+      // Step 2: Aiming & Target Acquisition (smooth per-frame mechanical tracking)
       if (hasTarget) {
+        const targetX = turret.cachedTargetX;
+        const targetY = turret.cachedTargetY;
+        const targetZ = turret.cachedTargetZ;
+
         st.targetId = foundZombieId || foundFactionTarget?.id || null;
         st.targetType = foundZombieId ? 'zombie' : 'faction';
 
@@ -428,12 +520,10 @@ export class ApartmentTurrets {
         const ny = ay / distToTarget;
         const nz = az / distToTarget;
 
-        // Calculate desired yaw and pitch in local turret coordinate frame
         const desiredYaw = Math.atan2(nx, nz);
         const horizDist = Math.hypot(nx, nz);
         const desiredPitch = -Math.atan2(ny, horizDist);
 
-        // Smooth heavy mechanical rotation
         st.currentYaw = THREE.MathUtils.damp(st.currentYaw, desiredYaw, 8.5, delta);
         st.currentPitch = THREE.MathUtils.damp(
           st.currentPitch,
@@ -445,7 +535,6 @@ export class ApartmentTurrets {
         turret.yawGroup.rotation.y = st.currentYaw;
         turret.pitchGroup.rotation.x = st.currentPitch;
 
-        // Check if aimed close enough to target
         const yawError = Math.abs(THREE.MathUtils.euclideanModulo(st.currentYaw - desiredYaw + Math.PI, Math.PI * 2) - Math.PI);
         const pitchError = Math.abs(st.currentPitch - desiredPitch);
         const isAimed = yawError < 0.28 && pitchError < 0.25;
@@ -456,20 +545,16 @@ export class ApartmentTurrets {
             soundEngine.playTurretLock();
           }
 
-          // Target lock: red laser and sensor
-          turret.sensorMat.color.setHex(0xff0044);
-          turret.laserMat.color.setHex(0xff0044);
-          turret.laserMat.opacity = 0.95;
+          turret.sensorMat.color.setHex(0xff1a44);
+          turret.laserCoreMat.color.setHex(0xff3355);
+          turret.laserCoreMat.opacity = 0.92;
+          turret.laserGlowMat.color.setHex(0xff0033);
+          turret.laserGlowMat.opacity = 0.36;
+          turret.laserPivot.scale.z = Math.min(28.0, Math.max(1.5, distToTarget));
 
-          // Align laser endpoint precisely with target
-          const posAttr = turret.laserLine.geometry.attributes.position as THREE.BufferAttribute;
-          posAttr.setXYZ(1, 0, 0.22, Math.min(28.0, distToTarget));
-          posAttr.needsUpdate = true;
-
-          // Handle reloading
           if (st.isReloading) {
             st.reloadTimer -= delta;
-            turret.sensorMat.color.setHex(0xf59e0b); // Amber during reload
+            turret.sensorMat.color.setHex(0xf59e0b);
             if (st.reloadTimer <= 0) {
               st.isReloading = false;
               st.ammo = st.maxAmmo;
@@ -477,17 +562,13 @@ export class ApartmentTurrets {
             }
           } else if (st.ammo <= 0) {
             st.isReloading = true;
-            st.reloadTimer = 3.2; // 3.2 second drum magazine reload
+            st.reloadTimer = 3.2;
           } else {
-            // Step 3: Firing Cycles & Burst Control
             if (st.burstCooldown > 0) {
               st.burstCooldown -= delta;
-            } else {
-              // Ready for burst
-              if (st.shotsRemainingInBurst <= 0) {
-                st.shotsRemainingInBurst = Math.min(3, st.ammo);
-                st.shotIntervalTimer = 0;
-              }
+            } else if (st.shotsRemainingInBurst <= 0) {
+              st.shotsRemainingInBurst = Math.min(3, st.ammo);
+              st.shotIntervalTimer = 0;
             }
 
             if (st.shotsRemainingInBurst > 0) {
@@ -497,44 +578,49 @@ export class ApartmentTurrets {
                 st.shotsRemainingInBurst--;
                 st.ammo = Math.max(0, st.ammo - 1);
 
-                // Execute Shot & spawn 3D projectile tracer
                 this._tmpTargetPos.set(targetX, targetY, targetZ);
                 this.fireTurretRound(turret, playerPos, this._tmpTargetPos, foundZombieId, foundFactionTarget?.id ?? null);
 
-                // Direct authoritative hit
                 if (foundZombieId && zombieMgr) {
                   const res = zombieMgr.damageZombie(foundZombieId, 42, 2.5);
                   if (res?.killed) {
                     st.killsCount++;
                     st.targetId = null;
+                    turret.cachedTargetId = null;
                   }
-                } else if (foundFactionTarget &&
-                    foundFactionTarget.allegiance === 'hostile' &&
-                    foundFactionTarget.isAlive && !foundFactionTarget.isPlayer &&
-                    foundFactionTarget.id.toLowerCase() !== 'player' && !foundFactionTarget.id.toLowerCase().startsWith('player_')) {
-                  // Re-check allegiance immediately before damage to prevent stale locks
-                  // from hurting a survivor whose faction changed during the firing cycle.
+                } else if (
+                  foundFactionTarget &&
+                  foundFactionTarget.allegiance === 'hostile' &&
+                  foundFactionTarget.isAlive &&
+                  !foundFactionTarget.isPlayer &&
+                  foundFactionTarget.id.toLowerCase() !== 'player' &&
+                  !foundFactionTarget.id.toLowerCase().startsWith('player_')
+                ) {
                   foundFactionTarget.damage(42);
                   if (!foundFactionTarget.isAlive || foundFactionTarget.health <= 0) {
                     st.killsCount++;
                     st.targetId = null;
+                    turret.cachedFactionTarget = null;
                     this.hostileFactionTargets.delete(foundFactionTarget.id);
                   }
                 }
 
                 if (st.shotsRemainingInBurst <= 0) {
-                  st.burstCooldown = 0.42; // Cooldown before next 3-round burst
+                  st.burstCooldown = 0.42;
                 }
               }
             }
           }
         } else {
           st.isLockedOn = false;
-          turret.sensorMat.color.setHex(0xffaa00); // Amber acquiring
-          turret.laserMat.color.setHex(0xffaa00);
+          turret.sensorMat.color.setHex(0xffaa00);
+          turret.laserCoreMat.color.setHex(0xffbb22);
+          turret.laserCoreMat.opacity = 0.68;
+          turret.laserGlowMat.color.setHex(0xff8800);
+          turret.laserGlowMat.opacity = 0.24;
+          turret.laserPivot.scale.z = Math.min(24.0, Math.max(2.0, distToTarget));
         }
       } else {
-        // Step 4: Ambient Security Patrol Sweep (No hostiles in range)
         st.targetId = null;
         st.isLockedOn = false;
         st.burstCooldown = 0.2;
@@ -548,13 +634,14 @@ export class ApartmentTurrets {
           }
         }
 
-        // Calm green security sensor
         const pulse = 0.6 + Math.sin(st.scanTime * 3.5) * 0.4;
         turret.sensorMat.color.setRGB(0, pulse, 0.5 * pulse);
-        turret.laserMat.color.setHex(0x00ff88);
-        turret.laserMat.opacity = 0.35;
+        turret.laserCoreMat.color.setHex(0x22ff99);
+        turret.laserCoreMat.opacity = 0.42;
+        turret.laserGlowMat.color.setHex(0x00dd77);
+        turret.laserGlowMat.opacity = 0.16;
+        turret.laserPivot.scale.z = 18.0;
 
-        // Smooth 60-degree back-and-forth sweep overlooking street approach
         const baseYaw = turret.homeYaw;
         const sweepYaw = baseYaw + Math.sin(st.scanTime * 0.95) * 0.52;
         st.currentYaw = THREE.MathUtils.damp(st.currentYaw, sweepYaw, 4.0, delta);
@@ -562,14 +649,9 @@ export class ApartmentTurrets {
 
         turret.yawGroup.rotation.y = st.currentYaw;
         turret.pitchGroup.rotation.x = st.currentPitch;
-
-        const posAttr = turret.laserLine.geometry.attributes.position as THREE.BufferAttribute;
-        posAttr.setXYZ(1, 0, 0.22, 18.0);
-        posAttr.needsUpdate = true;
       }
     }
 
-    // Update active 3D projectile tracers
     this.updateProjectiles(delta, zombieMgr, _wildlifeMgr);
   }
 
@@ -581,17 +663,14 @@ export class ApartmentTurrets {
     for (let i = this.activeProjectiles.length - 1; i >= 0; i--) {
       const p = this.activeProjectiles[i];
       p.life += delta;
-      const step = p.velocity.clone().multiplyScalar(delta);
-      const stepLen = step.length();
-      p.position.add(step);
+      this._tmpStep.copy(p.velocity).multiplyScalar(delta);
+      const stepLen = this._tmpStep.length();
+      p.position.add(this._tmpStep);
       p.distanceRemaining -= stepLen;
       p.mesh.position.copy(p.position);
 
       if (p.distanceRemaining <= 0 || p.life > 0.8) {
-        // Damage is applied once by the authoritative target check at firing time;
-        // this tracer is visual-only and must never double-apply damage.
         this.projectileGroup.remove(p.mesh);
-        p.mesh.geometry.dispose();
         this.activeProjectiles.splice(i, 1);
       }
     }
@@ -604,41 +683,38 @@ export class ApartmentTurrets {
     targetZombieId: string | null = null,
     targetFactionId: string | null = null
   ) {
-    // Visual muzzle flash
     turret.muzzleFlashL.visible = true;
     turret.muzzleFlashR.visible = true;
     turret.muzzleLight.intensity = 3.5;
     turret.flashTimer = 0.055;
 
-    // Recoil kickback on barrels
     turret.pitchGroup.position.z = 0.16;
-    setTimeout(() => {
-      turret.pitchGroup.position.z = 0.22;
-    }, 45);
+    turret.recoilTimer = 0.045;
 
-    // Audio discharge
     const distToPlayer = turret.state.worldPosition.distanceTo(playerPos);
     soundEngine.playTurretShot(distToPlayer);
 
-    // Spawn 3D high-velocity projectile tracer mesh
-    const muzzleWorldPos = new THREE.Vector3();
-    turret.pitchGroup.getWorldPosition(muzzleWorldPos);
-    muzzleWorldPos.y += 0.05;
+    turret.pitchGroup.getWorldPosition(this._tmpMuzzlePos);
+    this._tmpMuzzlePos.y += 0.05;
 
-    const dir = new THREE.Vector3().subVectors(targetPos, muzzleWorldPos);
-    const totalDist = dir.length();
-    dir.normalize();
+    this._tmpDir.subVectors(targetPos, this._tmpMuzzlePos);
+    const totalDist = this._tmpDir.length();
+    if (totalDist > 0.001) {
+      this._tmpDir.divideScalar(totalDist);
+    } else {
+      this._tmpDir.set(0, 0, 1);
+    }
 
-    const tracerMesh = new THREE.Mesh(this.tracerGeo.clone(), this.tracerMat);
-    tracerMesh.position.copy(muzzleWorldPos);
-    tracerMesh.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), dir);
+    const tracerMesh = new THREE.Mesh(this.tracerGeo, this.tracerMat);
+    tracerMesh.position.copy(this._tmpMuzzlePos);
+    tracerMesh.quaternion.setFromUnitVectors(this._tmpUnitZ, this._tmpDir);
     this.projectileGroup.add(tracerMesh);
 
-    const speed = 150.0; // 150 m/s tracer velocity
+    const speed = 150.0;
     this.activeProjectiles.push({
       mesh: tracerMesh,
-      position: muzzleWorldPos.clone(),
-      velocity: dir.multiplyScalar(speed),
+      position: this._tmpMuzzlePos.clone(),
+      velocity: this._tmpDir.clone().multiplyScalar(speed),
       targetPos: targetPos.clone(),
       distanceRemaining: totalDist,
       damage: 42,
@@ -712,15 +788,18 @@ export class ApartmentTurrets {
   }
 
   public dispose() {
-    this.group.traverse((o) => {
-      if (o instanceof THREE.Mesh || o instanceof THREE.Line) {
-        o.geometry.dispose();
-        if (Array.isArray(o.material)) o.material.forEach((m) => m.dispose());
-        else o.material.dispose();
-      }
-    });
-    this.activeProjectiles.forEach((p) => {
-      p.mesh.geometry.dispose();
+    this.laserFadeTex?.dispose();
+    this.laserFadeTex = null;
+    this.laserCoreGeo.dispose();
+    this.laserGlowGeo.dispose();
+    this.tracerGeo.dispose();
+    this.tracerMat.dispose();
+    Object.values(this.sharedGeos).forEach((g) => g.dispose());
+    Object.values(this.sharedMaterials).forEach((m) => m.dispose());
+    this.turrets.forEach((t) => {
+      t.sensorMat.dispose();
+      t.laserCoreMat.dispose();
+      t.laserGlowMat.dispose();
     });
     this.activeProjectiles = [];
     this.hostileFactionTargets.clear();

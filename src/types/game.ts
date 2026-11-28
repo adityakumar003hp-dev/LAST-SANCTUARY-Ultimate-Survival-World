@@ -126,6 +126,7 @@ export interface ZombieEntity {
   rangedCooldown?: number;
   victimName?: string;
   victimRole?: string;
+  victimScale?: number;
   victimAppearance?: {
     clothHex?: number;
     pantsHex?: number;
@@ -323,12 +324,13 @@ export interface Quest {
 
 export type GraphicsQuality = 'low' | 'medium' | 'high' | 'ultra';
 export type GraphicsQualityMode = 'performance' | 'balanced' | 'quality' | 'ultra_5x' | 'absolute_realism';
-export type GraphicsTargetFps = 30 | 60;
+export type GraphicsTargetFps = 30 | 45 | 60;
 export type GraphicsGovernorState = 'optimal' | 'adapting_down' | 'stabilized' | 'recovering' | 'manual';
 
 export interface GraphicsManagerConfig {
   preset: GraphicsQualityMode;
   autoGovernor: boolean;
+  lowHeatSaver: boolean;
   targetFps: GraphicsTargetFps;
   renderScale: number | null; // null = auto from preset; otherwise 0.6..2.0
   shadowsEnabled: boolean;
@@ -348,6 +350,7 @@ export interface GraphicsManagerConfig {
 export interface GraphicsManagerSnapshot {
   preset: GraphicsQualityMode;
   autoGovernor: boolean;
+  lowHeatSaver: boolean;
   targetFps: GraphicsTargetFps;
   fps: number;
   frameTimeMs: number;
@@ -465,7 +468,7 @@ export interface ChunkCoord {
 
 export interface POIStructure {
   id: string;
-  type: 'cabin' | 'ruined_house' | 'gas_station' | 'warehouse' | 'watchtower' | 'radio_bunker' | 'research_lab' | 'village' | 'town' | 'city_district' | 'hospital' | 'clinic' | 'fire_station' | 'police_station' | 'factory' | 'industrial_complex' | 'airport' | 'power_station' | 'water_treatment' | 'university' | 'shopping_centre' | 'freight_terminal';
+  type: 'cabin' | 'ruined_house' | 'gas_station' | 'warehouse' | 'watchtower' | 'radio_bunker' | 'research_lab' | 'village' | 'town' | 'city_district' | 'hospital' | 'clinic' | 'fire_station' | 'police_station' | 'factory' | 'industrial_complex' | 'airport' | 'power_station' | 'water_treatment' | 'university' | 'shopping_centre' | 'freight_terminal' | 'media_station' | 'broadcast_center' | 'satellite_uplink';
   name: string;
   position: [number, number, number];
   rotationY: number;
@@ -571,7 +574,22 @@ export interface ResearchTech {
   category: 'power' | 'defense' | 'farming' | 'medical' | 'vehicle';
 }
 
-export type VehicleType = 'atv' | 'enforce' | 'car' | 'bicycle' | 'motorbike' | 'buggy' | 'motorboat' | 'armored_truck';
+export type VehicleType =
+  | 'atv'
+  | 'enforce'
+  | 'car'
+  | 'bicycle'
+  | 'motorbike'
+  | 'buggy'
+  | 'motorboat'
+  | 'armored_truck'
+  | 'news_van'
+  | 'satellite_truck'
+  | 'reporter_suv'
+  | 'camera_crew_van'
+  | 'radio_van'
+  | 'news_helicopter'
+  | 'emergency_broadcast_truck';
 
 export interface VehicleState {
   id: string;
@@ -661,10 +679,62 @@ export interface EarthOriginConfig {
 export interface GlobalOutbreakCitySave {
   cityId: string;
   healthyCount: number;
+  populationCount?: number;
+  dailyZombieTarget?: number;
+  dailyGrowthDay?: number;
+  conversionCohorts?: Array<{ remainingSeconds: number; count: number }>;
   transformingCount: number;
   infectedCount: number;
   evacuatedCount: number;
   powerGridRatio: number;
+  lastUpdatedAt?: number;
+  dangerLevel?: 'Safe' | 'Alert' | 'Containment' | 'Overrun' | 'Critical';
+}
+
+export interface AsteroidImpactSaveRecord {
+  id: string;
+  cityId: string;
+  cityName: string;
+  continent: string;
+  country: string;
+  lat: number;
+  lon: number;
+  triggerDay: number;
+  impacted: boolean;
+  impactedAtSimSeconds: number | null;
+  radiusKm: number;
+  severity: number;
+  terrainCondition: string;
+  discovered: boolean;
+}
+
+export interface PopulationHistorySavePoint {
+  day: number;
+  simSeconds: number;
+  totalPopulation: number;
+  healthyCount: number;
+  transformingCount: number;
+  infectedCount: number;
+  evacuatedCount: number;
+  overrunCities: number;
+  impactCount: number;
+}
+
+export interface GlobalPopulationStateSave {
+  version: number;
+  baselineDay1Population: number;
+  currentDay: number;
+  citizenDailyStartPopulation: number;
+  citizenGrowthMultiplier: number;
+  zombieDailyStartCount: number;
+  zombieDailyTargetCount: number;
+  zombieGrowthMultiplier: number;
+  daytimeConversionSeconds: number;
+  nighttimeConversionSeconds: number;
+  resetCount: number;
+  lastResetAt: number;
+  asteroidImpacts: AsteroidImpactSaveRecord[];
+  history: PopulationHistorySavePoint[];
 }
 
 export interface GlobalOutbreakSaveData {
@@ -674,6 +744,10 @@ export interface GlobalOutbreakSaveData {
   totalGlobalTransforming: number;
   totalGlobalEvacuated: number;
   cityStates: GlobalOutbreakCitySave[];
+  lastProcessedDay?: number;
+  impactedCityIds?: string[];
+  impactSitesInitialized?: boolean;
+  populationState?: GlobalPopulationStateSave;
 }
 
 export interface CompoundSecuritySaveData {
@@ -683,6 +757,52 @@ export interface CompoundSecuritySaveData {
   vehicleGatesOpen: [boolean, boolean];
   garageShutterOpen: boolean;
   turrets: Array<{ id: string; ammo: number; health: number; killsCount: number }>;
+}
+
+export interface MediaSaveData {
+  version: number;
+  activeChannelId: string;
+  activeRadioChannelId: string;
+  worldPhase: 'normal_world' | 'asteroid_approaching' | 'asteroid_impact' | 'outbreak' | 'late_stage';
+  asteroidStageIndex: number;
+  liveIncidentStage: string;
+  liveIncidentTimer: number;
+  liveIncidentReporterId: string;
+  channelStatuses: Record<string, 'online' | 'degraded' | 'eas_override' | 'automated_loop' | 'offline'>;
+  facilityStates: Record<string, { operational: boolean; backupPowerOn: boolean; uplinkStrength: number }>;
+  reporterStates: Record<string, {
+    assignment: string;
+    locationLabel: string;
+    position: [number, number, number];
+    status: 'on_air' | 'field_reporting' | 'transit' | 'standby' | 'stunned' | 'infected' | 'evacuated';
+    infectionTimer: number;
+    talkedToPlayer: boolean;
+  }>;
+  broadcastHistory: Array<{
+    id: string;
+    channelId: string;
+    channelName: string;
+    day: number;
+    timeString: string;
+    phase: string;
+    priority: 'normal' | 'advisory' | 'breaking' | 'emergency';
+    headline: string;
+    summary: string;
+    presenter: string;
+    region: string;
+  }>;
+  emergencyRecordings: Array<{
+    id: string;
+    title: string;
+    channelId: string;
+    recordedDay: number;
+    transcript: string;
+    isAutomatedLoop: boolean;
+  }>;
+  interactedTerminalIds: string[];
+  inspectedStudioIds: string[];
+  commsHealthPct: number;
+  lastUpdatedAt: number;
 }
 
 export interface FullGameSave {
@@ -730,6 +850,7 @@ export interface FullGameSave {
   compoundState?: CompoundSecuritySaveData;
   aurelionState?: AurelionSaveState;
   nexusState?: import('../engine/nexus/NexusSystems').NexusSaveState;
+  mediaState?: MediaSaveData;
 }
 
 export type RailwayPassengerClass =

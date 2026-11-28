@@ -193,7 +193,7 @@ export class PrologueManager {
       this.townMgr.update(delta, this.engine.isNight, this.outbreakMgr.isOutbreakActive, this.engine.player.position, this.engine.camera.position);
       this.companionMgr.update(delta, this.engine.player.position, false, this.townMgr.apartmentBuilding);
       // Keep the outbreak simulation alive after the campaign unlocks free roam.
-      if (this.outbreakMgr.isOutbreakActive) this.outbreakMgr.update(delta, this.engine.player.position);
+      if (this.outbreakMgr.isOutbreakActive) this.outbreakMgr.update(delta, this.engine.player.position, this.engine.isNight);
       return;
     }
 
@@ -230,7 +230,7 @@ export class PrologueManager {
     }
 
     if (this.outbreakMgr.isOutbreakActive) {
-      this.outbreakMgr.update(delta, this.engine.player.position);
+      this.outbreakMgr.update(delta, this.engine.player.position, this.engine.isNight);
     }
 
     this.cinematicCam.update(delta);
@@ -976,7 +976,7 @@ export class PrologueManager {
       case 'D2_E17_CITYWIDE_OUTBREAK': {
         this.chapter = 8;
         this.cityOutbreakStarted = true;
-        this.outbreakMgr.triggerOutbreak(this.meteorMgr.craterCenter);
+        this.outbreakMgr.triggerOutbreak(this.meteorMgr.craterCenter, this.engine.isNight);
         this.callbacks.onTitleBanner({
           title: 'EVENT 17: CITYWIDE OUTBREAK',
           subtitle: 'FIND A SAFE ROUTE',
@@ -1420,7 +1420,14 @@ export class PrologueManager {
     this.chapter = 13;
     this.day = saveData.day || 2;
     this.currentDay = 2;
-    this.friendsMet = { marcus: true, chloe: true, maya: true, rohan: true, ...(saveData.friendsMet || {}) };
+    this.friendsMet = saveData.friendsMet
+      ? {
+          marcus: Boolean(saveData.friendsMet.marcus),
+          chloe: Boolean(saveData.friendsMet.chloe),
+          maya: Boolean(saveData.friendsMet.maya),
+          rohan: Boolean(saveData.friendsMet.rohan),
+        }
+      : { marcus: true, chloe: true, maya: true, rohan: true };
     this.starterBaseEstablished = Boolean(saveData.starterBaseEstablished && (saveData.day || 1) >= 4);
     const legacyBaseBeforeDayFour = (saveData.day || 1) < 4;
     if (saveData.companions) {
@@ -1660,7 +1667,14 @@ export class PrologueManager {
     this.lastSafeCheckpointId = this.currentEventId;
     this.completedEventIds = saveData.completedEventIds || [];
     this.optionalObjectivesCompleted = saveData.optionalObjectivesCompleted || [];
-    this.friendsMet = { marcus: false, chloe: false, maya: false, rohan: false, ...(saveData.friendsMet || {}) };
+    this.friendsMet = saveData.friendsMet
+      ? {
+          marcus: Boolean(saveData.friendsMet.marcus),
+          chloe: Boolean(saveData.friendsMet.chloe),
+          maya: Boolean(saveData.friendsMet.maya),
+          rohan: Boolean(saveData.friendsMet.rohan),
+        }
+      : { marcus: false, chloe: false, maya: false, rohan: false };
     if (saveData.apartmentInspected) this.apartmentInspected = { ...this.apartmentInspected, ...saveData.apartmentInspected };
     if (saveData.cityTasks) this.cityTasks = { ...this.cityTasks, ...saveData.cityTasks };
     if (saveData.baseTasks) this.baseTasks = { ...this.baseTasks, ...saveData.baseTasks };

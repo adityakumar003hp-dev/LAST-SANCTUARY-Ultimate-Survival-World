@@ -20,10 +20,12 @@ export interface AurelionArchitectureHandles {
   patioDoorLeftLeaf: THREE.Mesh;
   patioDoorRightLeaf: THREE.Mesh;
   chandelierGroup: THREE.Group;
+  elevRoot: THREE.Group;
   floorLights: THREE.PointLight[];
   elevatorVisuals: Record<
     ElevatorId,
     {
+      shaftGroup: THREE.Group;
       cabGroup: THREE.Group;
       doorLeft: THREE.Mesh;
       doorRight: THREE.Mesh;
@@ -156,7 +158,7 @@ export function buildAurelionArchitecture(
       const winCenter = cursor + winW * 0.5;
       // Dark titanium window frame + recessed opaque privacy-reflective glazing
       placeBox(winCenter, winMidY, winW, winH, 0.22, mats.charcoalTitanium, false);
-      placeBox(winCenter, winMidY, Math.max(0.3, winW - 0.18), Math.max(0.3, winH - 0.18), 0.14, mats.exteriorPrivacyGlass, true);
+      placeBox(winCenter, winMidY, Math.max(0.3, winW - 0.18), Math.max(0.3, winH - 0.18), 0.14, mats.exteriorPrivacyGlass, false);
       // Solid interior travertine wall backing behind exterior glazing margins for airtight depth
       cursor += winW;
       if (b < safeBays - 1) {
@@ -322,7 +324,7 @@ export function buildAurelionArchitecture(
   ] as const) {
     const col = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.34, 14.3, 18), mats.honedTravertine);
     col.position.set(cx, 7.4, cz);
-    col.castShadow = true;
+    col.castShadow = false;
     atriumGroup.add(col);
   }
 
@@ -377,6 +379,7 @@ export function buildAurelionArchitecture(
   chandelierGroup.add(crystalInst);
 
   const atriumLight = new THREE.PointLight(0xffe7bd, 2.2, 24, 1.3);
+  atriumLight.castShadow = false;
   atriumLight.position.set(0, -4.6, 0);
   chandelierGroup.add(atriumLight);
   floorLights.push(atriumLight);
@@ -587,6 +590,7 @@ export function buildAurelionArchitecture(
     cabGroup.add(cabFloor, cabCeiling, cabLightStrip, cabWallBack, cabWallL, cabWallR, doorLeft, doorRight, indScreen);
 
     elevatorVisuals[id] = {
+      shaftGroup,
       cabGroup,
       doorLeft,
       doorRight,
@@ -606,6 +610,7 @@ export function buildAurelionArchitecture(
     patioDoorLeftLeaf,
     patioDoorRightLeaf,
     chandelierGroup,
+    elevRoot,
     floorLights,
     elevatorVisuals,
   };

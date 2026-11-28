@@ -70,7 +70,7 @@ export class ZombieManager {
     type: ZombieType,
     position: [number, number, number],
     bypassSafeZone: boolean = false,
-    victimMeta?: { name?: string; role?: string; clothHex?: number; pantsHex?: number }
+    victimMeta?: { name?: string; role?: string; clothHex?: number; pantsHex?: number; victimScale?: number }
   ): ZombieEntity | null {
     // Strict requirement: No zombies should appear before the meteorite impact.
     // Zombies begin spawning only after the impact and outbreak storyline.
@@ -184,6 +184,7 @@ export class ZombieManager {
       bossTitle,
       victimName: victimMeta?.name,
       victimRole: victimMeta?.role,
+      victimScale: victimMeta?.victimScale,
       victimAppearance:
         victimMeta && (victimMeta.clothHex !== undefined || victimMeta.pantsHex !== undefined)
           ? { clothHex: victimMeta.clothHex, pantsHex: victimMeta.pantsHex }
@@ -196,8 +197,9 @@ export class ZombieManager {
 
     const physMgr = UnifiedPhysicsManager.getInstance();
     if (physMgr) {
-      const colR = entity.type === 'alpha_boss' ? 1.05 : entity.type === 'brute' || entity.type === 'juggernaut' ? 0.8 : 0.45;
-      physMgr.registerCylinderCollider(entity.id, 'zombie', entity.position, colR, entity.type === 'alpha_boss' ? 2.8 : 1.9);
+      const victimScale = entity.victimScale ?? 1;
+      const colR = (entity.type === 'alpha_boss' ? 1.05 : entity.type === 'brute' || entity.type === 'juggernaut' ? 0.8 : 0.45) * victimScale;
+      physMgr.registerCylinderCollider(entity.id, 'zombie', entity.position, colR, (entity.type === 'alpha_boss' ? 2.8 : 1.9) * victimScale);
     }
 
     return entity;
@@ -243,7 +245,7 @@ export class ZombieManager {
 
   private moveZombieWithCollision(z: ZombieEntity, nextX: number, nextZ: number) {
     const phys = UnifiedPhysicsManager.getInstance();
-    const radius = z.type === 'brute' ? 0.72 : 0.42;
+    const radius = (z.type === 'brute' ? 0.72 : 0.42) * (z.victimScale ?? 1);
     const current = ZombieManager._tmpCur.set(z.position[0], z.position[1], z.position[2]);
     const totalDistance = Math.hypot(nextX - current.x, nextZ - current.z);
     // Subdivide long knockback steps so fast movement cannot tunnel through a wall.
@@ -583,7 +585,7 @@ export class ZombieManager {
                 ? 0.75
                 : 1.05;
 
-    const group = buildRealisticZombie(z.type, scale, z.victimAppearance);
+    const group = buildRealisticZombie(z.type, scale * (z.victimScale ?? 1), z.victimAppearance);
     group.position.set(z.position[0], z.position[1], z.position[2]);
     group.rotation.y = z.rotationY;
 

@@ -480,7 +480,7 @@ export class InteriorStreamingManager {
       if (arch === 'hospital') return [{ id: 'medkit', qty: 1 }, { id: 'medical_bandage', qty: 2 }];
       if (arch === 'police') return [{ id: 'crossbow_bolts', qty: 10 }, { id: 'metal_scrap', qty: 4 }];
       if (arch === 'shop' || arch === 'cafe') return [{ id: 'canned_beans', qty: 2 }, { id: 'clean_water', qty: 2 }];
-      if (arch === 'office' || arch === 'school') return [{ id: 'electronic_parts', qty: 3 }, { id: 'wood', qty: 2 }];
+      if (arch === 'office' || arch === 'school' || arch === 'media') return [{ id: 'electronic_parts', qty: 4 }, { id: 'wood', qty: 2 }];
       if (arch === 'warehouse') return [{ id: 'metal_scrap', qty: 5 }, { id: 'nails_bolts', qty: 6 }];
       return idx % 2 === 0
         ? [{ id: 'canned_beans', qty: 1 }, { id: 'clean_water', qty: 1 }]
@@ -524,17 +524,30 @@ export class InteriorStreamingManager {
       }
       addLootCrate(0, 'Store Provisions Crate', -hw + 1.5, 0.1, -1.6);
       addLootCrate(1, 'Stockroom Pantry Box', 0.2, floors >= 2 ? floorHeight + 0.1 : 0.1, -hd + 1.6);
-    } else if (def.archetype === 'police' || def.archetype === 'office' || def.archetype === 'school') {
-      // Duty desks + server/locker cabinets
+    } else if (def.archetype === 'police' || def.archetype === 'office' || def.archetype === 'school' || def.archetype === 'media') {
+      // Duty desks + server/locker/broadcast cabinets
       for (let i = 0; i < 2; i++) {
         const desk = new THREE.Mesh(new THREE.BoxGeometry(2.1, 0.8, 1.0), woodMat);
         addProp(desk, -hw + 2.2 + i * 3.0, 0.45, 1.5, 2.1, 0.8, 1.0, `office_desk_${i}`);
       }
       const rack = new THREE.Mesh(new THREE.BoxGeometry(2.6, 2.1, 0.75), metalMat);
       addProp(rack, -1.5, 1.1, -hd + 1.2, 2.6, 2.1, 0.75, 'locker_rack');
-      addLootCrate(0, def.archetype === 'police' ? 'Armory Locker' : 'Electronics Cabinet', -hw + 1.4, 0.1, -hd + 1.6);
+      if (def.archetype === 'media') {
+        const studioWall = new THREE.Mesh(
+          new THREE.BoxGeometry(3.4, 1.8, 0.25),
+          new THREE.MeshBasicMaterial({ color: 0x0284c7 })
+        );
+        addProp(studioWall, 0.8, 1.35, -hd + 1.15, 3.4, 1.8, 0.25, 'media_monitor_wall');
+      }
+      addLootCrate(
+        0,
+        def.archetype === 'police' ? 'Armory Locker' : def.archetype === 'media' ? 'Broadcast Uplink Case' : 'Electronics Cabinet',
+        -hw + 1.4,
+        0.1,
+        -hd + 1.6
+      );
       if (floors >= 2) {
-        addLootCrate(1, 'Upper Archive Case', -1.8, floorHeight + 0.1, -hd + 1.8);
+        addLootCrate(1, def.archetype === 'media' ? 'ENG Camera & Transmitter Locker' : 'Upper Archive Case', -1.8, floorHeight + 0.1, -hd + 1.8);
       }
     } else if (def.archetype === 'warehouse') {
       // Tall industrial storage racks + forklift pallets

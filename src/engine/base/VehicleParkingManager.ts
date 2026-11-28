@@ -8,6 +8,8 @@ import { VehicleState, VehicleType } from '../../types/game';
 import { TerrainGenerator } from '../world/TerrainGenerator';
 import { UnifiedPhysicsManager } from '../physics/UnifiedPhysicsManager';
 
+import type { MediaVehicleTelemetry } from '../media/MediaTypes';
+
 export interface VehicleDefinition {
   id: string;
   name: string;
@@ -20,6 +22,7 @@ export interface VehicleDefinition {
   steerSpeed: number;   // rad/s
   fuelType: 'electric' | 'gasoline' | 'pedal';
   batteryOrFuel: number;
+  fixedSpawnY?: number;
 }
 
 export interface DrivableVehicleInstance {
@@ -198,12 +201,112 @@ export class VehicleParkingManager {
         fuelType: 'gasoline',
         batteryOrFuel: 96,
       },
+      // 8. Oakridge News 24 Live ENG Van (Media Tower Plaza West Bay)
+      {
+        id: 'veh_news_van_01',
+        name: 'Oakridge News 24 Live ENG Van',
+        type: 'news_van',
+        defaultPos: [52.0, 0.38, -14.0],
+        rotationY: Math.PI * 0.5,
+        maxSpeed: 22.0,
+        accel: 10.5,
+        drag: 3.6,
+        steerSpeed: 1.55,
+        fuelType: 'gasoline',
+        batteryOrFuel: 97,
+      },
+      // 9. WorldWatch Satellite Uplink Truck (Media Tower Plaza Bay 2)
+      {
+        id: 'veh_sat_truck_01',
+        name: 'WorldWatch Satellite Uplink Truck',
+        type: 'satellite_truck',
+        defaultPos: [52.0, 0.42, -21.5],
+        rotationY: Math.PI * 0.5,
+        maxSpeed: 19.5,
+        accel: 8.8,
+        drag: 4.1,
+        steerSpeed: 1.35,
+        fuelType: 'gasoline',
+        batteryOrFuel: 95,
+      },
+      // 10. Investigative Press 4x4 SUV (Media Tower Plaza Bay 3)
+      {
+        id: 'veh_reporter_suv_01',
+        name: 'Press Corps 4x4 Investigative SUV',
+        type: 'reporter_suv',
+        defaultPos: [52.0, 0.42, -29.0],
+        rotationY: Math.PI * 0.5,
+        maxSpeed: 26.5,
+        accel: 12.2,
+        drag: 3.4,
+        steerSpeed: 1.75,
+        fuelType: 'gasoline',
+        batteryOrFuel: 94,
+      },
+      // 11. Production Camera Crew Van (Media Tower East Bay)
+      {
+        id: 'veh_camera_van_01',
+        name: 'Production Camera Crew Van',
+        type: 'camera_crew_van',
+        defaultPos: [80.0, 0.38, -14.5],
+        rotationY: -Math.PI * 0.5,
+        maxSpeed: 21.5,
+        accel: 10.0,
+        drag: 3.6,
+        steerSpeed: 1.55,
+        fuelType: 'gasoline',
+        batteryOrFuel: 93,
+      },
+      // 12. Oakridge Radio FM 94.7 Mobile Broadcast Van (Town / Plaza Edge)
+      {
+        id: 'veh_radio_van_01',
+        name: 'Oakridge Radio FM 94.7 Mobile Van',
+        type: 'radio_van',
+        defaultPos: [45.5, 0.38, -16.5],
+        rotationY: Math.PI,
+        maxSpeed: 22.0,
+        accel: 10.2,
+        drag: 3.5,
+        steerSpeed: 1.6,
+        fuelType: 'gasoline',
+        batteryOrFuel: 98,
+      },
+      // 13. SkyEye 24 News Helicopter (Oakridge Media Tower Rooftop Helipad)
+      {
+        id: 'veh_news_heli_01',
+        name: 'SkyEye 24 News Helicopter',
+        type: 'news_helicopter',
+        defaultPos: [63.5, 11.95, -27.0],
+        rotationY: -Math.PI * 0.25,
+        maxSpeed: 36.0,
+        accel: 14.0,
+        drag: 2.2,
+        steerSpeed: 1.7,
+        fuelType: 'gasoline',
+        batteryOrFuel: 99,
+        fixedSpawnY: 11.95,
+      },
+      // 14. Mobile Emergency Broadcast Command Truck (Military Outpost 7 Relay)
+      {
+        id: 'veh_eas_truck_01',
+        name: 'Mobile Emergency Broadcast Truck',
+        type: 'emergency_broadcast_truck',
+        defaultPos: [936.0, 0.42, 16.0],
+        rotationY: -Math.PI * 0.5,
+        maxSpeed: 19.0,
+        accel: 8.5,
+        drag: 4.2,
+        steerSpeed: 1.3,
+        fuelType: 'gasoline',
+        batteryOrFuel: 100,
+      },
     ];
 
     for (const def of definitions) {
       const mesh = this.buildVehicleMesh(def);
       const groundY = TerrainGenerator.getHeight(def.defaultPos[0], def.defaultPos[2]) + 0.35;
-      mesh.position.set(def.defaultPos[0], Math.max(0.35, groundY), def.defaultPos[2]);
+      const spawnY = def.fixedSpawnY !== undefined ? def.fixedSpawnY : Math.max(0.35, groundY);
+      mesh.position.set(def.defaultPos[0], spawnY, def.defaultPos[2]);
       mesh.rotation.y = def.rotationY;
       this.scene.add(mesh);
 
@@ -211,7 +314,7 @@ export class VehicleParkingManager {
         id: def.id,
         name: def.name,
         type: def.type,
-        position: [def.defaultPos[0], Math.max(0.35, groundY), def.defaultPos[2]],
+        position: [def.defaultPos[0], spawnY, def.defaultPos[2]],
         rotationY: def.rotationY,
         batteryPercent: def.batteryOrFuel,
         headlightsOn: true,
@@ -294,6 +397,20 @@ export class VehicleParkingManager {
       }
       case 'motorboat':
         return this.createMotorboatMesh();
+      case 'news_van':
+        return this.createMediaVanMesh(0x0284c7, true, false);
+      case 'satellite_truck':
+        return this.createMediaVanMesh(0x1e293b, true, true);
+      case 'reporter_suv':
+        return this.createReporterSUVMesh();
+      case 'camera_crew_van':
+        return this.createMediaVanMesh(0x0f766e, false, false);
+      case 'radio_van':
+        return this.createMediaVanMesh(0xb45309, true, false);
+      case 'emergency_broadcast_truck':
+        return this.createMediaVanMesh(0x991b1b, true, true);
+      case 'news_helicopter':
+        return this.createNewsHelicopterMesh();
       default:
         return this.createSedanMesh();
     }
@@ -793,6 +910,216 @@ export class VehicleParkingManager {
     return g;
   }
 
+  private createMediaVanMesh(accentColor: number, hasRoofDish: boolean, isHeavyTruck: boolean): THREE.Group {
+    const g = new THREE.Group();
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.38, metalness: 0.25 });
+    const stripeMat = new THREE.MeshStandardMaterial({ color: accentColor, roughness: 0.42, metalness: 0.35 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x18181b, roughness: 0.78, metalness: 0.6 });
+    const tireMat = new THREE.MeshStandardMaterial({ color: 0x141517, roughness: 0.94 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.15, metalness: 0.85, transparent: true, opacity: 0.85 });
+
+    const w = isHeavyTruck ? 2.3 : 2.05;
+    const h = isHeavyTruck ? 1.85 : 1.55;
+    const l = isHeavyTruck ? 5.2 : 4.6;
+
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(w, h, l), bodyMat);
+    hull.position.set(0, 0.55 + h * 0.5, 0);
+    hull.castShadow = true;
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(w + 0.04, 0.36, l * 0.88), stripeMat);
+    stripe.position.set(0, 0.92, -0.1);
+    const wind = new THREE.Mesh(new THREE.BoxGeometry(w * 0.86, 0.56, 0.08), glassMat);
+    wind.position.set(0, 1.32, l * 0.5 + 0.02);
+    wind.rotation.x = -0.22;
+    g.add(hull, stripe, wind);
+
+    if (hasRoofDish) {
+      const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.1, 0.85, 8), darkMat);
+      mast.position.set(0, 0.55 + h + 0.42, -0.6);
+      const dish = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.75, 0.18, 0.28, 14),
+        new THREE.MeshStandardMaterial({ color: 0xe2e8f0, metalness: 0.4, roughness: 0.35 })
+      );
+      dish.position.set(0, 0.55 + h + 0.95, -0.6);
+      dish.rotation.x = -Math.PI * 0.32;
+      g.add(mast, dish);
+    }
+
+    const beacon = new THREE.PointLight(accentColor, 1.4, 10, 1.8);
+    beacon.name = 'strobe_beacon';
+    beacon.position.set(0, 0.55 + h + 0.25, 1.1);
+    const beaconDome = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.14, 0.16, 0.16, 8),
+      new THREE.MeshBasicMaterial({ color: accentColor })
+    );
+    beaconDome.position.copy(beacon.position);
+    g.add(beacon, beaconDome);
+
+    const wGeo = new THREE.CylinderGeometry(0.42, 0.42, 0.3, 12);
+    wGeo.rotateZ(Math.PI / 2);
+    for (const [wx, wz] of [[-w * 0.52, l * 0.33], [w * 0.52, l * 0.33], [-w * 0.52, -l * 0.33], [w * 0.52, -l * 0.33]]) {
+      const wheel = new THREE.Mesh(wGeo, tireMat);
+      wheel.name = `wheel_${wx}_${wz}`;
+      wheel.position.set(wx, 0.42, wz);
+      g.add(wheel);
+    }
+
+    for (const x of [-0.68, 0.68]) {
+      const hl = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.14, 0.06), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+      hl.position.set(x, 0.78, l * 0.5 + 0.03);
+      const spot = new THREE.SpotLight(0xfffbeb, 2.8, 40, Math.PI / 5, 0.35);
+      spot.position.set(x, 0.78, l * 0.5 + 0.08);
+      spot.target.position.set(x, 0, 18);
+      g.add(hl, spot, spot.target);
+    }
+    return g;
+  }
+
+  private createReporterSUVMesh(): THREE.Group {
+    const g = new THREE.Group();
+    const paint = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.32, metalness: 0.65 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.7, metalness: 0.5 });
+    const tireMat = new THREE.MeshStandardMaterial({ color: 0x161719, roughness: 0.94 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x0f172a, roughness: 0.15, metalness: 0.85, transparent: true, opacity: 0.82 });
+
+    const body = new THREE.Mesh(new THREE.BoxGeometry(2.05, 0.72, 4.45), paint);
+    body.position.y = 0.78;
+    body.castShadow = true;
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.9, 0.78, 2.6), paint);
+    cabin.position.set(0, 1.48, -0.25);
+    const glass = new THREE.Mesh(new THREE.BoxGeometry(1.82, 0.48, 2.4), glassMat);
+    glass.position.set(0, 1.5, -0.22);
+    const roofRack = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.1, 1.9), darkMat);
+    roofRack.position.set(0, 1.92, -0.25);
+    g.add(body, cabin, glass, roofRack);
+
+    const wGeo = new THREE.CylinderGeometry(0.45, 0.45, 0.32, 12);
+    wGeo.rotateZ(Math.PI / 2);
+    for (const [wx, wz] of [[-1.08, 1.38], [1.08, 1.38], [-1.08, -1.38], [1.08, -1.38]]) {
+      const wheel = new THREE.Mesh(wGeo, tireMat);
+      wheel.name = `wheel_${wx}_${wz}`;
+      wheel.position.set(wx, 0.45, wz);
+      g.add(wheel);
+    }
+
+    for (const x of [-0.72, 0.72]) {
+      const spot = new THREE.SpotLight(0xfffbeb, 2.9, 42, Math.PI / 5, 0.35);
+      spot.position.set(x, 0.85, 2.25);
+      spot.target.position.set(x, 0, 18);
+      g.add(spot, spot.target);
+    }
+    return g;
+  }
+
+  private createNewsHelicopterMesh(): THREE.Group {
+    const g = new THREE.Group();
+    g.name = 'veh_news_heli_group';
+    const bodyMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.35, metalness: 0.4 });
+    const stripeMat = new THREE.MeshStandardMaterial({ color: 0x0284c7, roughness: 0.4, metalness: 0.5 });
+    const darkMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.55, metalness: 0.78 });
+    const glassMat = new THREE.MeshStandardMaterial({ color: 0x38bdf8, roughness: 0.1, metalness: 0.35, transparent: true, opacity: 0.55 });
+
+    // Fuselage & nose canopy
+    const fuselage = new THREE.Mesh(new THREE.BoxGeometry(1.75, 1.35, 3.6), bodyMat);
+    fuselage.position.set(0, 1.2, 0.15);
+    fuselage.castShadow = true;
+    const stripe = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.35, 3.2), stripeMat);
+    stripe.position.set(0, 1.0, 0.15);
+    const canopy = new THREE.Mesh(new THREE.SphereGeometry(0.95, 12, 10), glassMat);
+    canopy.scale.set(0.92, 0.75, 1.15);
+    canopy.position.set(0, 1.22, 1.65);
+
+    // Tail boom & vertical stabilizer
+    const boom = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.28, 3.6, 8), bodyMat);
+    boom.rotation.x = Math.PI / 2;
+    boom.position.set(0, 1.35, -3.2);
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.12, 0.95, 0.65), stripeMat);
+    fin.position.set(0, 1.75, -4.85);
+
+    // Camera gimbal under nose
+    const camBall = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 8), darkMat);
+    camBall.position.set(0, 0.52, 2.05);
+
+    // Landing skids
+    for (const sx of [-0.95, 0.95]) {
+      const skid = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 3.4, 8), darkMat);
+      skid.rotation.x = Math.PI / 2;
+      skid.position.set(sx, 0.1, 0.25);
+      const strutF = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.7, 6), darkMat);
+      strutF.position.set(sx * 0.85, 0.42, 1.0);
+      const strutR = strutF.clone();
+      strutR.position.z = -0.6;
+      g.add(skid, strutF, strutR);
+    }
+
+    // Spinning Main Rotor Hub + Blades
+    const mainRotor = new THREE.Group();
+    mainRotor.name = 'heli_main_rotor';
+    mainRotor.position.set(0, 2.15, 0.1);
+    const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.14, 0.45, 8), darkMat);
+    const bladeA = new THREE.Mesh(new THREE.BoxGeometry(6.8, 0.04, 0.26), darkMat);
+    bladeA.position.y = 0.22;
+    const bladeB = new THREE.Mesh(new THREE.BoxGeometry(0.26, 0.04, 6.8), darkMat);
+    bladeB.position.y = 0.22;
+    mainRotor.add(mast, bladeA, bladeB);
+
+    // Tail Rotor
+    const tailRotor = new THREE.Group();
+    tailRotor.name = 'heli_tail_rotor';
+    tailRotor.position.set(0.14, 1.65, -4.9);
+    const tailBlade = new THREE.Mesh(new THREE.BoxGeometry(0.04, 1.25, 0.14), darkMat);
+    tailRotor.add(tailBlade);
+
+    // Searchlight
+    const spot = new THREE.SpotLight(0xffffff, 3.2, 65, Math.PI / 4, 0.4);
+    spot.position.set(0, 0.55, 2.1);
+    spot.target.position.set(0, -10, 22);
+
+    g.add(fuselage, stripe, canopy, boom, fin, camBall, mainRotor, tailRotor, spot, spot.target);
+    return g;
+  }
+
+  public getMediaVehicleTelemetry(): MediaVehicleTelemetry[] {
+    const channelMap: Partial<Record<VehicleType, MediaVehicleTelemetry['channelId']>> = {
+      news_van: 'oakridge_news_24',
+      satellite_truck: 'worldwatch_intl',
+      reporter_suv: 'oakridge_news_24',
+      camera_crew_van: 'oakridge_local',
+      radio_van: 'oakridge_radio',
+      news_helicopter: 'oakridge_news_24',
+      emergency_broadcast_truck: 'oakridge_radio',
+    };
+    const crewMap: Partial<Record<VehicleType, string[]>> = {
+      news_van: ['Marcus Reed', 'Devon Brooks'],
+      satellite_truck: ['Hannah Kowalski', 'Nadia Lindqvist'],
+      reporter_suv: ['Nadia Lindqvist', 'Luis Morales'],
+      camera_crew_van: ['Kenji Sato', 'Devon Brooks'],
+      radio_van: ['Samir Rao'],
+      news_helicopter: ['Elena Vance', 'Luis Morales'],
+      emergency_broadcast_truck: ['Sgt. Malik Carter'],
+    };
+
+    const result: MediaVehicleTelemetry[] = [];
+    for (const v of this.vehicles.values()) {
+      const ch = channelMap[v.def.type];
+      if (!ch) continue;
+      result.push({
+        id: v.def.id,
+        name: v.def.name,
+        kind: v.def.type as MediaVehicleTelemetry['kind'],
+        channelId: ch,
+        position: [v.state.position[0], v.state.position[1], v.state.position[2]],
+        uplinkActive: v.state.batteryPercent > 5,
+        crewNames: crewMap[v.def.type] || ['Media Crew'],
+        statusText: v.state.isOccupied
+          ? `Player Operating (${Math.round(Math.abs(v.currentSpeed) * 3.6)} km/h)`
+          : v.def.type === 'news_helicopter'
+            ? 'Media Tower Helipad · Flight Ready'
+            : 'Standby · Uplink Active',
+      });
+    }
+    return result;
+  }
+
   // ==========================================
   // SELECTION & INTERACTION
   // ==========================================
@@ -801,6 +1128,7 @@ export class VehicleParkingManager {
     let minDist = maxDist;
 
     for (const v of this.vehicles.values()) {
+      if (Math.abs(v.state.position[1] - playerPos.y) > 4.5) continue;
       const dist = Math.hypot(v.state.position[0] - playerPos.x, v.state.position[2] - playerPos.z);
       if (dist < minDist) {
         minDist = dist;
@@ -869,14 +1197,21 @@ export class VehicleParkingManager {
   // ==========================================
   public update(
     delta: number,
-    input: { forward: boolean; backward: boolean; left: boolean; right: boolean },
+    input: { forward: boolean; backward: boolean; left: boolean; right: boolean; jump?: boolean; crouch?: boolean },
     worldSeed: number
   ) {
-    // 1. Update strobe beacons for Enforcer vehicle even when idling
+    // 1. Update strobe beacons & helicopter rotors
     for (const v of this.vehicles.values()) {
       if (v.strobeLight) {
         v.strobeTimer += delta * 8.0;
         v.strobeLight.intensity = Math.sin(v.strobeTimer) > 0 ? 2.5 : 0.2;
+      }
+      if (v.def.type === 'news_helicopter') {
+        const rotorSpeed = v.state.isOccupied || v.state.engineRunning ? 22.0 : 1.2;
+        const mainRotor = v.mesh.getObjectByName('heli_main_rotor');
+        const tailRotor = v.mesh.getObjectByName('heli_tail_rotor');
+        if (mainRotor) mainRotor.rotation.y += delta * rotorSpeed;
+        if (tailRotor) tailRotor.rotation.x += delta * rotorSpeed * 1.6;
       }
     }
 
@@ -916,9 +1251,9 @@ export class VehicleParkingManager {
       v.state.rpm = Math.round(800 + speedRatio * 5200); // 800 idle - 6000 redline
     }
 
-    // Steering
-    if (Math.abs(v.currentSpeed) > 0.15) {
-      const dir = v.currentSpeed >= 0 ? 1 : -1;
+    // Steering (helicopter can yaw in place too)
+    if (Math.abs(v.currentSpeed) > 0.15 || def.type === 'news_helicopter') {
+      const dir = v.currentSpeed >= -0.05 ? 1 : -1;
       if (input.left) {
         v.state.rotationY += def.steerSpeed * delta * dir;
       }
@@ -935,7 +1270,7 @@ export class VehicleParkingManager {
     const desiredZ = prevZ + Math.cos(v.state.rotationY) * moveDist;
 
     const physMgr = UnifiedPhysicsManager.getInstance();
-    if (physMgr && v.def.type !== 'motorboat') {
+    if (physMgr && v.def.type !== 'motorboat' && v.def.type !== 'news_helicopter') {
       const radius = v.def.type === 'bicycle' || v.def.type === 'motorbike' ? 0.65 : 1.35;
       const curVec = new THREE.Vector3(prevX, 0.35, prevZ);
       const nextVec = new THREE.Vector3(desiredX, 0.35, desiredZ);
@@ -954,10 +1289,20 @@ export class VehicleParkingManager {
     if (!v.state.odometerKm) v.state.odometerKm = 0;
     v.state.odometerKm += Math.hypot(v.state.position[0] - prevX, v.state.position[2] - prevZ) / 1000;
 
-    // Follow terrain or water surface smoothly (motorboat floats at water level y >= 0.1)
+    // Follow terrain, water, or helicopter altitude controls
     const groundY = TerrainGenerator.getHeight(v.state.position[0], v.state.position[2], worldSeed);
     if (v.def.type === 'motorboat') {
       v.state.position[1] = Math.max(0.08, groundY + 0.18);
+    } else if (v.def.type === 'news_helicopter') {
+      const inHelipad =
+        Math.abs(v.state.position[0] - 66) <= 13 &&
+        Math.abs(v.state.position[2] - (-28)) <= 10;
+      const minHeliY = inHelipad ? 11.95 : Math.max(0.45, groundY + 0.35);
+      let nextY = v.state.position[1];
+      if (input.jump) nextY += 10.5 * delta;
+      else if (input.crouch) nextY -= 9.5 * delta;
+      else if (Math.abs(v.currentSpeed) > 2.5 && nextY < minHeliY + 1.8) nextY += 2.2 * delta;
+      v.state.position[1] = Math.max(minHeliY, Math.min(110, nextY));
     } else {
       v.state.position[1] = Math.max(0.35, groundY + 0.35);
     }
@@ -966,11 +1311,16 @@ export class VehicleParkingManager {
     v.mesh.position.set(v.state.position[0], v.state.position[1], v.state.position[2]);
     v.mesh.rotation.y = v.state.rotationY;
 
-    // Motorbike bank / lean angle animation when cornering
+    // Motorbike bank / helicopter pitch animation
     if (v.def.type === 'motorbike') {
       const leanTarget = input.left ? 0.35 : input.right ? -0.35 : 0;
       v.mesh.rotation.z = THREE.MathUtils.damp(v.mesh.rotation.z, leanTarget, 8.0, delta);
+    } else if (v.def.type === 'news_helicopter') {
+      const pitchTarget = THREE.MathUtils.clamp(v.currentSpeed / def.maxSpeed, -0.4, 1) * 0.16;
+      v.mesh.rotation.x = THREE.MathUtils.damp(v.mesh.rotation.x, pitchTarget, 5.0, delta);
+      v.mesh.rotation.z = 0;
     } else {
+      v.mesh.rotation.x = 0;
       v.mesh.rotation.z = 0;
     }
 

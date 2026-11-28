@@ -5,7 +5,7 @@ import { soundEngine } from '../../utils/audio';
 
 /**
  * Fictional outbreak simulation for the Oakridge prologue town.
- * Contact starts a 60-second stunned conversion phase; converted citizens
+ * Contact starts a timed stunned conversion phase (60 seconds by day, 10 at night); converted citizens
  * are replaced by the existing zombie AI entity. No graphic injury effects.
  */
 export class InfectionOutbreakManager {
@@ -15,7 +15,6 @@ export class InfectionOutbreakManager {
   private sirenTimer = 0;
   private spawnWaveTimer = 0;
   private initialZombiesSpawned = false;
-  private readonly conversionDuration = 60;
   private readonly contactRadiusSq = 2.2 * 2.2;
 
   constructor(zombieMgr: ZombieManager, townMgr: TownLifeManager) {
@@ -23,18 +22,18 @@ export class InfectionOutbreakManager {
     this.townMgr = townMgr;
   }
 
-  public triggerOutbreak(impactPos: THREE.Vector3) {
+  public triggerOutbreak(impactPos: THREE.Vector3, isNight: boolean = false) {
     this.isOutbreakActive = true;
     this.zombieMgr.isOutbreakActive = true;
     soundEngine.playEmergencySiren();
 
     // The first exposed resident becomes the initial carrier. Conversion still
-    // uses the same readable 60-second stun window as subsequent infections.
+    // uses the same readable day/night conversion window as subsequent infections.
     const seed = this.townMgr.citizens
       .filter((c) => c.infectionStage === 'normal')
       .map((c) => ({ c, d: Math.hypot(c.position[0] - impactPos.x, c.position[2] - impactPos.z) }))
       .sort((a, b) => a.d - b.d)[0];
-    if (seed && seed.d < 120) this.beginConversion(seed.c, 'meteorite_exposure');
+    if (seed && seed.d < 120) this.beginConversion(seed.c, 'meteorite_exposure', isNight);
 
     if (!this.initialZombiesSpawned) {
       this.initialZombiesSpawned = true;
@@ -45,22 +44,22 @@ export class InfectionOutbreakManager {
     }
   }
 
-  public infectCitizen(citizenId: string, sourceId: string): boolean {
+  public infectCitizen(citizenId: string, sourceId: string, isNight: boolean = false): boolean {
     const citizen = this.townMgr.citizens.find((c) => c.id === citizenId);
     if (!citizen || citizen.infectionStage === 'stunned' || citizen.infectionStage === 'zombie') return false;
-    this.beginConversion(citizen, sourceId);
+    this.beginConversion(citizen, sourceId, isNight);
     return true;
   }
 
-  private beginConversion(citizen: TownCitizenLike, sourceId: string) {
+  private beginConversion(citizen: TownCitizenLike, sourceId: string, isNight: boolean) {
     if (citizen.infectionStage === 'stunned' || citizen.infectionStage === 'zombie') return;
     citizen.infectionStage = 'stunned';
-    citizen.infectionTimer = this.conversionDuration;
+    citizen.infectionTimer = isNight ? 10 : 60;
     citizen.infectedBy = sourceId;
     citizen.schedule = 'cower';
   }
 
-  private updateCitizenConversions(delta: number) {
+  private updateCitizenConversions(delta: number, isNight: boolean) {
     const activeZombies = this.zombieMgr.zombies.filter((z) => z.state !== 'dead');
     for (const citizen of this.townMgr.citizens) {
       if (citizen.infectionStage === 'zombie') continue;
@@ -72,14 +71,14 @@ export class InfectionOutbreakManager {
           const dx = zombie.position[0] - citizen.position[0];
           const dz = zombie.position[2] - citizen.position[2];
           if (dx * dx + dz * dz <= this.contactRadiusSq) {
-            this.beginConversion(citizen, zombie.id);
+            this.beginConversion(citizen, zombie.id, isNight);
             break;
           }
         }
       }
 
       if (citizen.infectionStage === 'stunned') {
-        citizen.infectionTimer = Math.max(0, (citizen.infectionTimer ?? this.conversionDuration) - delta);
+        citizen.infectionTimer = Math.max(0, (citizen.infectionTimer ?? (isNight ? 10 : 60)) - delta);
         if (citizen.infectionTimer <= 0) {
           this.townMgr.convertCitizenToZombie(citizen, this.zombieMgr);
         }
@@ -87,7 +86,7 @@ export class InfectionOutbreakManager {
     }
   }
 
-  public update(delta: number, playerPos: THREE.Vector3) {
+  public update(delta: number, playerPos: THREE.Vector3, isNight: boolean = false) {
     if (!this.isOutbreakActive) return;
 
     this.sirenTimer += delta;
@@ -96,10 +95,10 @@ export class InfectionOutbreakManager {
       soundEngine.playEmergencySiren();
     }
 
-    this.updateCitizenConversions(delta);
+    this.updateCitizenConversions(delta, isNight);
 
     this.spawnWaveTimer += delta;
-    if (this.spawnWaveTimer > 18 && this.zombieMgr.zombies.length < 8) {
+    if (this.spawnWaveTimer > 18) {
       this.spawnWaveTimer = 0;
       const flankX = playerPos.x + (Math.random() > 0.5 ? 25 : -25);
       const flankZ = playerPos.z + (Math.random() > 0.5 ? 25 : -25);

@@ -27,10 +27,12 @@ import { EarthProjection } from '../engine/geo/EarthProjection';
 import {
   CityOutbreakTelemetry,
   GlobalOutbreakMetrics,
+  GlobalPopulationStateSnapshot,
   OutbreakDangerLevel,
 } from '../engine/world/GlobalOutbreakSimulator';
 import { soundEngine } from '../utils/audio';
 import { BiomeOutbreakTrackerD3 } from './BiomeOutbreakTrackerD3';
+import { GlobalOutbreakDashboard } from './GlobalOutbreakDashboard';
 
 interface MapModalProps {
   isOpen: boolean;
@@ -55,6 +57,11 @@ interface MapModalProps {
   nearestCityName?: string;
   globalCities?: CityOutbreakTelemetry[];
   globalMetrics?: GlobalOutbreakMetrics;
+  populationState?: GlobalPopulationStateSnapshot;
+  dayCount?: number;
+  isNight?: boolean;
+  isOutbreakActive?: boolean;
+  onResetSimulation?: () => void;
   onTravelToGeoCoordinate?: (lat: number, lon: number, label?: string) => void;
 }
 
@@ -94,9 +101,14 @@ export const MapModal: React.FC<MapModalProps> = ({
   nearestCityName,
   globalCities,
   globalMetrics,
+  populationState,
+  dayCount = 1,
+  isNight = false,
+  isOutbreakActive = false,
+  onResetSimulation,
   onTravelToGeoCoordinate,
 }) => {
-  const [activeTab, setActiveTab] = useState<'local' | 'atlas' | 'biomes'>('local');
+  const [activeTab, setActiveTab] = useState<'local' | 'atlas' | 'outbreak' | 'biomes'>('local');
   const [zoomLevel, setZoomLevel] = useState<number>(1.0);
   const [panOffset, setPanOffset] = useState<{ x: number; z: number }>({ x: 0, z: 0 });
   const [cityFilter, setCityFilter] = useState('');
@@ -118,6 +130,7 @@ export const MapModal: React.FC<MapModalProps> = ({
       REAL_WORLD_CITIES.map((c) => ({
         city: c,
         healthyCount: c.population,
+        populationCount: c.population,
         transformingCount: 0,
         infectedCount: 0,
         evacuatedCount: 0,
@@ -199,6 +212,8 @@ export const MapModal: React.FC<MapModalProps> = ({
             <div className="rounded-lg bg-amber-500/10 p-2 border border-amber-500/20 text-amber-400">
               {activeTab === 'atlas' ? (
                 <Globe className="h-5 w-5 text-sky-400" />
+              ) : activeTab === 'outbreak' ? (
+                <Activity className="h-5 w-5 text-orange-400" />
               ) : activeTab === 'biomes' ? (
                 <Activity className="h-5 w-5 text-rose-400" />
               ) : (
@@ -210,9 +225,11 @@ export const MapModal: React.FC<MapModalProps> = ({
                 <h2 className="text-base font-bold tracking-wide">
                   {activeTab === 'atlas'
                     ? 'Real Earth Global Atlas & Outbreak Telemetry'
-                    : activeTab === 'biomes'
-                      ? 'Global Outbreak Tracker — 37 Biomes (D3 Live Telemetry)'
-                      : 'Topographical World Cartography'}
+                    : activeTab === 'outbreak'
+                      ? 'Global Outbreak Dashboard — Population, Asteroid & City States'
+                      : activeTab === 'biomes'
+                        ? 'Global Outbreak Tracker — 37 Biomes (D3 Live Telemetry)'
+                        : 'Topographical World Cartography'}
                 </h2>
                 <span className="rounded bg-neutral-800 px-2 py-0.5 text-xs font-mono text-emerald-400 border border-neutral-700">
                   {currentBiome.name}
@@ -226,12 +243,12 @@ export const MapModal: React.FC<MapModalProps> = ({
           </div>
 
           <div className="flex items-center gap-2">
-            {/* Triple Tab Toggle */}
-            <div className="flex rounded-xl border border-neutral-800 bg-neutral-900 p-0.5 text-xs font-semibold">
+            {/* Quad Tab Toggle */}
+            <div className="flex flex-wrap rounded-xl border border-neutral-800 bg-neutral-900 p-0.5 text-xs font-semibold">
               <button
                 type="button"
                 onClick={() => setActiveTab('local')}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 cursor-pointer transition-colors ${
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors ${
                   activeTab === 'local' ? 'bg-amber-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
                 }`}
               >
@@ -241,7 +258,7 @@ export const MapModal: React.FC<MapModalProps> = ({
               <button
                 type="button"
                 onClick={() => setActiveTab('atlas')}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 cursor-pointer transition-colors ${
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors ${
                   activeTab === 'atlas' ? 'bg-sky-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
                 }`}
               >
@@ -250,13 +267,23 @@ export const MapModal: React.FC<MapModalProps> = ({
               </button>
               <button
                 type="button"
+                onClick={() => setActiveTab('outbreak')}
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors ${
+                  activeTab === 'outbreak' ? 'bg-orange-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
+                }`}
+              >
+                <Activity className="h-3.5 w-3.5" />
+                <span>Outbreak Dashboard</span>
+              </button>
+              <button
+                type="button"
                 onClick={() => setActiveTab('biomes')}
-                className={`flex items-center gap-1.5 rounded-lg px-3 py-1.5 cursor-pointer transition-colors ${
+                className={`flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 cursor-pointer transition-colors ${
                   activeTab === 'biomes' ? 'bg-rose-500 text-neutral-950 font-bold' : 'text-neutral-300 hover:text-white'
                 }`}
               >
                 <Activity className="h-3.5 w-3.5" />
-                <span>Global Outbreak Tracker</span>
+                <span>37 Biomes</span>
               </button>
             </div>
 
@@ -404,6 +431,28 @@ export const MapModal: React.FC<MapModalProps> = ({
                 })}
               </div>
             </div>
+          </div>
+        ) : activeTab === 'outbreak' ? (
+          <div className="flex-1 flex overflow-hidden bg-neutral-950">
+            <GlobalOutbreakDashboard
+              cities={citiesList}
+              metrics={globalMetrics}
+              populationState={populationState}
+              dayCount={dayCount}
+              isNight={isNight}
+              isOutbreakActive={isOutbreakActive}
+              earthLat={earthLat}
+              earthLon={earthLon}
+              onResetSimulation={onResetSimulation}
+              onTravelToGeoCoordinate={
+                onTravelToGeoCoordinate
+                  ? (lat, lon, label) => {
+                      onTravelToGeoCoordinate(lat, lon, label);
+                      onClose();
+                    }
+                  : undefined
+              }
+            />
           </div>
         ) : activeTab === 'biomes' ? (
           <div className="flex-1 flex overflow-hidden bg-neutral-950">
@@ -554,8 +603,12 @@ export const MapModal: React.FC<MapModalProps> = ({
                   <div className="text-[10px] font-mono text-neutral-300 grid grid-cols-2 gap-1 pt-1 border-t border-neutral-800">
                     <span>Coords: {selectedCityEntry.city.lat.toFixed(2)}, {selectedCityEntry.city.lon.toFixed(2)}</span>
                     <span>Grid: {Math.round(selectedCityEntry.powerGridRatio * 100)}%</span>
+                    <span>Population: {selectedCityEntry.populationCount.toLocaleString()}</span>
                     <span className="text-emerald-400">Healthy: {selectedCityEntry.healthyCount.toLocaleString()}</span>
                     <span className="text-rose-400">Infected: {selectedCityEntry.infectedCount.toLocaleString()}</span>
+                  </div>
+                  <div className="text-[10px] text-amber-200/80 border-t border-neutral-800 pt-2">
+                    Citizen growth ×3/day · Zombie target ×2/day · Conversion: 60s day / 10s night
                   </div>
                   {selectedCityEntry.city.landmarkName && (
                     <div className="text-[10px] text-amber-300/90 flex items-center gap-1">

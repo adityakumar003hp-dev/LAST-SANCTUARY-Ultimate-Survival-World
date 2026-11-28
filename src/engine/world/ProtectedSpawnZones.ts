@@ -13,6 +13,8 @@ export const PROTECTED_SPAWN_ZONES: readonly ProtectedSpawnZone[] = [
   { id: 'player-mansion-compound', minX: -112, maxX: -4, minZ: -41, maxZ: 93 },
   // Oakridge Town District (Main Avenue, Cross Street, Civic & Commercial buildings)
   { id: 'oakridge-town-district', minX: -52, maxX: 50, minZ: -70, maxZ: 62 },
+  // Oakridge Media Tower HQ & Broadcast Plaza (East of Cross Street, clear of Crater at 110,80)
+  { id: 'oakridge-media-tower-plaza', minX: 48, maxX: 84, minZ: -46, maxZ: -6 },
   // Military Starter Base at (954, 22) with reinforced perimeter clearing.
   // Nothing unrelated (trees, stone, scrap) can spawn inside or within boundary.
   { id: 'military-starter-base', minX: 915, maxX: 995, minZ: -18, maxZ: 62 },

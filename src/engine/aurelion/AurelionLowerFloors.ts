@@ -60,6 +60,10 @@ export function buildAurelionLowerFloors(
   const f1Slab = buildAurelionSlabWithOpenings(AURELION_LEVELS.F1, mats.honedTravertine, 0.24);
   f1Group.add(f1Slab);
 
+  const f1BounceHemi = new THREE.HemisphereLight(0xfff4e2, 0x5c5346, 0.52);
+  f1BounceHemi.position.set(0, f1Y + 3.1, 0);
+  f1Group.add(f1BounceHemi);
+
   // Room Plaques for all 15 F1 Rooms
   AURELION_ROOMS.filter((r) => r.level === 'F1').forEach((r) => {
     const plaque = new THREE.Mesh(
@@ -330,7 +334,8 @@ export function buildAurelionLowerFloors(
     [0, 6],
     [11, 0],
   ] as const) {
-    const l = new THREE.PointLight(0xffe9c8, 1.35, 18, 1.3);
+    const l = new THREE.PointLight(0xffe9c8, 1.75, 22, 1.15);
+    l.castShadow = false;
     l.position.set(lx, f1Y + 3.1, lz);
     f1Lights.push(l);
     f1Group.add(l);

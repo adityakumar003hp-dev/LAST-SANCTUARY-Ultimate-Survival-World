@@ -92,9 +92,15 @@ export class POIGenerator {
       } else if (roll < 0.56) {
         type = 'city_district';
         name = `${c.name} Residential Block`;
-      } else if (roll < 0.66) {
+      } else if (roll < 0.64) {
         type = 'police_station';
         name = `${c.name} Civic Precinct`;
+      } else if (roll < 0.72) {
+        type = 'media_station';
+        name = `${c.name} WorldWatch Broadcast Bureau`;
+      } else if (roll < 0.77) {
+        type = 'broadcast_center';
+        name = `${c.name} Regional Media Center`;
       } else {
         type = 'industrial_complex';
         name = `${c.name} Logistics & Rail Yard`;
@@ -115,9 +121,11 @@ export class POIGenerator {
       else if (roll < 0.67) { type = 'university'; name = 'Westbridge University & School'; }
       else if (roll < 0.73) { type = 'shopping_centre'; name = 'Cedar Mall & Market'; }
       else if (roll < 0.79) { type = 'freight_terminal'; name = 'Interstate Freight Terminal'; }
-      else if (roll < 0.85) { type = 'warehouse'; name = 'Overgrown Logistics Depot'; }
-      else if (roll < 0.90) { type = 'gas_station'; name = 'Route 9 Auto Service Station'; }
-      else if (roll < 0.95) { type = 'watchtower'; name = 'Forestry Fire Lookout'; }
+      else if (roll < 0.84) { type = 'warehouse'; name = 'Overgrown Logistics Depot'; }
+      else if (roll < 0.88) { type = 'gas_station'; name = 'Route 9 Auto Service Station'; }
+      else if (roll < 0.92) { type = 'media_station'; name = 'Oakridge News Regional Relay Station'; }
+      else if (roll < 0.95) { type = 'satellite_uplink'; name = 'Highland Satellite News Uplink'; }
+      else if (roll < 0.98) { type = 'broadcast_center'; name = 'Continental Broadcast Center'; }
       else { type = 'radio_bunker'; name = 'Civil Defense Communications Bunker'; }
     }
 
@@ -515,6 +523,39 @@ export class POIGenerator {
           sign.position.set(0, 5.2, 7.7);
           group.add(sign);
         }
+        break;
+      }
+      case 'media_station':
+      case 'broadcast_center':
+      case 'satellite_uplink': {
+        const concrete = POIGenerator.getSharedMat('poi_media_conc', () => new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.75 }));
+        const glass = POIGenerator.getSharedMat('poi_media_glass', () => new THREE.MeshStandardMaterial({ color: 0x0ea5e9, roughness: 0.12, metalness: 0.35, envMapIntensity: 1.5 }));
+        const dishMat = POIGenerator.getSharedMat('poi_media_dish', () => new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.35, metalness: 0.45 }));
+        const beaconMat = POIGenerator.getSharedMat('poi_media_beacon', () => new THREE.MeshBasicMaterial({ color: 0xef4444 }));
+
+        const isCenter = poi.type === 'broadcast_center';
+        const isUplink = poi.type === 'satellite_uplink';
+        const w = isUplink ? 12 : isCenter ? 19 : 15;
+        const d = isUplink ? 10 : isCenter ? 15 : 12;
+        const h = isUplink ? 5.2 : isCenter ? 12.5 : 8.2;
+
+        const pad = new THREE.Mesh(new THREE.BoxGeometry(w + 4, 0.35, d + 4), stoneMat);
+        pad.position.y = 0.17;
+        const hull = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), concrete);
+        hull.position.y = h / 2 + 0.3;
+        const glassBand = new THREE.Mesh(new THREE.BoxGeometry(w + 0.12, h * 0.32, d + 0.12), glass);
+        glassBand.position.y = h * 0.56 + 0.3;
+        const mast = new THREE.Mesh(new THREE.CylinderGeometry(0.18, 0.38, isCenter ? 11 : 8, 8), metalMat);
+        mast.position.set(w * 0.22, h + (isCenter ? 5.8 : 4.3), -d * 0.18);
+        const beacon = new THREE.Mesh(new THREE.SphereGeometry(0.32, 8, 8), beaconMat);
+        beacon.position.set(w * 0.22, h + (isCenter ? 11.4 : 8.4), -d * 0.18);
+        const dish = new THREE.Mesh(new THREE.CylinderGeometry(1.7, 0.35, 0.75, 14), dishMat);
+        dish.position.set(-w * 0.25, h + 1.4, d * 0.1);
+        dish.rotation.x = -Math.PI * 0.32;
+        const sign = new THREE.Mesh(new THREE.BoxGeometry(Math.min(6, w * 0.5), 0.75, 0.24), glass);
+        sign.position.set(0, Math.min(4.6, h * 0.65), d / 2 + 0.22);
+
+        group.add(pad, hull, glassBand, mast, beacon, dish, sign);
         break;
       }
       default: {
